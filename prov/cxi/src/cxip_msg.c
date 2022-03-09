@@ -642,10 +642,12 @@ static int issue_rdzv_get(struct cxip_req *req)
 	/* Align mask will be non-zero if local DMA address cache-line
 	 * alignment is desired.
 	 */
-	align_bytes = local_addr & rxc->rget_align_mask;
-	local_addr -= align_bytes;
-	rem_offset -= align_bytes;
-	mlen -= align_bytes;
+	if (mlen >= rxc->rget_align_mask) {
+		align_bytes = local_addr & rxc->rget_align_mask;
+		local_addr -= align_bytes;
+		rem_offset -= align_bytes;
+		mlen -= align_bytes;
+	}
 
 	if (req->data_len < mlen)
 		cmd.request_len = 0;
@@ -2881,6 +2883,18 @@ void cxip_recv_pte_cb(struct cxip_pte *pte, const union c_event *event)
 			 */
 			RXC_WARN(rxc, "PtlTE %d flow control LE/match\n",
 				 rxc->rx_pte->pte->ptn);
+		}
+
+		/* If flow control has occurred during an on-going NIC
+		 * initiated hardware to software transition, then on-loading
+		 * has already been initiated and does not need to be done.
+		 * The PtlTE will be re-enabled at completion of the transition.
+		 */
+		if (rxc->prev_state == RXC_PENDING_PTLTE_SOFTWARE_MANAGED) {
+			RXC_WARN(rxc,
+				 "PtlTE %d FC during HW-to-SW transition\n",
+				 rxc->rx_pte->pte->ptn);
+			break;
 		}
 
 		do {
