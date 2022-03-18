@@ -106,8 +106,8 @@
 #define CXIP_OFLOW_BUF_SIZE		(2*1024*1024)
 #define CXIP_OFLOW_BUF_COUNT		3
 #define CXIP_REQ_BUF_SIZE		(2*1024*1024)
-#define CXIP_REQ_BUF_MIN_POSTED		3
-#define CXIP_REQ_BUF_MAX_COUNT		10
+#define CXIP_REQ_BUF_MIN_POSTED		4
+#define CXIP_REQ_BUF_MAX_COUNT		0
 #define CXIP_UX_BUFFER_SIZE		(CXIP_OFLOW_BUF_COUNT * \
 					 CXIP_OFLOW_BUF_SIZE)
 
@@ -1325,10 +1325,14 @@ struct cxip_rxc {
 	int min_multi_recv;
 	int max_eager_size;
 
+	/* Flow control metrics */
+	int num_fc_eq_full;
+	int num_fc_append_fail;
+	int num_fc_unexp_or_match;
+
 	/* Unexpected message handling */
 	fastlock_t rx_lock;			// RX message lock
 	ofi_atomic32_t oflow_bufs_submitted;
-	ofi_atomic32_t oflow_bufs_linked;
 	ofi_atomic32_t oflow_bufs_in_use;
 	int oflow_buf_size;
 	int oflow_bufs_max;

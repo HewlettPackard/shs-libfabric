@@ -16,6 +16,7 @@
 
 #define CXIP_DBG(...) _CXIP_DBG(FI_LOG_EP_CTRL, __VA_ARGS__)
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_EP_CTRL, __VA_ARGS__)
+#define CXIP_INFO(...) _CXIP_INFO(FI_LOG_EP_CTRL, __VA_ARGS__)
 
 /*
  * rxc_msg_enable() - Enable RXC messaging.
@@ -472,6 +473,10 @@ static void rxc_cleanup(struct cxip_rxc *rxc)
 		dlist_remove(&fc_drops->rxc_entry);
 		free(fc_drops);
 	}
+
+	CXIP_INFO("Flow Ctrl events: EQ Full %d Append %d UX/No Match %d\n",
+		  rxc->num_fc_eq_full, rxc->num_fc_append_fail,
+		  rxc->num_fc_unexp_or_match);
 }
 
 /*
@@ -545,7 +550,6 @@ struct cxip_rxc *cxip_rxc_alloc(const struct fi_rx_attr *attr, void *context,
 
 	fastlock_init(&rxc->rx_lock);
 	ofi_atomic_initialize32(&rxc->oflow_bufs_submitted, 0);
-	ofi_atomic_initialize32(&rxc->oflow_bufs_linked, 0);
 	ofi_atomic_initialize32(&rxc->oflow_bufs_in_use, 0);
 	dlist_init(&rxc->oflow_bufs);
 
