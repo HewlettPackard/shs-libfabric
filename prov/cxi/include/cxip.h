@@ -244,6 +244,7 @@ struct cxip_environment {
 	int cacheline_size;
 
 	int coll_use_repsum;
+	char hostname[255];
 };
 
 extern struct cxip_environment cxip_env;
@@ -1291,6 +1292,71 @@ enum cxip_rxc_state {
 	RXC_FLOW_CONTROL,
 };
 
+#define CXIP_COUNTER_BUCKETS 31U
+#define CXIP_BUCKET_MAX (CXIP_COUNTER_BUCKETS - 1)
+#define CXIP_LIST_COUNTS 3U
+
+struct cxip_msg_counters {
+	/* Histogram counting the number of messages based on priority, buffer
+	 * type (HMEM), and message size.
+	 */
+	ofi_atomic32_t msg_count[CXIP_LIST_COUNTS][OFI_HMEM_MAX][CXIP_COUNTER_BUCKETS];
+};
+
+static inline int fls64(uint64_t x)
+{
+	int bitpos = -1;
+	/*
+	 * AMD64 says BSRQ won't clobber the dest reg if x==0; Intel64 says the
+	 * dest reg is undefined if x==0, but their CPU architect says its
+	 * value is written to set it to the same as before.
+	 */
+	asm("bsrq %1,%q0"
+	    : "+r" (bitpos)
+	    : "rm" (x));
+	return bitpos + 1;
+}
+
+static inline void cxip_msg_counters_init(struct cxip_msg_counters *cntrs)
+{
+	int i;
+	int j;
+	int k;
+
+	for (i = 0; i < CXIP_LIST_COUNTS; i++) {
+		for (j = 0; j < OFI_HMEM_MAX; j++) {
+			for (k = 0; k < CXIP_COUNTER_BUCKETS; k++)
+				ofi_atomic_initialize32(&cntrs->msg_count[i][j][k], 0);
+		}
+	}
+}
+
+static inline void
+cxip_msg_counters_msg_record(struct cxip_msg_counters *cntrs,
+			     enum c_ptl_list list, enum fi_hmem_iface buf_type,
+			     size_t msg_size)
+{
+	unsigned int bucket;
+
+	/* Buckets to bytes
+	 * Bucket 0: 0 bytes
+	 * Bucket 1: 1 byte
+	 * Bucket 2: 2 bytes
+	 * Bucket 3: 4 bytes
+	 * ...
+	 * Bucket CXIP_BUCKET_MAX: (1 << (CXIP_BUCKET_MAX - 1))
+	 */
+
+	/* Round size up to the nearest power of 2. */
+	bucket = fls64(msg_size);
+	if ((1ULL << bucket) < msg_size)
+		bucket++;
+
+	bucket = MIN(CXIP_BUCKET_MAX, bucket);
+
+	ofi_atomic_add32(&cntrs->msg_count[list][buf_type][bucket], 1);
+}
+
 /*
  * Receive Context
  *
@@ -1387,6 +1453,8 @@ struct cxip_rxc {
 	/* RXC drop count used for FC accounting. */
 	int drop_count;
 	bool hmem;
+
+	struct cxip_msg_counters cntrs;
 };
 
 static inline ssize_t
@@ -2470,18 +2538,26 @@ extern cxip_trace_t cxip_trace_attr cxip_trace_fn;
 #define CXIP_TRACE(fmt, ...) \
 	do {if (cxip_trace_fn) cxip_trace_fn(fmt, ##__VA_ARGS__);} while (0)
 
-#define _CXIP_DBG(subsys, ...) FI_DBG(&cxip_prov, subsys, __VA_ARGS__)
-#define _CXIP_INFO(subsys, ...) FI_INFO(&cxip_prov, subsys, __VA_ARGS__)
-#define _CXIP_WARN(subsys, ...) FI_WARN(&cxip_prov, subsys, __VA_ARGS__)
-#define _CXIP_WARN_ONCE(subsys, ...) FI_WARN_ONCE(&cxip_prov, subsys, \
-						  __VA_ARGS__)
-#define CXIP_LOG(...)						\
-	fi_log(&cxip_prov, FI_LOG_WARN, FI_LOG_CORE,		\
-	       __func__, __LINE__, __VA_ARGS__)
+#define _CXIP_DBG(subsys, fmt,  ...) \
+	FI_DBG(&cxip_prov, subsys, "%s: " fmt "", cxip_env.hostname, \
+	       ##__VA_ARGS__)
+#define _CXIP_INFO(subsys, fmt, ...) \
+	FI_INFO(&cxip_prov, subsys, "%s: " fmt "", cxip_env.hostname, \
+		##__VA_ARGS__)
+#define _CXIP_WARN(subsys, fmt, ...) \
+	FI_WARN(&cxip_prov, subsys, "%s: " fmt "", cxip_env.hostname, \
+		##__VA_ARGS__)
+#define _CXIP_WARN_ONCE(subsys, fmt, ...) \
+	FI_WARN_ONCE(&cxip_prov, subsys, "%s: " fmt "", cxip_env.hostname, \
+		     ##__VA_ARGS__)
+#define CXIP_LOG(fmt,  ...) \
+	fi_log(&cxip_prov, FI_LOG_WARN, FI_LOG_CORE, \
+	       __func__, __LINE__, "%s: " fmt "", cxip_env.hostname, \
+	       ##__VA_ARGS__)
 
-#define CXIP_FATAL(...)						\
+#define CXIP_FATAL(fmt, ...)					\
 	do {							\
-		CXIP_LOG(__VA_ARGS__);				\
+		CXIP_LOG(fmt, ##__VA_ARGS__);			\
 		abort();					\
 	} while (0)
 
@@ -2503,6 +2579,10 @@ extern cxip_trace_t cxip_trace_attr cxip_trace_fn;
 	_CXIP_DBG(FI_LOG_EP_DATA, "RXC (%#x:%u:%u): " fmt "", \
 		  (rxc)->ep_obj->src_addr.nic, (rxc)->ep_obj->src_addr.pid, \
 		  (rxc)->rx_id, ##__VA_ARGS__)
+#define RXC_INFO(rxc, fmt, ...) \
+	_CXIP_INFO(FI_LOG_EP_DATA, "RXC (%#x:%u:%u): " fmt "", \
+		   (rxc)->ep_obj->src_addr.nic, (rxc)->ep_obj->src_addr.pid, \
+		   (rxc)->rx_id, ##__VA_ARGS__)
 #define RXC_WARN(rxc, fmt, ...) \
 	_CXIP_WARN(FI_LOG_EP_DATA, "RXC (%#x:%u:%u): " fmt "", \
 		   (rxc)->ep_obj->src_addr.nic, (rxc)->ep_obj->src_addr.pid, \
