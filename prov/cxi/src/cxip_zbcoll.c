@@ -271,7 +271,8 @@ void cxip_zbcoll_get_counters(struct cxip_ep_obj *ep_obj, uint32_t *dsc,
 /**
  * @brief Free zbcoll object.
  *
- * This also releases the group identifier associated with this zbcoll object.
+ * This flushes the callback stack, and releases the group identifier
+ * associated with this zbcoll object.
  *
  * @param zb : zb object to free
  */
@@ -282,6 +283,8 @@ void cxip_zbcoll_free(struct cxip_zbcoll_obj *zb)
 	if (!zb)
 		return;
 
+	zb->flush = true;
+	cxip_zbcoll_pop_cb(zb);
 	cxip_zbcoll_rlsgroup(zb);
 	if (zb->state) {
 		for (i = 0; i < zb->simcount; i++)
@@ -1075,7 +1078,7 @@ void cxip_zbcoll_pop_cb(struct cxip_zbcoll_obj *zb)
 	void *usrptr;
 
 	/* nothing more to do */
-	if (!zb->cbstack)
+	if (!zb || !zb->cbstack)
 		return;
 	/* pop the next callback and execute */
 	stk = zb->cbstack;		// get old stack pointer
@@ -1083,7 +1086,10 @@ void cxip_zbcoll_pop_cb(struct cxip_zbcoll_obj *zb)
 	usrptr = stk->usrptr;
 	zb->cbstack = stk->cbstack;	// replace stack pointer
 	free(stk);
-	usrfunc(zb, usrptr);
+	if (zb->flush)
+		cxip_zbcoll_pop_cb(zb);
+	else
+		usrfunc(zb, usrptr);
 }
 
 /**
@@ -1222,7 +1228,7 @@ void cxip_zbcoll_rlsgroup(struct cxip_zbcoll_obj *zb)
 {
 	struct cxip_ep_zbcoll_obj *zbcoll;
 
-	if (!zb || zb->grpid > ZB_MAP_BITS)
+	if (!zb || zb->grpid > ZB_NEG_BIT)
 		return;
 
 	zbcoll = &zb->ep_obj->zbcoll;
@@ -1230,7 +1236,7 @@ void cxip_zbcoll_rlsgroup(struct cxip_zbcoll_obj *zb)
 	fastlock_acquire(&zbcoll->lock);
 	_setbit(&zbcoll->grpmsk, zb->grpid);
 	zbcoll->grptbl[zb->grpid] = NULL;
-	zb->grpid = ZB_MAP_BITS;
+	zb->grpid = ZB_NEG_BIT;
 	fastlock_release(&zbcoll->lock);
 }
 

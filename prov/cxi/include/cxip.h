@@ -1124,6 +1124,7 @@ struct cxip_zbcoll_obj {
 	int busy;			// serialize collectives in zb
 	int grpid;			// zb collective grpid
 	int error;			// error code
+	int flush;			// flush callback stack
 	void *cbstack;			// callback stack
 };
 
@@ -1848,7 +1849,7 @@ struct cxip_coll_rank_key {
 };
 
 struct cxip_comm_key {
-	enum cxip_comm_key_type type;
+	enum cxip_comm_key_type keytype;
 	union {
 		struct cxip_coll_mcast_key mcast;
 		struct cxip_coll_unicast_key ucast;
