@@ -104,11 +104,12 @@
 #define CXIP_PTE_IGNORE_DROPS		((1 << 24) - 1)
 #define CXIP_RDZV_THRESHOLD		2048
 #define CXIP_OFLOW_BUF_SIZE		(2*1024*1024)
-#define CXIP_OFLOW_BUF_COUNT		3
+#define CXIP_OFLOW_BUF_MIN_POSTED	3
+#define CXIP_OFLOW_BUF_MAX_CACHED	(CXIP_OFLOW_BUF_MIN_POSTED * 3)
 #define CXIP_REQ_BUF_SIZE		(2*1024*1024)
 #define CXIP_REQ_BUF_MIN_POSTED		4
-#define CXIP_REQ_BUF_MAX_COUNT		0
-#define CXIP_UX_BUFFER_SIZE		(CXIP_OFLOW_BUF_COUNT * \
+#define CXIP_REQ_BUF_MAX_CACHED		0
+#define CXIP_UX_BUFFER_SIZE		(CXIP_OFLOW_BUF_MIN_POSTED * \
 					 CXIP_OFLOW_BUF_SIZE)
 
 /* When device memory is safe to access via load/store then the
@@ -217,11 +218,12 @@ struct cxip_environment {
 	size_t rdzv_eager_size;
 	int rdzv_aligned_sw_rget;
 	size_t oflow_buf_size;
-	size_t oflow_buf_count;
+	size_t oflow_buf_min_posted;
+	size_t oflow_buf_max_cached;
 	size_t safe_devmem_copy_threshold;
 	size_t req_buf_size;
 	size_t req_buf_min_posted;
-	size_t req_buf_max_count;
+	size_t req_buf_max_cached;
 	int msg_lossless;
 	size_t default_cq_size;
 	int optimized_mrs;
@@ -830,14 +832,6 @@ struct cxip_req_send {
 	int rdzv_send_events;		// Processed event count
 };
 
-struct cxip_req_oflow {
-	union {
-		struct cxip_txc *txc;
-		struct cxip_rxc *rxc;
-	};
-	struct cxip_oflow_buf *oflow_buf;
-};
-
 struct cxip_req_rdzv_src {
 	struct dlist_entry list;
 	struct cxip_txc *txc;
@@ -919,7 +913,6 @@ struct cxip_req {
 	union {
 		struct cxip_req_rma rma;
 		struct cxip_req_amo amo;
-		struct cxip_req_oflow oflow;
 		struct cxip_req_recv recv;
 		struct cxip_req_send send;
 		struct cxip_req_rdzv_src rdzv_src;
@@ -1099,25 +1092,6 @@ struct cxip_deferred_event {
 
 struct def_event_ht {
 	struct dlist_entry bh[CXIP_DEF_EVENT_HT_BUCKETS];
-};
-
-/*
- * Overflow buffer
- *
- * Support structure.
- */
-struct cxip_oflow_buf {
-	struct dlist_entry list;
-	enum cxip_le_type type;
-	union {
-		struct cxip_txc *txc;
-		struct cxip_rxc *rxc;
-	};
-	void *buf;
-	struct cxip_md *md;
-	size_t sw_consumed;
-	size_t hw_consumed;
-	int buffer_id;
 };
 
 /*
@@ -1424,41 +1398,23 @@ struct cxip_rxc {
 	int min_multi_recv;
 	int max_eager_size;
 
-	/* Flow control metrics */
+	/* Flow control/software state change metrics */
 	int num_fc_eq_full;
+	int num_fc_no_match;
+	int num_fc_unexp;
 	int num_fc_append_fail;
-	int num_fc_unexp_or_match;
+	int num_fc_req_full;
+	int num_sc_nic_hw2sw_append_fail;
+	int num_sc_nic_hw2sw_unexp;
 
 	/* Unexpected message handling */
 	fastlock_t rx_lock;			// RX message lock
-	ofi_atomic32_t oflow_bufs_submitted;
-	ofi_atomic32_t oflow_bufs_in_use;
-	int oflow_buf_size;
-	int oflow_bufs_max;
-	struct dlist_entry oflow_bufs;		// Overflow buffers
+	struct cxip_ptelist_bufpool *req_list_bufpool;
+	struct cxip_ptelist_bufpool *oflow_list_bufpool;
 
 	/* Defer events to wait for both put and put overflow */
 	struct def_event_ht deferred_events;
 
-	/* Order list of request buffers emitted to hardware. */
-	struct dlist_entry active_req_bufs;
-
-	/* List of consumed buffers which cannot be reposted yet since
-	 * unexpected entries have not been matched yet.
-	 */
-	struct dlist_entry consumed_req_bufs;
-
-	/*
-	 * List of available buffers for which an append failed or have
-	 * have been removed but not yet released.
-	 */
-	struct dlist_entry free_req_bufs;
-
-	ofi_atomic32_t req_bufs_linked;
-	ofi_atomic32_t req_bufs_allocated;
-	size_t req_buf_size;
-	size_t req_buf_max_count;
-	size_t req_buf_min_posted;
 	struct dlist_entry fc_drops;
 	struct dlist_entry replay_queue;
 	struct dlist_entry sw_ux_list;
@@ -1481,6 +1437,8 @@ struct cxip_rxc {
 
 	enum cxip_rxc_state state;
 	enum cxip_rxc_state prev_state;
+	enum c_sc_reason fc_reason;
+
 	bool msg_offload;
 	uint64_t rget_align_mask;
 
@@ -1505,11 +1463,62 @@ cxip_rxc_copy_to_hmem(struct cxip_rxc *rxc, uint64_t device,
 					size, hmem_iface, true);
 }
 
-/* Request buffer structure. */
-struct cxip_req_buf {
+/* PtlTE buffer pool - Common PtlTE request/overflow list buffer
+ * management.
+ *
+ * Only C_PTL_LIST_REQUEST and C_PTL_LIST_OVERFLOW are supported.
+ */
+struct cxip_ptelist_bufpool_attr {
+	enum c_ptl_list list_type;
+
+	/* Callback to handle PtlTE link error/unlink events */
+	int (*ptelist_cb)(struct cxip_req *req, const union c_event *event);
+	size_t buf_size;
+	size_t min_space_avail;
+	size_t min_posted;
+	size_t max_posted;
+	size_t max_cached;
+};
+
+struct cxip_ptelist_bufpool {
+	struct cxip_ptelist_bufpool_attr attr;
+	struct cxip_rxc *rxc;
+
+	/* Ordered list of buffers emitted to hardware */
+	struct dlist_entry active_bufs;
+
+	/* List of consumed buffers which cannot be reposted yet
+	 * since unexpected entries have not been matched.
+	 */
+	struct dlist_entry consumed_bufs;
+
+	/* List of available buffers that may be appended to the list.
+	 * These could be from a previous append failure or be cached
+	 * from previous message processing to avoid map/unmap of
+	 * list buffer.
+	 */
+	struct dlist_entry free_bufs;
+
+	ofi_atomic32_t bufs_linked;
+	ofi_atomic32_t bufs_allocated;
+	ofi_atomic32_t bufs_free;
+};
+
+struct cxip_ptelist_req {
+	/* Pending list of unexpected header entries which could not be placed
+	 * on the RX context unexpected header list due to put events being
+	 * received out-of-order.
+	 */
+	struct dlist_entry pending_ux_list;
+};
+
+struct cxip_ptelist_buf {
+	struct cxip_ptelist_bufpool *pool;
+
 	/* RX context the request buffer is posted on. */
 	struct cxip_rxc *rxc;
-	struct dlist_entry req_buf_entry;
+	enum cxip_le_type le_type;
+	struct dlist_entry buf_entry;
 	struct cxip_req *req;
 
 	/* Memory mapping of req_buf field. */
@@ -1520,35 +1529,54 @@ struct cxip_req_buf {
 	 */
 	size_t unlink_length;
 
-	/* Current offset into the req_buf where packets are landing. When
-	 * cur_offset is equal to unlink_length, software has received all
-	 * hardware put events for this request buffer.
+	/* Current offset into the buffer where packets/data are landing. When
+	 * the cur_offset is equal to unlink_length, software has completed
+	 * event processing for the buffer.
 	 */
 	size_t cur_offset;
 
-	/* Pending list of unexpected header entries which could not be placed
-	 * on the RX context unexpected header list due to put events being
-	 * receive out-of-order.
-	 */
-	struct dlist_entry pending_ux_list;
+	/* Request list specific control information */
+	struct cxip_ptelist_req request;
 
 	/* The number of unexpected headers posted placed on the RX context
 	 * unexpected header list which have not been matched.
 	 */
 	ofi_atomic32_t refcount;
 
-	/* Buffer used to land packets matching on the request list. This field
-	 * must remain at the bottom of this structure.
-	 */
-	char req_buf[0];
+	/* Buffer used to land packets. */
+	char data[0];
 };
 
+int cxip_ptelist_bufpool_init(struct cxip_rxc *rxc,
+			      struct cxip_ptelist_bufpool **pool,
+			      struct cxip_ptelist_bufpool_attr *attr);
+void cxip_ptelist_bufpool_fini(struct cxip_ptelist_bufpool *pool);
+int cxip_ptelist_buf_replenish(struct cxip_ptelist_bufpool *pool,
+			       bool seq_restart);
+void cxip_ptelist_buf_link_err(struct cxip_ptelist_buf *buf,
+			       int rc_link_error);
+void cxip_ptelist_buf_unlink(struct cxip_ptelist_buf *buf);
+void cxip_ptelist_buf_put(struct cxip_ptelist_buf *buf, bool repost);
+void cxip_ptelist_buf_get(struct cxip_ptelist_buf *buf);
+void cxip_ptelist_buf_consumed(struct cxip_ptelist_buf *buf);
+
+/*
+ * cxip_req_bufpool_init() - Initialize PtlTE request list buffer management
+ * object.
+ */
+int cxip_req_bufpool_init(struct cxip_rxc *rxc);
+void cxip_req_bufpool_fini(struct cxip_rxc *rxc);
+
+/*
+ * cxip_oflow_bufpool_init() - Initialize PtlTE overflow list buffer management
+ * object.
+ */
+int cxip_oflow_bufpool_init(struct cxip_rxc *rxc);
+void cxip_oflow_bufpool_fini(struct cxip_rxc *rxc);
+
+void _cxip_req_buf_ux_free(struct cxip_ux_send *ux, bool repost);
 void cxip_req_buf_ux_free(struct cxip_ux_send *ux);
-int cxip_req_buf_unlink(struct cxip_req_buf *buf);
-int cxip_req_buf_link(struct cxip_req_buf *buf, bool seq_restart);
-struct cxip_req_buf *cxip_req_buf_alloc(struct cxip_rxc *rxc);
-void cxip_req_buf_free(struct cxip_req_buf *buf);
-int cxip_req_buf_replenish(struct cxip_rxc *rxc, bool seq_restart);
+
 
 #define CXIP_RDZV_IDS	(1 << CXIP_RDZV_ID_WIDTH)
 #define CXIP_EAGER_RDZV_IDS (1 << CXIP_EAGER_RDZV_ID_WIDTH)
@@ -2277,7 +2305,7 @@ int cxip_cntr_open(struct fid_domain *domain, struct fi_cntr_attr *attr,
 int cxip_iomm_init(struct cxip_domain *dom);
 void cxip_iomm_fini(struct cxip_domain *dom);
 int cxip_map(struct cxip_domain *dom, const void *buf, unsigned long len,
-	     struct cxip_md **md);
+	     uint64_t flags, struct cxip_md **md);
 void cxip_unmap(struct cxip_md *md);
 
 int cxip_ctrl_msg_send(struct cxip_ctrl_req *req);
@@ -2332,6 +2360,19 @@ void cxip_rep_to_dbl(double *d, const cxip_repsum_t *x);
 void cxip_rep_add(cxip_repsum_t *x, const cxip_repsum_t *y);
 double cxip_rep_add_dbl(double d1, double d2);
 double cxip_rep_sum(size_t count, double *values);
+
+#define CXIP_FC_SOFTWARE_INITIATED -1
+
+/* cxip_fc_reason() - Returns the event reason for portal state
+ * change (FC reason or SC reason).
+ */
+static inline int cxip_fc_reason(const union c_event *event)
+{
+	if (!event->tgt_long.initiator.state_change.sc_nic_auto)
+		return CXIP_FC_SOFTWARE_INITIATED;
+
+	return event->tgt_long.initiator.state_change.sc_reason;
+}
 
 /*
  * cxip_fid_to_tx_info() - Return the TXC and attributes from FID
@@ -2610,20 +2651,22 @@ extern cxip_trace_t cxip_trace_attr cxip_trace_fn;
 		   (txc)->ep_obj->src_addr.pid, (txc)->tx_id, ##__VA_ARGS__)
 
 #define RXC_DBG(rxc, fmt, ...) \
-	_CXIP_DBG(FI_LOG_EP_DATA, "RXC (%#x:%u:%u): " fmt "", \
+	_CXIP_DBG(FI_LOG_EP_DATA, "RXC (%#x:%u:%u) PtlTE %u: " fmt "", \
 		  (rxc)->ep_obj->src_addr.nic, (rxc)->ep_obj->src_addr.pid, \
-		  (rxc)->rx_id, ##__VA_ARGS__)
+		  (rxc)->rx_id, (rxc)->rx_pte->pte->ptn, ##__VA_ARGS__)
 #define RXC_INFO(rxc, fmt, ...) \
-	_CXIP_INFO(FI_LOG_EP_DATA, "RXC (%#x:%u:%u): " fmt "", \
+	_CXIP_INFO(FI_LOG_EP_DATA, "RXC (%#x:%u:%u) PtlTE %u: " fmt "", \
 		   (rxc)->ep_obj->src_addr.nic, (rxc)->ep_obj->src_addr.pid, \
-		   (rxc)->rx_id, ##__VA_ARGS__)
+		   (rxc)->rx_id, (rxc)->rx_pte->pte->ptn, ##__VA_ARGS__)
 #define RXC_WARN(rxc, fmt, ...) \
-	_CXIP_WARN(FI_LOG_EP_DATA, "RXC (%#x:%u:%u): " fmt "", \
+	_CXIP_WARN(FI_LOG_EP_DATA, "RXC (%#x:%u:%u) PtlTE %u: " fmt "", \
 		   (rxc)->ep_obj->src_addr.nic, (rxc)->ep_obj->src_addr.pid, \
-		   (rxc)->rx_id, ##__VA_ARGS__)
+		   (rxc)->rx_id, (rxc)->rx_pte->pte->ptn, ##__VA_ARGS__)
 #define RXC_FATAL(rxc, fmt, ...) \
-	CXIP_FATAL("RXC (%#x:%u:%u): " fmt "", (rxc)->ep_obj->src_addr.nic, \
-		   (rxc)->ep_obj->src_addr.pid, (rxc)->rx_id, ##__VA_ARGS__)
+	CXIP_FATAL("RXC (%#x:%u:%u): PtlTE %u" fmt "", \
+		   (rxc)->ep_obj->src_addr.nic, \
+		   (rxc)->ep_obj->src_addr.pid, (rxc)->rx_id, \
+		   (rxc)->rx_pte->pte->ptn, ##__VA_ARGS__)
 
 #define DOM_INFO(dom, fmt, ...) \
 	_CXIP_INFO(FI_LOG_DOMAIN, "DOM (cxi%u:%u:%#x): " fmt "", \
