@@ -4889,33 +4889,35 @@ ParameterizedTest(struct multi_tc_params *param, tagged_tclass, multi_tc,
 
 TestSuite(tagged_src_err, .timeout = CXIT_DEFAULT_TIMEOUT);
 
-Test(tagged_src_err, cap_exists)
+Test(tagged_src_err, cap_not_requested)
 {
 	struct fi_info *info;
 	int ret;
 
-	/* No hints, both FI_SOURCE and FI_SOURCE_ERR should be set */
+	/* No hints, both FI_SOURCE and FI_SOURCE_ERR should be removed
+	 * since they are secondary capabilities that impact performance.
+	 */
 	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
 			 cxit_node, cxit_service, cxit_flags, NULL,
 			 &info);
 	cr_assert(ret == FI_SUCCESS);
-	cr_assert_eq(info->caps & FI_SOURCE, FI_SOURCE, "FI_SOURCE");
-	cr_assert_eq(info->caps & FI_SOURCE_ERR, FI_SOURCE_ERR,
-		     "FI_SOURCE_ERR");
+	cr_assert_eq(info->caps & FI_SOURCE, 0, "FI_SOURCE");
+	cr_assert_eq(info->caps & FI_SOURCE_ERR, 0, "FI_SOURCE_ERR");
 	fi_freeinfo(info);
 
 	cxit_setup_getinfo();
 	cxit_fi_hints->caps = 0;
 
-	/* No caps, both FI_SOURCE and FI_SOURCE_ERR should be set */
+	/* No caps, both FI_SOURCE and FI_SOURCE_ERR should not be set since
+	 * they are secondary capabilities and they impact performance.
+	 */
 	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
 			 cxit_node, cxit_service, cxit_flags, cxit_fi_hints,
 			 &info);
 	cr_assert(ret == FI_SUCCESS);
 
-	cr_assert_eq(info->caps & FI_SOURCE, FI_SOURCE, "FI_SOURCE");
-	cr_assert_eq(info->caps & FI_SOURCE_ERR, FI_SOURCE_ERR,
-		     "FI_SOURCE_ERR");
+	cr_assert_eq(info->caps & FI_SOURCE, 0, "FI_SOURCE");
+	cr_assert_eq(info->caps & FI_SOURCE_ERR, 0, "FI_SOURCE_ERR");
 
 	fi_freeinfo(info);
 	cxit_teardown_getinfo();
@@ -4926,9 +4928,8 @@ Test(tagged_src_err, hints_check)
 	struct fi_info *info;
 	int ret;
 
-	cxit_setup_getinfo();
-
 	/* If only FI_SOURCE then FI_SOURCE_ERR should not be set */
+	cxit_setup_getinfo();
 	cxit_fi_hints->caps = FI_MSG | FI_SOURCE;
 	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
 			 cxit_node, cxit_service, cxit_flags, cxit_fi_hints,
@@ -4938,6 +4939,35 @@ Test(tagged_src_err, hints_check)
 	cr_assert_eq(info->caps & FI_SOURCE, FI_SOURCE, "FI_SOURCE");
 	cr_assert_eq(info->caps & FI_SOURCE_ERR, 0, "FI_SOURCE_ERR");
 
+	fi_freeinfo(info);
+	cxit_teardown_getinfo();
+
+	/* Validate FI_SOURCE are set if FI_SOURCE_ERR specified in hints */
+	cxit_setup_getinfo();
+	cxit_fi_hints->caps = FI_MSG | FI_SOURCE | FI_SOURCE_ERR;
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
+			 cxit_node, cxit_service, cxit_flags, cxit_fi_hints,
+			 &info);
+	cr_assert(ret == FI_SUCCESS);
+
+	cr_assert_eq(info->caps & FI_SOURCE, FI_SOURCE, "FI_SOURCE");
+	cr_assert_eq(info->caps & FI_SOURCE_ERR, FI_SOURCE_ERR,
+		     "FI_SOURCE_ERR");
+	fi_freeinfo(info);
+	cxit_teardown_getinfo();
+
+	/* Verify that if hints are specified, but do not include FI_SOURCE
+	 * FI_SOURCE_ERR in capabilities they are not returned.
+	 */
+	cxit_setup_getinfo();
+	cxit_fi_hints->caps = FI_MSG;
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
+			 cxit_node, cxit_service, cxit_flags, cxit_fi_hints,
+			 &info);
+	cr_assert(ret == FI_SUCCESS);
+
+	cr_assert_eq(info->caps & FI_SOURCE, 0, "FI_SOURCE");
+	cr_assert_eq(info->caps & FI_SOURCE_ERR, 0, "FI_SOURCE_ERR");
 	fi_freeinfo(info);
 	cxit_teardown_getinfo();
 }
@@ -4973,6 +5003,7 @@ Test(tagged_src_err, addr)
 	struct fid_av *fid_av;
 	struct cxip_addr ep_addr;
 	fi_addr_t fi_dest_ep_addr;
+	fi_addr_t fi_src_err_ep_addr;
 	size_t addr_len = sizeof(ep_addr);
 	int ret;
 	uint8_t *recv_buf,
@@ -5055,12 +5086,17 @@ Test(tagged_src_err, addr)
 	/* Receive should get an -FI_EAVAIL with source error info */
 	ret = cxit_await_completion(fid_rx_cq, &rx_cqe);
 	cr_assert_eq(ret, -FI_EAVAIL);
+	err_entry.err_data_size = sizeof(uint32_t);
+	err_entry.err_data = malloc(sizeof(uint32_t));
+	cr_assert(err_entry.err_data);
+
 	ret = fi_cq_readerr(fid_rx_cq, &err_entry, 0);
 	cr_assert_eq(ret, 1, "Readerr CQ %d\n", ret);
 
 	/* Insert address from FI_SOURCE_ERR into AV */
 	ret = fi_av_insert(fid_av, (void *)err_entry.err_data, 1,
-			   NULL, 0, NULL);
+			   &fi_src_err_ep_addr, 0, NULL);
+
 	cr_assert_eq(ret, 1, "Second EP AV add src address %d\n", ret);
 
 	/* Wait for TX */
@@ -5085,6 +5121,26 @@ Test(tagged_src_err, addr)
 	ret = cxit_await_completion(cxit_tx_cq, &tx_cqe);
 	cr_assert_eq(ret, 1, "Send completion %d\n", ret);
 
+	/* Validate that the inserted address may be used in send,
+	 * i.e. EP2 can now send to EP1.
+	 */
+	ret = fi_trecv(cxit_ep, recv_buf, recv_len, NULL, FI_ADDR_UNSPEC, 0,
+		       0, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_trecv failed %d", ret);
+	sleep(1);
+
+	ret = fi_tsend(fid_ep, send_buf, send_len, NULL, fi_src_err_ep_addr, 0,
+		       NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_tsend failed %d", ret);
+
+	/* Receive should complete successfully */
+	ret = cxit_await_completion(cxit_rx_cq, &rx_cqe);
+	cr_assert_eq(ret, 1);
+
+	/* Wait for TX */
+	ret = cxit_await_completion(fid_tx_cq, &tx_cqe);
+	cr_assert_eq(ret, 1, "Send completion %d\n", ret);
+
 	/* Cleanup Second EP */
 	fi_close(&fid_ep->fid);
 	fi_close(&fid_av->fid);
@@ -5094,6 +5150,8 @@ Test(tagged_src_err, addr)
 	/* Cleanup First EP */
 	cxit_teardown_tagged();
 	cxit_teardown_getinfo();
+
+	free(err_entry.err_data);
 }
 
 TestSuite(tagged_cq_wait, .init = cxit_setup_rma_fd,
