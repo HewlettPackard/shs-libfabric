@@ -104,7 +104,7 @@ int cxip_ctrl_msg_send(struct cxip_ctrl_req *req)
 	/* Cannot use ep_obj->lock else a deadlock will occur. Thus serialize on
 	 * TXQ lock instead.
 	 */
-	fastlock_acquire(&txq->lock);
+	ofi_spin_lock(&txq->lock);
 
 	if (!req->ep_obj->ctrl_tx_credits) {
 		CXIP_WARN("Control TX credits exhausted\n");
@@ -137,7 +137,7 @@ int cxip_ctrl_msg_send(struct cxip_ctrl_req *req)
 
 	cxi_cq_ring(txq->dev_cmdq);
 
-	fastlock_release(&txq->lock);
+	ofi_spin_unlock(&txq->lock);
 
 	CXIP_DBG("Queued control message: %p\n", req);
 	return FI_SUCCESS;
@@ -145,7 +145,7 @@ int cxip_ctrl_msg_send(struct cxip_ctrl_req *req)
 err_return_credit:
 	req->ep_obj->ctrl_tx_credits++;
 err_unlock:
-	fastlock_release(&txq->lock);
+	ofi_spin_unlock(&txq->lock);
 
 	return ret;
 }
@@ -308,9 +308,9 @@ static void cxip_ep_return_ctrl_tx_credits(struct cxip_ep_obj *ep_obj,
 					   unsigned int credits)
 {
 	/* Control TX credits are serialized on TXQ lock. */
-	fastlock_acquire(&ep_obj->ctrl_txq->lock);
+	ofi_spin_lock(&ep_obj->ctrl_txq->lock);
 	ep_obj->ctrl_tx_credits += credits;
-	fastlock_release(&ep_obj->ctrl_txq->lock);
+	ofi_spin_unlock(&ep_obj->ctrl_txq->lock);
 }
 
 void cxip_ep_ctrl_eq_progress(struct cxip_ep_obj *ep_obj,
@@ -324,7 +324,7 @@ void cxip_ep_ctrl_eq_progress(struct cxip_ep_obj *ep_obj,
 	if (!cxi_eq_peek_event(ctrl_evtq))
 		return;
 
-	fastlock_acquire(&ep_obj->lock);
+	ofi_mutex_lock(&ep_obj->lock);
 
 	while ((event = cxi_eq_peek_event(ctrl_evtq))) {
 		req = cxip_ep_ctrl_event_req(ep_obj, event);
@@ -347,7 +347,7 @@ void cxip_ep_ctrl_eq_progress(struct cxip_ep_obj *ep_obj,
 	if (cxi_eq_get_drops(ctrl_evtq))
 		CXIP_FATAL("Control EQ drops detected\n");
 
-	fastlock_release(&ep_obj->lock);
+	ofi_mutex_unlock(&ep_obj->lock);
 }
 
 void cxip_ep_tx_ctrl_progress(struct cxip_ep_obj *ep_obj)
@@ -380,15 +380,15 @@ int cxip_ep_ctrl_trywait(void *arg)
 	    cxi_eq_peek_event(cq->ep_obj->ctrl_tx_evtq))
 		return -FI_EAGAIN;
 
-	fastlock_acquire(&cq->ep_obj->lock);
+	ofi_mutex_lock(&cq->ep_obj->lock);
 	cxil_clear_wait_obj(cq->ep_obj->ctrl_wait);
 
 	if (cxi_eq_peek_event(cq->ep_obj->ctrl_tgt_evtq) ||
 	    cxi_eq_peek_event(cq->ep_obj->ctrl_tx_evtq)) {
-		fastlock_release(&cq->ep_obj->lock);
+		ofi_mutex_unlock(&cq->ep_obj->lock);
 		return -FI_EAGAIN;
 	}
-	fastlock_release(&cq->ep_obj->lock);
+	ofi_mutex_unlock(&cq->ep_obj->lock);
 
 	return FI_SUCCESS;
 }
@@ -417,9 +417,10 @@ static int cxip_ep_ctrl_eq_alloc(struct cxip_ep_obj *ep_obj, size_t len,
 		.flags = CXI_EQ_TGT_LONG,
 	};
 	int ret;
+	int unmap_ret __attribute__((unused));
 
 	/* Align up length to C_PAGE_SIZE boundary. */
-	len = (len + C_PAGE_SIZE) & ~C_PAGE_SIZE;
+	len = CXIP_ALIGN(len, C_PAGE_SIZE);
 
 	*eq_buf = aligned_alloc(C_PAGE_SIZE, len);
 	if (!eq_buf) {
@@ -444,8 +445,8 @@ static int cxip_ep_ctrl_eq_alloc(struct cxip_ep_obj *ep_obj, size_t len,
 	return FI_SUCCESS;
 
 err_free_eq_md:
-	ret = cxil_unmap(*eq_md);
-	assert(ret == 0);
+	unmap_ret = cxil_unmap(*eq_md);
+	assert(unmap_ret == 0);
 
 err_free_eq_buf:
 	free(*eq_buf);

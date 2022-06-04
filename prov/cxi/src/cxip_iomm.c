@@ -399,7 +399,7 @@ err_free_uncached_md:
 	return ret;
 }
 
-#ifdef HAVE_ROCR
+#if HAVE_ROCR
 
 #include <hsa/hsa_ext_amd.h>
 
@@ -473,6 +473,7 @@ int cxip_map(struct cxip_domain *dom, const void *buf, unsigned long len,
 		.iov_count = 1,
 		.mr_iov = &iov,
 	};
+	uint64_t hmem_flags;
 	struct ofi_mr_entry *entry;
 	bool cache = !(flags & OFI_MR_NOCACHE);
 
@@ -503,7 +504,7 @@ int cxip_map(struct cxip_domain *dom, const void *buf, unsigned long len,
 	 * be selected.
 	 */
 	if (dom->hmem)
-		attr.iface = ofi_get_hmem_iface(buf);
+		attr.iface = ofi_get_hmem_iface(buf, NULL, &hmem_flags);
 
 	if (cache && cxip_domain_mr_cache_iface_enabled(dom, attr.iface)) {
 		cxip_map_get_mem_region_size(iov.iov_base, iov.iov_len,
