@@ -371,6 +371,7 @@ int ofi_mr_cache_search(struct ofi_mr_cache *cache, const struct ofi_mr_info *in
 
 		if (*entry &&
 		    ofi_iov_within(&info->iov, &(*entry)->info.iov) &&
+		    ((*entry)->info.iface == attr->iface) &&
 		    monitor->valid(monitor, info, *entry))
 			goto hit;
 
