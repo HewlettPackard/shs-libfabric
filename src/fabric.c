@@ -894,6 +894,21 @@ void fi_ini(void)
 	fi_param_get_str(NULL, "offload_coll_provider",
 			    &ofi_offload_coll_prov_name);
 
+	 /* TODO: This MUST be removed before pushing upstream. This is a
+	  * CXI provider helper to handle constant collision.
+	  */
+	fi_param_define(NULL, "cxi_compat", FI_PARAM_INT,
+			"Temporary flag to allow compatibility with CXI constants "
+			"defined prior to official ones. Default(%d)\n",
+			ofi_cxi_compat);
+	fi_param_get_int(NULL, "cxi_compat", &ofi_cxi_compat);
+	if (ofi_cxi_compat < 0 || ofi_cxi_compat > 2) {
+		FI_WARN(&core_prov, FI_LOG_CORE,
+			"Invalid FI_CXI_COMPAT value %d, using default\n",
+			ofi_cxi_compat);
+		ofi_cxi_compat = 1;
+	}
+
 	ofi_load_dl_prov();
 
 	ofi_register_provider(PSM3_INIT, NULL);
