@@ -196,7 +196,10 @@ static struct cxip_req *cxip_recv_req_alloc(struct cxip_rxc *rxc, void *buf,
 	struct cxip_md *recv_md = NULL;
 	int ret;
 
-	req = cxip_cq_req_alloc(rxc->recv_cq, 1, rxc);
+	/* Software EP only mode receives are not posted to hardware
+	 * and are not constrained by hardware buffer ID limits.
+	 */
+	req = cxip_cq_req_alloc(rxc->recv_cq, !rxc->sw_ep_only, rxc);
 	if (!req) {
 		RXC_WARN(rxc, "Failed to allocate recv request\n");
 		goto err;
@@ -2447,7 +2450,7 @@ static int cxip_ux_onload(struct cxip_rxc *rxc)
 	req = cxip_cq_req_alloc(rxc->recv_cq, 1, NULL);
 	if (!req) {
 		RXC_WARN(rxc, "Failed to allocate request\n");
-		ret = -FI_ENOMEM;
+		ret = -FI_EAGAIN;
 		goto err_free_onload_offset;
 	}
 	ofi_atomic_inc32(&rxc->orx_reqs);
@@ -2543,7 +2546,7 @@ static int cxip_flush_appends(struct cxip_rxc *rxc)
 	req = cxip_cq_req_alloc(rxc->recv_cq, 1, rxc);
 	if (!req) {
 		RXC_WARN(rxc, "Failed to allocate request\n");
-		ret = -FI_ENOMEM;
+		ret = -FI_EAGAIN;
 		goto err;
 	}
 	ofi_atomic_inc32(&rxc->orx_reqs);
@@ -3420,7 +3423,7 @@ ssize_t cxip_recv_common(struct cxip_rxc *rxc, void *buf, size_t len,
 	req = cxip_recv_req_alloc(rxc, buf, len);
 	if (!req) {
 		RXC_WARN(rxc, "Failed to allocate recv request\n");
-		ret = -FI_ENOMEM;
+		ret = -FI_EAGAIN;
 		goto err;
 	}
 
