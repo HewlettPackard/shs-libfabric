@@ -20,6 +20,46 @@
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_DOMAIN, __VA_ARGS__)
 
 extern struct fi_ops_mr cxip_dom_mr_ops;
+extern struct cxip_domain_mr_util_ops cxip_client_domain_mr_ops;
+extern struct cxip_domain_mr_util_ops cxip_prov_domain_mr_ops;
+
+/*
+ * cxip_domain_req_alloc() - Allocate a domain control buffer ID
+ */
+int cxip_domain_ctrl_id_alloc(struct cxip_domain *dom,
+			      struct cxip_ctrl_req *req)
+{
+	int buffer_id;
+
+	ofi_spin_lock(&dom->ctrl_id_lock);
+	buffer_id = ofi_idx_insert(&dom->req_ids, req);
+	if (buffer_id < 0 || buffer_id >= CXIP_BUFFER_ID_MAX) {
+		CXIP_WARN("Failed to allocate MR buffer ID: %d\n",
+			  buffer_id);
+		ofi_spin_unlock(&dom->ctrl_id_lock);
+		return -FI_ENOSPC;
+	}
+
+	ofi_spin_unlock(&dom->ctrl_id_lock);
+	req->req_id = buffer_id;
+
+	return FI_SUCCESS;
+}
+
+/*
+ * cxip_domain_ctrl_id_free() - Free a domain wide control buffer id.
+ */
+void cxip_domain_ctrl_id_free(struct cxip_domain *dom,
+			      struct cxip_ctrl_req *req)
+{
+	/* Non-remote MR will not have a buffer ID assigned */
+	if (req->req_id < 0)
+		return;
+
+	ofi_spin_lock(&dom->ctrl_id_lock);
+	ofi_idx_remove(&dom->req_ids, req->req_id);
+	ofi_spin_unlock(&dom->ctrl_id_lock);
+}
 
 /*
  * cxip_domain_enable() - Enable an FI Domain for use.
@@ -151,6 +191,8 @@ static int cxip_dom_close(struct fid *fid)
 	cxip_domain_disable(dom);
 
 	ofi_spin_destroy(&dom->lock);
+	ofi_spin_destroy(&dom->ctrl_id_lock);
+	ofi_idx_reset(&dom->req_ids);
 	ofi_domain_close(&dom->util_domain);
 	free(dom);
 
@@ -970,10 +1012,14 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 	cxi_domain->util_domain.domain_fid.ops = &cxip_dom_ops;
 	cxi_domain->util_domain.domain_fid.mr = &cxip_dom_mr_ops;
 
+
 	dlist_init(&cxi_domain->txc_list);
 	dlist_init(&cxi_domain->cntr_list);
 	dlist_init(&cxi_domain->cq_list);
 	ofi_spin_init(&cxi_domain->lock);
+	ofi_spin_init(&cxi_domain->ctrl_id_lock);
+	memset(&cxi_domain->req_ids, 0, sizeof(cxi_domain->req_ids));
+
 	ofi_atomic_initialize32(&cxi_domain->ref, 0);
 	cxi_domain->fab = fab;
 
@@ -987,6 +1033,12 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 			  ret, fi_strerror(-ret));
 		goto cleanup_dom;
 	}
+
+	/* Handle client vs provider MR key differences */
+	if (cxi_domain->util_domain.mr_mode & FI_MR_PROV_KEY)
+		cxi_domain->mr_util = &cxip_prov_domain_mr_ops;
+	else
+		cxi_domain->mr_util = &cxip_client_domain_mr_ops;
 
 	*dom = &cxi_domain->util_domain.domain_fid;
 	return 0;
