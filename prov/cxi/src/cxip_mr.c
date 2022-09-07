@@ -20,6 +20,7 @@
 static int cxip_mr_init(struct cxip_mr *mr, struct cxip_domain *dom,
 			const struct fi_mr_attr *attr, uint64_t flags);
 static void cxip_mr_fini(struct cxip_mr *mr);
+static int cxip_mr_prov_cache_enable_std(struct cxip_mr *mr);
 
 /* No-op with FI_MR_PROV_KEY */
 static void cxip_mr_domain_remove_prov(struct cxip_mr *mr)
@@ -369,6 +370,38 @@ cleanup:
 	return FI_SUCCESS;
 }
 
+static void cxip_mr_prov_opt_to_std(struct cxip_mr *mr)
+{
+	struct cxip_mr_key key = {
+		.raw = mr->mr_fid.key,
+	};
+
+	CXIP_WARN("Optimized MR unavailable, fallback to standard MR\n");
+
+	key.opt = false;
+	mr->mr_fid.key = key.raw;
+	mr->optimized = false;
+}
+
+/*
+ * cxip_mr_prov_enable_opt() - Enable a provider key optimized
+ * MR, falling back to a standard MR if resources are not available.
+ *
+ * Caller must hold mr->lock.
+ */
+static int cxip_mr_prov_enable_opt(struct cxip_mr *mr)
+{
+	int ret;
+
+	ret = cxip_mr_enable_opt(mr);
+	if (!ret)
+		return ret;
+
+	cxip_mr_prov_opt_to_std(mr);
+
+	return cxip_mr_enable_std(mr);
+}
+
 /*
  * cxip_mr_prov_cache_enable_opt() - Enable a provider key optimized
  * MR configuring hardware if not already cached.
@@ -499,7 +532,9 @@ err_free_req:
 err:
 	ofi_spin_unlock(&ep_obj->mr_cache_lock);
 
-	return ret;
+	cxip_mr_prov_opt_to_std(mr);
+
+	return cxip_mr_prov_cache_enable_std(mr);
 }
 
 /*
@@ -714,10 +749,16 @@ static int cxip_init_mr_key(struct cxip_mr *mr, uint64_t req_key)
 static int cxip_prov_init_mr_key(struct cxip_mr *mr, uint64_t req_key)
 {
 	struct cxip_mr_key key = {};
+	int ret;
+
+	/* Non-cached FI_MR_PROV_KEY MR keys need to be unique. */
+	ret = cxip_domain_prov_mr_id_alloc(mr->domain, mr);
+	if (ret)
+		return ret;
 
 	key.opt = cxip_env.optimized_mrs &&
-			mr->req.req_id < CXIP_PTL_IDX_PROV_MR_OPT_CNT;
-	key.key = mr->req.req_id;
+			mr->mr_id < CXIP_PTL_IDX_PROV_MR_OPT_CNT;
+	key.key = mr->mr_id;
 
 	CXIP_DBG("Init non-cached MR key 0x%016lX\n", key.raw);
 	mr->key = key.raw;
@@ -940,7 +981,7 @@ struct cxip_mr_util_ops cxip_client_key_mr_util_ops = {
 struct cxip_mr_util_ops cxip_prov_key_mr_util_ops = {
 	.is_cached = false,
 	.init_key = cxip_prov_init_mr_key,
-	.enable_opt = cxip_mr_enable_opt,
+	.enable_opt = cxip_mr_prov_enable_opt,
 	.disable_opt = cxip_mr_disable_opt,
 	.enable_std = cxip_mr_enable_std,
 	.disable_std = cxip_mr_disable_std,
@@ -1169,6 +1210,7 @@ static struct fi_ops cxip_mr_fi_ops = {
 static void cxip_mr_fini(struct cxip_mr *mr)
 {
 	cxip_domain_ctrl_id_free(mr->domain, &mr->req);
+	cxip_domain_prov_mr_id_free(mr->domain, mr);
 }
 
 static int cxip_mr_init(struct cxip_mr *mr, struct cxip_domain *dom,
@@ -1208,6 +1250,7 @@ static int cxip_mr_init(struct cxip_mr *mr, struct cxip_domain *dom,
 		mr->req.req_id = -1;
 	}
 
+	mr->mr_id = -1;
 	mr->req.mr.mr = mr;
 	mr->mr_fid.mem_desc = (void *)mr;
 	mr->mr_state = CXIP_MR_DISABLED;
