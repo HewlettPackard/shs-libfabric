@@ -101,6 +101,8 @@ void cxip_domain_prov_mr_id_free(struct cxip_domain *dom,
 	ofi_spin_unlock(&dom->ctrl_id_lock);
 }
 
+#define TLE_RESERVED 8U
+
 /*
  * cxip_domain_enable() - Enable an FI Domain for use.
  *
@@ -143,6 +145,10 @@ static int cxip_domain_enable(struct cxip_domain *dom)
 			  "Please provide a service ID via auth_key fields.\n",
 			  dom->auth_key.svc_id,
 			  dom->iface->dev->info.device_name);
+
+	/* Need to reserved TLEs to prevent stalling. */
+	dom->max_trig_op_in_use =
+		svc_desc.limits.type[CXI_RSRC_TYPE_TLE].res - TLE_RESERVED;
 
 	ret = cxip_alloc_lni(dom->iface, dom->auth_key.svc_id, &dom->lni);
 	if (ret) {
@@ -289,6 +295,11 @@ static int cxip_dom_dwq_op_send(struct cxip_domain *dom, struct fi_op_msg *msg,
 		return -FI_EINVAL;
 	}
 
+	/* To prevent triggered operation exhaustion, FI_MORE cannot be
+	 * supported.
+	 */
+	msg->flags &= ~FI_MORE;
+
 	buf = msg->msg.iov_count ? msg->msg.msg_iov[0].iov_base : NULL;
 	len = msg->msg.iov_count ? msg->msg.msg_iov[0].iov_len : 0;
 
@@ -325,6 +336,11 @@ static int cxip_dom_dwq_op_tsend(struct cxip_domain *dom,
 		return -FI_EINVAL;
 	}
 
+	/* To prevent triggered operation exhaustion, FI_MORE cannot be
+	 * supported.
+	 */
+	tagged->flags &= ~FI_MORE;
+
 	buf = tagged->msg.iov_count ? tagged->msg.msg_iov[0].iov_base : NULL;
 	len = tagged->msg.iov_count ? tagged->msg.msg_iov[0].iov_len : 0;
 
@@ -357,6 +373,11 @@ static int cxip_dom_dwq_op_rma(struct cxip_domain *dom, struct fi_op_rma *rma,
 	    !rma->msg.rma_iov || rma->msg.rma_iov_count != 1)
 		return -FI_EINVAL;
 
+	/* To prevent triggered operation exhaustion, FI_MORE cannot be
+	 * supported.
+	 */
+	rma->flags &= ~FI_MORE;
+
 	buf = rma->msg.iov_count ? rma->msg.msg_iov[0].iov_base : NULL;
 	len = rma->msg.iov_count ? rma->msg.msg_iov[0].iov_len : 0;
 
@@ -382,15 +403,20 @@ static int cxip_dom_dwq_op_atomic(struct cxip_domain *dom,
 				  uint64_t trig_thresh)
 {
 	struct cxip_ep *ep = container_of(amo->ep, struct cxip_ep, ep);
+	struct cxip_txc *txc = &ep->ep_obj->txc;
 	int ret;
 
 	if (!amo)
 		return -FI_EINVAL;
 
-	ret = cxip_amo_common(CXIP_RQ_AMO, &ep->ep_obj->txc, ep->tx_attr.tclass,
-			      &amo->msg, NULL, NULL, 0, NULL, NULL, 0,
-			      amo->flags, true, trig_thresh, trig_cntr,
-			      comp_cntr);
+	/* To prevent triggered operation exhaustion, FI_MORE cannot be
+	 * supported.
+	 */
+	amo->flags &= ~FI_MORE;
+
+	ret = cxip_amo_common(CXIP_RQ_AMO, txc, txc->tclass, &amo->msg,
+			      NULL, NULL, 0, NULL, NULL, 0, amo->flags,
+			      true, trig_thresh, trig_cntr, comp_cntr);
 	if (ret)
 		CXIP_DBG("Failed to emit AMO triggered op, ret=%d\n", ret);
 	else
@@ -407,17 +433,22 @@ static int cxip_dom_dwq_op_fetch_atomic(struct cxip_domain *dom,
 					uint64_t trig_thresh)
 {
 	struct cxip_ep *ep = container_of(fetch_amo->ep, struct cxip_ep, ep);
+	struct cxip_txc *txc = &ep->ep_obj->txc;
 	int ret;
 
 	if (!fetch_amo)
 		return -FI_EINVAL;
 
-	ret = cxip_amo_common(CXIP_RQ_AMO_FETCH, &ep->ep_obj->txc,
-			      ep->tx_attr.tclass, &fetch_amo->msg, NULL, NULL,
-			      0, fetch_amo->fetch.msg_iov,
-			      fetch_amo->fetch.desc, fetch_amo->fetch.iov_count,
-			      fetch_amo->flags, true, trig_thresh, trig_cntr,
-			      comp_cntr);
+	/* To prevent triggered operation exhaustion, FI_MORE cannot be
+	 * supported.
+	 */
+	fetch_amo->flags &= ~FI_MORE;
+
+	ret = cxip_amo_common(CXIP_RQ_AMO_FETCH, txc, txc->tclass,
+			      &fetch_amo->msg, NULL, NULL, 0,
+			      fetch_amo->fetch.msg_iov, fetch_amo->fetch.desc,
+			      fetch_amo->fetch.iov_count, fetch_amo->flags,
+			      true, trig_thresh, trig_cntr, comp_cntr);
 	if (ret)
 		CXIP_DBG("Failed to emit fetching AMO triggered op, ret=%d\n",
 			 ret);
@@ -435,14 +466,20 @@ static int cxip_dom_dwq_op_comp_atomic(struct cxip_domain *dom,
 				       uint64_t trig_thresh)
 {
 	struct cxip_ep *ep = container_of(comp_amo->ep, struct cxip_ep, ep);
+	struct cxip_txc *txc = &ep->ep_obj->txc;
 	int ret;
 
 	if (!comp_amo)
 		return -FI_EINVAL;
 
-	ret = cxip_amo_common(CXIP_RQ_AMO_SWAP, &ep->ep_obj->txc,
-			      ep->tx_attr.tclass, &comp_amo->msg,
-			      comp_amo->compare.msg_iov, comp_amo->compare.desc,
+	/* To prevent triggered operation exhaustion, FI_MORE cannot be
+	 * supported.
+	 */
+	comp_amo->flags &= ~FI_MORE;
+
+	ret = cxip_amo_common(CXIP_RQ_AMO_SWAP, txc, txc->tclass,
+			      &comp_amo->msg, comp_amo->compare.msg_iov,
+			      comp_amo->compare.desc,
 			      comp_amo->compare.iov_count,
 			      comp_amo->fetch.msg_iov, comp_amo->fetch.desc,
 			      comp_amo->fetch.iov_count, comp_amo->flags, true,
@@ -555,217 +592,303 @@ static void cxip_dom_progress_all_cqs(struct cxip_domain *dom)
 		cxip_util_cq_progress(&cq->util_cq);
 }
 
+static int cxip_dom_trig_op_get_in_use(struct cxip_domain *dom)
+{
+	struct cxi_rsrc_use in_use;
+	int ret;
+
+	ret = cxil_get_svc_rsrc_use(dom->iface->dev, dom->auth_key.svc_id,
+				    &in_use);
+	if (ret)
+		return ret;
+
+	return in_use.in_use[CXI_RSRC_TYPE_TLE];
+}
+
+#define DWQ_SEMAPHORE_TIMEOUT 10U
+
+static int cxip_dom_dwq_queue_work(struct cxip_domain *dom,
+				   struct fi_deferred_work *work)
+{
+	struct cxip_cntr *trig_cntr;
+	struct cxip_cntr *comp_cntr;
+	bool queue_wb_work;
+	int ret;
+	int trig_op_count;
+	int trig_op_in_use;
+	struct timespec ts;
+	bool again;
+
+	if (!work->triggering_cntr)
+		return -FI_EINVAL;
+
+	comp_cntr = work->completion_cntr ?
+		container_of(work->completion_cntr, struct cxip_cntr,
+			     cntr_fid) : NULL;
+	trig_cntr = container_of(work->triggering_cntr, struct cxip_cntr,
+				 cntr_fid);
+
+	switch (work->op_type) {
+	case FI_OP_SEND:
+	case FI_OP_RECV:
+		queue_wb_work = !!(work->op.msg->flags & FI_CXI_CNTR_WB);
+		break;
+
+	case FI_OP_TSEND:
+	case FI_OP_TRECV:
+		queue_wb_work = !!(work->op.tagged->flags & FI_CXI_CNTR_WB);
+		break;
+
+	case FI_OP_READ:
+	case FI_OP_WRITE:
+		queue_wb_work = !!(work->op.rma->flags & FI_CXI_CNTR_WB);
+		break;
+
+	case FI_OP_ATOMIC:
+		queue_wb_work = !!(work->op.atomic->flags & FI_CXI_CNTR_WB);
+		break;
+
+	case FI_OP_FETCH_ATOMIC:
+		queue_wb_work = !!(work->op.fetch_atomic->flags & FI_CXI_CNTR_WB);
+		break;
+
+	case FI_OP_COMPARE_ATOMIC:
+		queue_wb_work = !!(work->op.compare_atomic->flags & FI_CXI_CNTR_WB);
+		break;
+
+	default:
+		queue_wb_work = false;
+	}
+
+	if (cxip_env.enable_trig_op_limit) {
+		if (queue_wb_work)
+			trig_op_count = 2;
+		else
+			trig_op_count = 1;
+
+		if (clock_gettime(CLOCK_REALTIME, &ts) == -1) {
+			CXIP_WARN("clock_gettime failed: %d\n", -errno);
+			return -errno;
+		}
+
+		ts.tv_sec += DWQ_SEMAPHORE_TIMEOUT;
+
+		again = true;
+		do {
+			if (sem_timedwait(dom->trig_op_lock, &ts) == -1) {
+				if (errno == EINTR) {
+					CXIP_WARN("sem_timedwait failed: %d\n",
+						  -errno);
+					return -errno;
+				}
+			} else {
+				again = false;
+			}
+		} while (again);
+
+		ret = cxip_dom_trig_op_get_in_use(dom);
+		if (ret < 0) {
+			CXIP_WARN("cxip_dom_trig_op_get_in_use: %d\n", ret);
+			goto unlock;
+		}
+
+		trig_op_in_use = ret;
+
+		if ((trig_op_in_use + trig_op_count) > dom->max_trig_op_in_use) {
+			CXIP_WARN("Trig ops exhausted: in-use=%d\n", trig_op_in_use);
+			ret = -FI_ENOSPC;
+			goto unlock;
+		}
+	}
+
+	switch (work->op_type) {
+	case FI_OP_SEND:
+		ret = cxip_dom_dwq_op_send(dom, work->op.msg, trig_cntr,
+					   comp_cntr, work->threshold);
+		break;
+
+	case FI_OP_TSEND:
+		ret = cxip_dom_dwq_op_tsend(dom, work->op.tagged, trig_cntr,
+					    comp_cntr, work->threshold);
+		break;
+
+	case FI_OP_RECV:
+		ret = cxip_dom_dwq_op_recv(dom, work->op.msg, trig_cntr,
+					   comp_cntr, work->threshold);
+		break;
+
+	case FI_OP_TRECV:
+		ret = cxip_dom_dwq_op_trecv(dom, work->op.tagged, trig_cntr,
+					    comp_cntr, work->threshold);
+		break;
+
+	case FI_OP_READ:
+	case FI_OP_WRITE:
+		ret = cxip_dom_dwq_op_rma(dom, work->op.rma, work->op_type,
+					  trig_cntr, comp_cntr,
+					  work->threshold);
+		break;
+
+	case FI_OP_ATOMIC:
+		ret = cxip_dom_dwq_op_atomic(dom, work->op.atomic, trig_cntr,
+					     comp_cntr, work->threshold);
+		break;
+
+	case FI_OP_FETCH_ATOMIC:
+		ret = cxip_dom_dwq_op_fetch_atomic(dom, work->op.fetch_atomic,
+						   trig_cntr, comp_cntr,
+						   work->threshold);
+		break;
+
+	case FI_OP_COMPARE_ATOMIC:
+		ret = cxip_dom_dwq_op_comp_atomic(dom, work->op.compare_atomic,
+						  trig_cntr, comp_cntr,
+						  work->threshold);
+		break;
+
+	case FI_OP_CNTR_SET:
+	case FI_OP_CNTR_ADD:
+		ret = cxip_dom_dwq_op_cntr(dom, work->op.cntr, work->op_type,
+					   trig_cntr, comp_cntr,
+					   work->threshold, false);
+		break;
+
+	default:
+		ret = -FI_EINVAL;
+		CXIP_WARN("Invalid FI_QUEUE_WORK op %s\n",
+				fi_tostr(&work->op_type, FI_TYPE_OP_TYPE));
+	}
+
+	if (ret)
+		goto unlock;
+
+	if (queue_wb_work) {
+		struct fi_op_cntr op_cntr = {
+			.cntr = &trig_cntr->cntr_fid,
+		};
+
+		/* no op_type needed for counter writeback */
+		ret = cxip_dom_dwq_op_cntr(dom, &op_cntr, 0, trig_cntr, NULL,
+					   work->threshold + 1, true);
+		/* TODO: If cxip_dom_dwq_op_cntr fails we need to cancel the
+		 * above work queue.
+		 */
+	}
+
+	/* Wait until the command queue is empty. This is a sign that hardware
+	 * has processed triggered operation commands. At this point, it is
+	 * safe to release the trigger op pool lock.
+	 */
+	if (cxip_env.enable_trig_op_limit) {
+		ofi_genlock_lock(&dom->trig_cmdq_lock);
+		while (dom->trig_cmdq->dev_cmdq->status->rd_ptr !=
+		       (dom->trig_cmdq->dev_cmdq->hw_wp32 / 2)) {};
+		ofi_genlock_unlock(&dom->trig_cmdq_lock);
+	}
+
+unlock:
+	if (cxip_env.enable_trig_op_limit)
+		sem_post(dom->trig_op_lock);
+
+	return ret;
+}
+
+static int cxip_dom_dwq_flush_work(struct cxip_domain *dom)
+{
+	struct cxip_cntr *trig_cntr;
+	struct cxip_txc *txc;
+	struct cxip_cq *cq;
+	int ret __attribute__ ((unused));
+
+	ofi_spin_lock(&dom->lock);
+	if (!dom->cntr_init) {
+		ofi_spin_unlock(&dom->lock);
+		return FI_SUCCESS;
+	}
+
+	ofi_genlock_lock(&dom->trig_cmdq_lock);
+
+	/* Issue cancels to all allocated counters. */
+	dlist_foreach_container(&dom->cntr_list, struct cxip_cntr,
+				trig_cntr, dom_entry) {
+		struct c_ct_cmd ct_cmd = {};
+
+		if (!trig_cntr->ct)
+			continue;
+
+		ct_cmd.ct = trig_cntr->ct->ctn;
+		ret = cxi_cq_emit_ct(dom->trig_cmdq->dev_cmdq, C_CMD_CT_CANCEL,
+				     &ct_cmd);
+
+		// TODO: Handle this assert. Multiple triggered CQs may
+		// be required.
+		assert(!ret);
+		cxi_cq_ring(dom->trig_cmdq->dev_cmdq);
+	};
+
+	/* Rely on the triggered CQ ack counter to know when there are no more
+	 * pending triggered operations. In-between, progress CQs to cleanup
+	 * internal transaction state.
+	 */
+	while (true) {
+		unsigned int ack_counter;
+
+		ret = cxil_cmdq_ack_counter(dom->trig_cmdq->dev_cmdq,
+					    &ack_counter);
+		assert(!ret);
+
+		if (!ack_counter)
+			break;
+
+		cxip_dom_progress_all_cqs(dom);
+	}
+
+	/* It is possible that the ack counter is zero and there are completion
+	 * events in-flight meaning that the above progression may have missed
+	 * events. Perform a sleep to help ensure events have arrived and
+	 * progress all CQs one more time.
+	 *
+	 * TODO: Investigate better way to resolve this race condition.
+	 */
+	sleep(1);
+	cxip_dom_progress_all_cqs(dom);
+
+	/* At this point, all triggered operations should be cancelled or have
+	 * completed. Due to special handling of message operations, flush any
+	 * remaining message triggered requests from the TX context first.
+	 */
+	dlist_foreach_container(&dom->txc_list, struct cxip_txc, txc,
+				dom_entry)
+		cxip_txc_flush_msg_trig_reqs(txc);
+
+	/* Flush all the CQs of any remaining non-message triggered operation
+	 * requests.
+	 */
+	dlist_foreach_container(&dom->cq_list, struct cxip_cq, cq, dom_entry)
+		cxip_cq_flush_trig_reqs(cq);
+
+	ofi_genlock_unlock(&dom->trig_cmdq_lock);
+	ofi_spin_unlock(&dom->lock);
+
+	return FI_SUCCESS;
+}
+
 static int cxip_dom_control(struct fid *fid, int command, void *arg)
 {
 	struct cxip_domain *dom;
-	struct cxip_txc *txc;
-	struct fi_deferred_work *work;
-	struct cxip_cntr *trig_cntr;
-	struct cxip_cntr *comp_cntr;
-	struct cxip_cq *cq;
-	bool queue_wb_work = false;
-	int ret;
 
 	dom = container_of(fid, struct cxip_domain, util_domain.domain_fid.fid);
 
 	switch (command) {
 	case FI_QUEUE_WORK:
-		work = arg;
-
-		if (!work->triggering_cntr)
-			return -FI_EINVAL;
-
-		comp_cntr = work->completion_cntr ?
-			container_of(work->completion_cntr,
-				     struct cxip_cntr, cntr_fid) : NULL;
-		trig_cntr = container_of(work->triggering_cntr,
-					 struct cxip_cntr, cntr_fid);
-
-		switch (work->op_type) {
-		case FI_OP_SEND:
-			if (work->op.msg->flags & FI_CXI_CNTR_WB)
-				queue_wb_work = true;
-			ret = cxip_dom_dwq_op_send(dom, work->op.msg,
-						   trig_cntr, comp_cntr,
-						   work->threshold);
-			break;
-
-		case FI_OP_TSEND:
-			if (work->op.tagged->flags & FI_CXI_CNTR_WB)
-				queue_wb_work = true;
-			ret = cxip_dom_dwq_op_tsend(dom, work->op.tagged,
-						    trig_cntr, comp_cntr,
-						    work->threshold);
-			break;
-
-		case FI_OP_RECV:
-			if (work->op.msg->flags & FI_CXI_CNTR_WB)
-				queue_wb_work = true;
-			ret = cxip_dom_dwq_op_recv(dom, work->op.msg,
-						   trig_cntr, comp_cntr,
-						   work->threshold);
-			break;
-
-		case FI_OP_TRECV:
-			if (work->op.tagged->flags & FI_CXI_CNTR_WB)
-				queue_wb_work = true;
-			ret = cxip_dom_dwq_op_trecv(dom, work->op.tagged,
-						    trig_cntr, comp_cntr,
-						    work->threshold);
-			break;
-
-		case FI_OP_READ:
-		case FI_OP_WRITE:
-			if (work->op.rma->flags & FI_CXI_CNTR_WB)
-				queue_wb_work = true;
-			ret = cxip_dom_dwq_op_rma(dom, work->op.rma,
-						  work->op_type, trig_cntr,
-						  comp_cntr, work->threshold);
-			break;
-
-		case FI_OP_ATOMIC:
-			if (work->op.atomic->flags & FI_CXI_CNTR_WB)
-				queue_wb_work = true;
-			ret = cxip_dom_dwq_op_atomic(dom, work->op.atomic,
-						     trig_cntr, comp_cntr,
-						     work->threshold);
-			break;
-
-		case FI_OP_FETCH_ATOMIC:
-			if (work->op.fetch_atomic->flags & FI_CXI_CNTR_WB)
-				queue_wb_work = true;
-			ret = cxip_dom_dwq_op_fetch_atomic(dom,
-							   work->op.fetch_atomic,
-							   trig_cntr,
-							   comp_cntr,
-							   work->threshold);
-			break;
-
-		case FI_OP_COMPARE_ATOMIC:
-			if (work->op.compare_atomic->flags & FI_CXI_CNTR_WB)
-				queue_wb_work = true;
-			ret = cxip_dom_dwq_op_comp_atomic(dom,
-							  work->op.compare_atomic,
-							  trig_cntr, comp_cntr,
-							  work->threshold);
-			break;
-
-		case FI_OP_CNTR_SET:
-		case FI_OP_CNTR_ADD:
-			return cxip_dom_dwq_op_cntr(dom, work->op.cntr,
-						    work->op_type, trig_cntr,
-						    comp_cntr, work->threshold,
-						    false);
-
-		default:
-			CXIP_WARN("Invalid FI_QUEUE_WORK op %s\n",
-				  fi_tostr(&work->op_type, FI_TYPE_OP_TYPE));
-			return -FI_EINVAL;
-		}
-
-		if (ret)
-			return ret;
-
-		if (queue_wb_work) {
-			struct fi_op_cntr op_cntr = {
-				.cntr = &trig_cntr->cntr_fid,
-			};
-
-			/* no op_type needed for counter writeback */
-			ret = cxip_dom_dwq_op_cntr(dom, &op_cntr, 0,
-						   trig_cntr, NULL,
-						   work->threshold + 1, true);
-			/* TODO: If cxip_dom_dwq_op_cntr fails we need to
-			 * cancel the above work queue.
-			 */
-		}
-
-		return ret;
+		return cxip_dom_dwq_queue_work(dom, arg);
 
 	case FI_FLUSH_WORK:
-		ofi_spin_lock(&dom->lock);
-		if (!dom->cntr_init) {
-			ofi_spin_unlock(&dom->lock);
-			return FI_SUCCESS;
-		}
+		return cxip_dom_dwq_flush_work(dom);
 
-		ofi_genlock_lock(&dom->trig_cmdq_lock);
-
-		/* Issue cancels to all allocated counters. */
-		dlist_foreach_container(&dom->cntr_list, struct cxip_cntr,
-					trig_cntr, dom_entry) {
-			struct c_ct_cmd ct_cmd = {};
-
-			if (!trig_cntr->ct)
-				continue;
-
-			ct_cmd.ct = trig_cntr->ct->ctn;
-			ret = cxi_cq_emit_ct(dom->trig_cmdq->dev_cmdq,
-					     C_CMD_CT_CANCEL, &ct_cmd);
-
-			// TODO: Handle this assert. Multiple triggered CQs may
-			// be required.
-			assert(!ret);
-			cxi_cq_ring(dom->trig_cmdq->dev_cmdq);
-		};
-
-		/* Rely on the triggered CQ ack counter to know when there are
-		 * no more pending triggered operations. In-between, progress
-		 * CQs to cleanup internal transaction state.
-		 */
-		while (true) {
-			unsigned int ack_counter;
-
-			ret = cxil_cmdq_ack_counter(dom->trig_cmdq->dev_cmdq,
-						    &ack_counter);
-			assert(!ret);
-
-			if (!ack_counter)
-				break;
-
-			cxip_dom_progress_all_cqs(dom);
-		}
-
-		/* It is possible that the ack counter is zero and there are
-		 * completion events in-flight meaning that the above
-		 * progression may have missed events. Perform a sleep to help
-		 * ensure events have arrived and progress all CQs one more
-		 * time.
-		 *
-		 * TODO: Investigate better way to resolve this race condition.
-		 */
-		sleep(1);
-		cxip_dom_progress_all_cqs(dom);
-
-		/* At this point, all triggered operations should be cancelled
-		 * or have completed. Due to special handling of message
-		 * operations, flush any remaining message triggered requests
-		 * from the TX context first.
-		 */
-		dlist_foreach_container(&dom->txc_list, struct cxip_txc, txc,
-					dom_entry) {
-
-			ofi_genlock_lock(&txc->ep_obj->lock);
-			cxip_txc_flush_msg_trig_reqs(txc);
-			ofi_genlock_unlock(&txc->ep_obj->lock);
-		}
-
-		/* Flush all the CQs of any remaining non-message triggered
-		 * operation requests.
-		 */
-		dlist_foreach_container(&dom->cq_list, struct cxip_cq, cq,
-				dom_entry)
-			cxip_cq_flush_trig_reqs(cq);
-
-		ofi_genlock_unlock(&dom->trig_cmdq_lock);
-		ofi_spin_unlock(&dom->lock);
-
-		return FI_SUCCESS;
 	default:
 		return -FI_EINVAL;
 	}
-
-	return -FI_EINVAL;
 }
 
 static int cxip_domain_cntr_read(struct fid *fid, unsigned int cntr,
@@ -833,21 +956,40 @@ static int cxip_domain_enable_hybrid_mr_desc(struct fid *fid, bool enable)
 	return FI_SUCCESS;
 }
 
+static int cxip_domain_get_dwq_depth(struct fid *fid, size_t *depth)
+{
+	struct cxip_domain *dom;
+
+	if (fid->fclass != FI_CLASS_DOMAIN) {
+		CXIP_WARN("Invalid FID: %p\n", fid);
+		return -FI_EINVAL;
+	}
+
+	dom = container_of(fid, struct cxip_domain,
+			   util_domain.domain_fid.fid);
+
+	*depth = dom->max_trig_op_in_use;
+
+	return FI_SUCCESS;
+}
+
 static struct fi_cxi_dom_ops cxip_dom_ops_ext = {
 	.cntr_read = cxip_domain_cntr_read,
 	.topology = cxip_domain_topology,
 	.enable_hybrid_mr_desc = cxip_domain_enable_hybrid_mr_desc,
 	.ep_get_unexp_msgs = cxip_ep_get_unexp_msgs,
+	.get_dwq_depth = cxip_domain_get_dwq_depth,
 };
 
 static int cxip_dom_ops_open(struct fid *fid, const char *ops_name,
 			     uint64_t flags, void **ops, void *context)
 {
-	/* v4 only appended a new function */
+	/* v5 only appended a new function */
 	if (!strcmp(ops_name, FI_CXI_DOM_OPS_1) ||
 	    !strcmp(ops_name, FI_CXI_DOM_OPS_2) ||
 	    !strcmp(ops_name, FI_CXI_DOM_OPS_3) ||
-	    !strcmp(ops_name, FI_CXI_DOM_OPS_4)) {
+	    !strcmp(ops_name, FI_CXI_DOM_OPS_4) ||
+	    !strcmp(ops_name, FI_CXI_DOM_OPS_5)) {
 		*ops = &cxip_dom_ops_ext;
 		return FI_SUCCESS;
 	}

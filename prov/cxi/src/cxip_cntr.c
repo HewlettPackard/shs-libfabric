@@ -149,9 +149,15 @@ static int cxip_cntr_get_ct_writeback(struct cxip_cntr *cntr)
 	return wb_copy.ct_writeback;
 }
 
+#define TRIG_OP_LOCK_NAME_FMT "/.uuid%d_cxi%d_vni%d_svcid%d"
+#define TRIG_OP_LOCK_NAME_SIZE 256U
+
 static int cxip_dom_cntr_enable(struct cxip_domain *dom)
 {
-	struct cxi_cq_alloc_opts cq_opts = {};
+	char trig_op_lock_name[TRIG_OP_LOCK_NAME_SIZE];
+	struct cxi_cq_alloc_opts cq_opts = {
+		.policy = CXI_CQ_UPDATE_ALWAYS,
+	};
 	int ret;
 
 	ofi_spin_lock(&dom->lock);
@@ -163,7 +169,28 @@ static int cxip_dom_cntr_enable(struct cxip_domain *dom)
 
 	assert(dom->enabled);
 
-	cq_opts.count = 64;
+	ret = snprintf(trig_op_lock_name, TRIG_OP_LOCK_NAME_SIZE,
+		       TRIG_OP_LOCK_NAME_FMT, getuid(),
+		       dom->iface->dev->info.dev_id, dom->auth_key.vni,
+		       dom->auth_key.svc_id);
+	if (ret >= TRIG_OP_LOCK_NAME_SIZE) {
+		CXIP_WARN("snprintf buffer too small\n");
+		ret = -FI_ENOSPC;
+		goto err_unlock;
+	} else if (ret < 0) {
+		CXIP_WARN("snprintf failed: %d\n", ret);
+		goto err_unlock;
+	}
+
+	dom->trig_op_lock = sem_open(trig_op_lock_name, O_CREAT,
+				     S_IRUSR | S_IWUSR, 1);
+	if (dom->trig_op_lock == SEM_FAILED) {
+		ret = -errno;
+		CXIP_WARN("sem_open failed: %d\n", ret);
+		goto err_unlock;
+	}
+
+	cq_opts.count = MAX(dom->max_trig_op_in_use, 64);
 	cq_opts.flags = CXI_CQ_IS_TX | CXI_CQ_TX_WITH_TRIG_CMDS;
 	cq_opts.policy = CXI_CQ_UPDATE_ALWAYS;
 
@@ -174,9 +201,7 @@ static int cxip_dom_cntr_enable(struct cxip_domain *dom)
 			      &dom->trig_cmdq);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Failed to allocate trig_cmdq: %d\n", ret);
-
-		ofi_spin_unlock(&dom->lock);
-		return -FI_ENOSPC;
+		goto err_close_sem;
 	}
 
 	if (dom->util_domain.threading == FI_THREAD_DOMAIN)
@@ -191,12 +216,36 @@ static int cxip_dom_cntr_enable(struct cxip_domain *dom)
 	ofi_spin_unlock(&dom->lock);
 
 	return FI_SUCCESS;
+
+err_close_sem:
+	sem_close(dom->trig_op_lock);
+err_unlock:
+	ofi_spin_unlock(&dom->lock);
+
+	return ret;
 }
 
 void cxip_dom_cntr_disable(struct cxip_domain *dom)
 {
+	char trig_op_lock_name[TRIG_OP_LOCK_NAME_SIZE];
+	int ret;
+
 	if (dom->cntr_init) {
 		ofi_genlock_destroy(&dom->trig_cmdq_lock);
+
+		sem_close(dom->trig_op_lock);
+
+		ret = snprintf(trig_op_lock_name, TRIG_OP_LOCK_NAME_SIZE,
+			TRIG_OP_LOCK_NAME_FMT, getuid(),
+			dom->iface->dev->info.dev_id, dom->auth_key.vni,
+			dom->auth_key.svc_id);
+		if (ret >= TRIG_OP_LOCK_NAME_SIZE)
+			CXIP_WARN("snprintf buffer too small\n");
+		else if (ret < 0)
+			CXIP_WARN("snprintf failed: %d\n", ret);
+		else
+			sem_unlink(trig_op_lock_name);
+
 		cxip_cmdq_free(dom->trig_cmdq);
 	}
 }

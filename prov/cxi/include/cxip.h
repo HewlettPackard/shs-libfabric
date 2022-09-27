@@ -27,6 +27,7 @@
 #include <rdma/fi_rma.h>
 #include <rdma/fi_tagged.h>
 #include <rdma/fi_trigger.h>
+#include <semaphore.h>
 
 #include <ofi.h>
 #include <ofi_atom.h>
@@ -279,6 +280,7 @@ struct cxip_environment {
 	int disable_hmem_dev_register;
 	int ze_hmem_supported;
 	enum cxip_rdzv_proto  rdzv_proto;
+	int enable_trig_op_limit;
 };
 
 extern struct cxip_environment cxip_env;
@@ -853,6 +855,12 @@ struct cxip_domain {
 
 	/* NIC AMO operation which is remapped to a PCIe operation. */
 	int amo_remap_to_pcie_fadd;
+
+	/* Maximum number of triggered operations configured for the service
+	 * ID.
+	 */
+	int max_trig_op_in_use;
+	sem_t *trig_op_lock;
 };
 
 static inline bool cxip_domain_mr_cache_enabled(struct cxip_domain *dom)
