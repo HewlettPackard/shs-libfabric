@@ -52,6 +52,74 @@ struct fid_av_set *cxit_av_set;
 struct fid_mc *cxit_mc;
 bool cxit_prov_key;
 
+/**
+ * @brief Trace function.
+ *
+ * Support test framework-aware code execution tracing.
+ *
+ * Function pointer cxip_trace_fn is instantiated in cxip_info.c, is declared
+ * extern in cxip.h, and is initialized to NULL, which prevents any output.
+ *
+ * Every test framework is required to support a cxit_trace_enable() function,
+ * which sets (or clears) the function pointer, thus enabling (or disabling) the
+ * tracing function for that test framework.
+ *
+ * Every test framework is also required to support a cxit_trace_flush()
+ * function, used to flush any cached output produced by the trace function.
+ *
+ * This is normally embedded within a code module with the following:
+ *
+ * -  #define TRACE CXIP_TRACE
+ * -  #define TRACE CXIP_NOTRACE
+ *
+ * The former turns on tracing in that module, while the latter turns it off and
+ * produces no code, allowing TRACE() calls in performance-critical code.
+ *
+ * ENABLE_DEBUG must be set at compile-time, otherwise CXIP_TRACE is identical
+ * to CXIP_NOTRACE, and does not produce code. ENABLE_DEBUG is set using the
+ * --enable-debug compiler flag. This compiler flag is never set for a
+ * production build.
+ *
+ * The --enable-debug flag is set in the devbootstrap build by defining DEBUG=1
+ * during build.
+ *
+ * The implementation in this framework (cxip_test_common) is for use with
+ * NETSIM criterion testing, and produces output via printf() to stdout.
+ */
+
+/* simple printf() implementation, can be extended */
+static int cxip_trace_attr cxit_trace(const char *fmt, ...)
+{
+	va_list args;
+	int len;
+
+	va_start(args, fmt);
+	len = vprintf(fmt, args);
+	va_end(args);
+	return len;
+}
+
+/* enable/disable trace function, return previous state */
+bool cxit_trace_enable(bool enable)
+{
+	static bool is_enabled = false;
+	bool was_enabled = is_enabled;
+
+	if (enable && !is_enabled) {
+		cxip_trace_fn = cxit_trace;
+		is_enabled = true;
+	} else if (!enable && is_enabled) {
+		cxip_trace_fn = NULL;
+		is_enabled = false;
+	}
+	return was_enabled;
+}
+
+void cxit_trace_flush(void)
+{
+	fflush(stdout);
+}
+
 int cxit_dom_read_cntr(unsigned int cntr, uint64_t *value,
 		       struct timespec *ts, bool sync)
 {
@@ -401,85 +469,6 @@ void cxit_bind_av(void)
 
 	ret = fi_ep_bind(cxit_ep, &cxit_av->fid, 0);
 	cr_assert(!ret, "fi_ep_bind AV");
-}
-
-/* expand AV and create av_sets for collectives */
-static void _create_av_set(int count, int rank, struct fid_av_set **av_set_fid)
-{
-	struct cxip_ep *ep;
-	struct cxip_comm_key comm_key = {
-		.keytype = COMM_KEY_RANK,
-		.rank.rank = rank,
-		.rank.hwroot_idx = 0,
-	};
-	struct fi_av_set_attr attr = {
-		.count = 0,
-		.start_addr = FI_ADDR_NOTAVAIL,
-		.end_addr = FI_ADDR_NOTAVAIL,
-		.stride = 1,
-		.comm_key_size = sizeof(comm_key),
-		.comm_key = (void *)&comm_key,
-		.flags = 0,
-	};
-	struct cxip_addr caddr;
-	int i, ret;
-
-	ep = container_of(cxit_ep, struct cxip_ep, ep);
-
-	/* lookup initiator caddr */
-	ret = _cxip_av_lookup(ep->ep_obj->av, cxit_ep_fi_addr, &caddr);
-	cr_assert(ret == 0, "bad lookup on address %ld: %d\n",
-		  cxit_ep_fi_addr, ret);
-
-	/* create empty av_set */
-	ret = fi_av_set(&ep->ep_obj->av->av_fid, &attr, av_set_fid, NULL);
-	cr_assert(ret == 0, "av_set creation failed: %d\n", ret);
-
-	/* add source address as multiple av entries */
-	for (i = count - 1; i >= 0; i--) {
-		fi_addr_t fi_addr;
-
-		ret = fi_av_insert(&ep->ep_obj->av->av_fid, &caddr, 1,
-				   &fi_addr, 0, NULL);
-		cr_assert(ret == 1, "%d cxip_av_insert failed: %d\n", i, ret);
-		ret = fi_av_set_insert(*av_set_fid, fi_addr);
-		cr_assert(ret == 0, "%d fi_av_set_insert failed: %d\n", i, ret);
-	}
-}
-
-void cxit_create_netsim_collective(int count)
-{
-	int i, ret;
-
-	cxit_coll_mc_list.count = count;
-	cxit_coll_mc_list.av_set_fid = calloc(cxit_coll_mc_list.count,
-					      sizeof(struct fid_av_set *));
-	cxit_coll_mc_list.mc_fid = calloc(cxit_coll_mc_list.count,
-					  sizeof(struct fid_mc *));
-
-	for (i = 0; i < cxit_coll_mc_list.count; i++) {
-		_create_av_set(cxit_coll_mc_list.count, i,
-			       &cxit_coll_mc_list.av_set_fid[i]);
-		ret = cxip_join_collective(cxit_ep, FI_ADDR_NOTAVAIL,
-					   cxit_coll_mc_list.av_set_fid[i],
-					   0, &cxit_coll_mc_list.mc_fid[i],
-					   NULL);
-		cr_assert(ret == 0, "cxip_coll_enable failed: %d\n", ret);
-	}
-}
-
-void cxit_destroy_netsim_collective(void)
-{
-	int i;
-
-	for (i = cxit_coll_mc_list.count - 1; i >= 0; i--) {
-		fi_close(&cxit_coll_mc_list.mc_fid[i]->fid);
-		fi_close(&cxit_coll_mc_list.av_set_fid[i]->fid);
-	}
-	free(cxit_coll_mc_list.mc_fid);
-	free(cxit_coll_mc_list.av_set_fid);
-	cxit_coll_mc_list.mc_fid = NULL;
-	cxit_coll_mc_list.av_set_fid = NULL;
 }
 
 static void cxit_init(void)

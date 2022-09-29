@@ -40,6 +40,9 @@ extern struct fid_mc *cxit_mc;
 extern FILE *cxit_mc_fifo;
 extern bool cxit_prov_key;
 
+extern bool cxit_trace_enable(bool enable);
+extern void cxit_trace_flush(void);
+
 void cxit_create_fabric_info(void);
 void cxit_destroy_fabric_info(void);
 void cxit_create_fabric(void);
@@ -125,9 +128,6 @@ struct cxit_coll_mc_list {
 	struct fid_mc **mc_fid;
 };
 extern struct cxit_coll_mc_list cxit_coll_mc_list;
-
-void cxit_create_netsim_collective(int count);
-void cxit_destroy_netsim_collective(void);
 
 void set_amo_remap_to_pcie_fadd(int amo_remap_to_pcie_fadd);
 void reset_amo_remap_to_pcie_fadd(void);
