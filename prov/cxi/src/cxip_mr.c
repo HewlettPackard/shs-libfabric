@@ -557,7 +557,12 @@ static int cxip_mr_prov_cache_disable_opt(struct cxip_mr *mr)
 		 mr, mr->key);
 
 	ofi_spin_lock(&ep_obj->mr_cache_lock);
-	assert(ofi_atomic_get32(&ep_obj->opt_mr_cache[lac].ref) > 0);
+	if (ofi_atomic_get32(&ep_obj->opt_mr_cache[lac].ref) <= 0) {
+		CXIP_WARN("Cached optimized MR reference underflow\n");
+		ofi_spin_unlock(&ep_obj->mr_cache_lock);
+
+		return -FI_EINVAL;
+	}
 	ofi_atomic_dec32(&ep_obj->opt_mr_cache[lac].ref);
 	mr->enabled = false;
 	ofi_spin_unlock(&ep_obj->mr_cache_lock);
@@ -684,8 +689,14 @@ static int cxip_mr_prov_cache_disable_std(struct cxip_mr *mr)
 		 mr, mr->key);
 
 	ofi_spin_lock(&ep_obj->mr_cache_lock);
-	assert(ofi_atomic_get32(&ep_obj->std_mr_cache[lac].ref) > 0);
+	if (ofi_atomic_get32(&ep_obj->std_mr_cache[lac].ref) <= 0) {
+		CXIP_WARN("Cached standard MR reference underflow\n");
+		ofi_spin_unlock(&ep_obj->mr_cache_lock);
+
+		return -FI_EINVAL;
+	}
 	ofi_atomic_dec32(&ep_obj->std_mr_cache[lac].ref);
+	mr->enabled = false;
 	ofi_spin_unlock(&ep_obj->mr_cache_lock);
 
 	return FI_SUCCESS;
@@ -803,10 +814,14 @@ static bool cxip_is_valid_prov_mr_key(uint64_t key)
 		.raw = key,
 	};
 
-	if (!cxip_key.cached)
-		return cxip_is_valid_mr_key(cxip_key.key);
+	if (cxip_key.cached)
+		return cxip_key.unused1 == 0;
 
-	return cxip_key.unused1 == 0;
+	if (cxip_key.opt)
+		return CXIP_MR_UNCACHED_KEY_TO_IDX(cxip_key.key) <
+				CXIP_PTL_IDX_PROV_MR_OPT_CNT;
+
+	return cxip_is_valid_mr_key(cxip_key.key);
 }
 
 static bool cxip_mr_key_opt(uint64_t key)

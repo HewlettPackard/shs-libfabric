@@ -307,7 +307,7 @@ struct cxip_addr {
  * 16      Collective PtlTE entry
  * 17-116  Optimized write MR PtlTEs 0-99
  *         For Client specified keys:
- *           17-126 Non-cached optimized write MR PtlTEs 0-99
+ *           17-116 Non-cached optimized write MR PtlTEs 0-99
  *         For Provider specified keys:
  *           17-24 Cached optimized write MR PtlTEs 0-7
  *           25-116 Non-cached optimized write MR PtlTEs 8-99
@@ -979,6 +979,7 @@ struct cxip_req_send {
 	size_t len;			// request length
 	struct cxip_md *send_md;	// send buffer memory descriptor
 	struct cxip_addr caddr;
+	fi_addr_t dest_addr;
 	uint8_t rxc_id;
 	bool tagged;
 	uint32_t tclass;
