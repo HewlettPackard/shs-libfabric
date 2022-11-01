@@ -67,8 +67,7 @@
 static int cxip_recv_cb(struct cxip_req *req, const union c_event *event);
 static void cxip_ux_onload_complete(struct cxip_req *req);
 static int cxip_ux_onload(struct cxip_rxc *rxc);
-static int cxip_recv_req_queue(struct cxip_req *req, bool check_rxc_state,
-			       bool restart_seq);
+static int cxip_recv_req_queue(struct cxip_req *req, bool restart_seq);
 static int cxip_recv_req_dropped(struct cxip_req *req);
 static ssize_t _cxip_recv_req(struct cxip_req *req, bool restart_seq);
 
@@ -2098,7 +2097,7 @@ static int cxip_recv_replay(struct cxip_rxc *rxc)
 		 * user receives are being posted, it is safe to ignore the RXC
 		 * state when replaying failed user posted receives.
 		 */
-		ret = cxip_recv_req_queue(req, false, restart_seq);
+		ret = cxip_recv_req_queue(req, restart_seq);
 
 		/* Match made in software? */
 		if (ret == -FI_EALREADY)
@@ -2874,14 +2873,17 @@ static bool init_match(struct cxip_rxc *rxc, uint32_t init, uint32_t match_id)
 
 /*
  * recv_req_peek_complete - FI_PEEK operation completed
- *
- * TODO: We will ultimately add FI_CLAIM logic to this function.
  */
-static void recv_req_peek_complete(struct cxip_req *req)
+static void recv_req_peek_complete(struct cxip_req *req,
+				   struct cxip_ux_send *ux_send)
 {
-	/* If no peek match we need to return original tag */
+	/* If no unexpected message match we need to return original
+	 * tag in the completion.
+	 */
 	if (req->recv.rc != C_RC_OK)
 		req->tag = req->recv.tag;
+	else if (req->recv.flags & FI_CLAIM)
+		((struct fi_context *)req->context)->internal[0] = ux_send;
 
 	/* Avoid truncation processing, peek does not receive data */
 	req->data_len = req->recv.rlen;
@@ -2909,7 +2911,7 @@ static int cxip_ux_peek_cb(struct cxip_req *req, const union c_event *event)
 			RXC_DBG(rxc, "Peek UX search req: %p no match\n", req);
 		}
 
-		recv_req_peek_complete(req);
+		recv_req_peek_complete(req, NULL);
 		break;
 	default:
 		RXC_FATAL(rxc, "Unexpected event type: %d\n",
@@ -3063,10 +3065,13 @@ static int cxip_recv_sw_matched(struct cxip_req *req,
 }
 
 static bool cxip_match_recv_sw(struct cxip_rxc *rxc, struct cxip_req *req,
-			       struct cxip_ux_send *ux)
+			       struct cxip_ux_send *ux, bool claimed)
 {
 	union cxip_match_bits ux_mb;
 	uint32_t ux_init;
+
+	if (claimed != ux->claimed)
+		return false;
 
 	ux_mb.raw = ux->put_ev.tgt_long.match_bits;
 	ux_init = ux->put_ev.tgt_long.initiator.initiator.process;
@@ -3085,11 +3090,11 @@ static bool cxip_match_recv_sw(struct cxip_rxc *rxc, struct cxip_req *req,
 }
 
 static int cxip_recv_sw_matcher(struct cxip_rxc *rxc, struct cxip_req *req,
-				struct cxip_ux_send *ux)
+				struct cxip_ux_send *ux, bool claimed)
 {
 	int ret;
 
-	if (!cxip_match_recv_sw(rxc, req, ux))
+	if (!cxip_match_recv_sw(rxc, req, ux, claimed))
 		return -FI_ENOMSG;
 
 	ret = cxip_recv_sw_matched(req, ux);
@@ -3135,7 +3140,8 @@ int cxip_recv_ux_sw_matcher(struct cxip_ux_send *ux)
 
 	dlist_foreach_container_safe(&rxc->sw_recv_queue, struct cxip_req, req,
 				     recv.rxc_entry, tmp) {
-		ret = cxip_recv_sw_matcher(rxc, req, ux);
+		/* Only matches against unclaimed UX messages */
+		ret = cxip_recv_sw_matcher(rxc, req, ux, false);
 
 		/* Unexpected message found match but unable to progress */
 		if (ret == -FI_EAGAIN)
@@ -3169,7 +3175,8 @@ int cxip_recv_req_sw_matcher(struct cxip_req *req)
 
 	dlist_foreach_container_safe(&rxc->sw_ux_list, struct cxip_ux_send,
 				     ux_send, rxc_entry, tmp) {
-		ret = cxip_recv_sw_matcher(rxc, req, ux_send);
+		/* Only match against unclaimed UX messages */
+		ret = cxip_recv_sw_matcher(rxc, req, ux_send, false);
 		switch (ret) {
 		/* On successful multi-recv or no match, keep matching. */
 		case -FI_EINPROGRESS:
@@ -3230,9 +3237,12 @@ static int cxip_recv_req_peek(struct cxip_req *req, bool check_rxc_state)
 	/* Attempt to match the onloaded UX list first */
 	dlist_foreach_container_safe(&rxc->sw_ux_list, struct cxip_ux_send,
 				     ux_send, rxc_entry, tmp) {
-		if (cxip_match_recv_sw(rxc, req, ux_send)) {
+		if (cxip_match_recv_sw(rxc, req, ux_send, false)) {
+			if (req->recv.flags & FI_CLAIM)
+				ux_send->claimed = true;
+
 			recv_req_tgt_event(req, &ux_send->put_ev);
-			recv_req_peek_complete(req);
+			recv_req_peek_complete(req, ux_send);
 			return FI_SUCCESS;
 		}
 	}
@@ -3241,7 +3251,7 @@ static int cxip_recv_req_peek(struct cxip_req *req, bool check_rxc_state)
 		ret = cxip_ux_peek(req);
 	} else {
 		req->recv.rc = C_RC_NO_MATCH;
-		recv_req_peek_complete(req);
+		recv_req_peek_complete(req, NULL);
 		ret = FI_SUCCESS;
 	}
 
@@ -3252,20 +3262,14 @@ static int cxip_recv_req_peek(struct cxip_req *req, bool check_rxc_state)
  * cxip_recv_req_queue() - Queue Receive request on RXC.
  *
  * Before appending a new Receive request to a HW list, attempt to match the
- * Receive to any onloaded UX Sends. A receive can only be appended to hardware
- * in RXC_ENABLED state unless check_rxc_state is false.
+ * Receive to any onloaded UX Sends.
  *
- * Caller must hold the RXC lock.
+ * Caller must hold the RXC lock and ensure correct RXC state if required.
  */
-static int cxip_recv_req_queue(struct cxip_req *req, bool check_rxc_state,
-			       bool restart_seq)
+static int cxip_recv_req_queue(struct cxip_req *req, bool restart_seq)
 {
 	struct cxip_rxc *rxc = req->recv.rxc;
 	int ret;
-
-	if (check_rxc_state && rxc->state != RXC_ENABLED &&
-	    rxc->state != RXC_ENABLED_SOFTWARE)
-		return -FI_EAGAIN;
 
 	/* Try to match against onloaded Sends first. */
 	ret = cxip_recv_req_sw_matcher(req);
@@ -3376,6 +3380,7 @@ ssize_t cxip_recv_common(struct cxip_rxc *rxc, void *buf, size_t len,
 	int ret;
 	struct cxip_req *req;
 	struct cxip_addr caddr;
+	struct cxip_ux_send *ux_msg;
 	uint32_t match_id;
 
 	if (len && !buf)
@@ -3455,9 +3460,16 @@ ssize_t cxip_recv_common(struct cxip_rxc *rxc, void *buf, size_t len,
 	req->recv.tagged = tagged;
 	req->recv.multi_recv = (flags & FI_MULTI_RECV ? true : false);
 
-	if (!(req->recv.flags & FI_PEEK)) {
-		ofi_spin_lock(&rxc->lock);
-		ret = cxip_recv_req_queue(req, true, false);
+	ofi_spin_lock(&rxc->lock);
+	if (rxc->state != RXC_ENABLED && rxc->state != RXC_ENABLED_SOFTWARE) {
+		ofi_spin_unlock(&rxc->lock);
+
+		ret = -FI_EAGAIN;
+		goto err_free_request;
+	}
+
+	if (!(req->recv.flags & (FI_PEEK | FI_CLAIM))) {
+		ret = cxip_recv_req_queue(req, false);
 		ofi_spin_unlock(&rxc->lock);
 
 		/* Match made in software? */
@@ -3477,13 +3489,49 @@ ssize_t cxip_recv_common(struct cxip_rxc *rxc, void *buf, size_t len,
 		return FI_SUCCESS;
 	}
 
-	/* FI_PEEK */
-	ofi_spin_lock(&rxc->lock);
-	ret = cxip_recv_req_peek(req, true);
+	/* TODO: Remove this check once hardware EP FI_CLAIM is implemented */
+	if (req->recv.flags & FI_CLAIM &&
+	    cxip_env.rx_match_mode != CXIP_PTLTE_SOFTWARE_MODE) {
+		ofi_spin_unlock(&rxc->lock);
+		RXC_WARN(rxc, "Initial FI_CLAIM support requires SW EP\n");
+
+		ret = -FI_EINVAL;
+		goto err_free_request;
+	}
+
+	/* FI_PEEK with/without FI_CLAIM */
+	if (req->recv.flags & FI_PEEK) {
+		if (req->recv.flags & FI_CLAIM && !req->context) {
+			ofi_spin_unlock(&rxc->lock);
+
+			RXC_WARN(rxc, "FI_CLAIM requires fi_context\n");
+			ret = -FI_EINVAL;
+			goto err_free_request;
+		}
+		ret = cxip_recv_req_peek(req, true);
+		ofi_spin_unlock(&rxc->lock);
+
+		if (ret == FI_SUCCESS)
+			return ret;
+
+		goto err_free_request;
+	}
+
+	/* FI_CLAIM without FI_PEEK */
+	ux_msg = ((struct fi_context *)req->context)->internal[0];
+	if (!ux_msg->claimed) {
+		ofi_spin_unlock(&rxc->lock);
+
+		RXC_WARN(rxc, "Bad fi_context specified with FI_CLAIM\n");
+		ret = -FI_EINVAL;
+		goto err_free_request;
+	}
+
+	ret = cxip_recv_sw_matcher(rxc, req, ux_msg, true);
 	ofi_spin_unlock(&rxc->lock);
 
-	if (ret == FI_SUCCESS)
-		return ret;
+	if (ret == FI_SUCCESS || ret == -FI_EINPROGRESS)
+		return FI_SUCCESS;
 
 err_free_request:
 	cxip_recv_req_free(req);
@@ -4770,7 +4818,7 @@ static ssize_t cxip_trecvmsg(struct fid_ep *ep, const struct fi_msg_tagged *msg,
 	if (!rxc->selective_completion)
 		flags |= FI_COMPLETION;
 
-	if (!(flags & (FI_PEEK | FI_CLAIM))) {
+	if (!(flags & FI_PEEK)) {
 		if (!msg->msg_iov || msg->iov_count != 1)
 			return -FI_EINVAL;
 
@@ -4779,12 +4827,6 @@ static ssize_t cxip_trecvmsg(struct fid_ep *ep, const struct fi_msg_tagged *msg,
 					msg->desc[0] : NULL, msg->addr,
 					msg->tag, msg->ignore, msg->context,
 					flags, true, NULL);
-	}
-
-	/* Let the consumer know that FI_CLAIM flag is not yet supported */
-	if (flags & FI_CLAIM) {
-		RXC_WARN(rxc, "FI_CLAIM not supported\n");
-		return -FI_ENOSYS;
 	}
 
 	/* FI_PEEK does not post a recv or return message payload */
