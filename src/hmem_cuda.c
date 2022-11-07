@@ -313,11 +313,12 @@ cudaError_t ofi_cudaFree(void *ptr)
 	return cuda_ops.cudaFree(ptr);
 }
 
-int cuda_copy_to_dev(uint64_t device, void *dst, const void *src, size_t size)
+int cuda_copy_to_dev(uint64_t device, uint64_t handle, void *dev,
+		     const void *host, size_t size)
 {
 	cudaError_t cuda_ret;
 
-	cuda_ret = ofi_cudaMemcpy(dst, src, size, cudaMemcpyDefault);
+	cuda_ret = ofi_cudaMemcpy(dev, host, size, cudaMemcpyDefault);
 	if (cuda_ret == cudaSuccess)
 		return 0;
 
@@ -329,11 +330,12 @@ int cuda_copy_to_dev(uint64_t device, void *dst, const void *src, size_t size)
 	return -FI_EIO;
 }
 
-int cuda_copy_from_dev(uint64_t device, void *dst, const void *src, size_t size)
+int cuda_copy_from_dev(uint64_t device, uint64_t handle, void *host,
+		       const void *dev, size_t size)
 {
 	cudaError_t cuda_ret;
 
-	cuda_ret = ofi_cudaMemcpy(dst, src, size, cudaMemcpyDefault);
+	cuda_ret = ofi_cudaMemcpy(host, dev, size, cudaMemcpyDefault);
 	if (cuda_ret == cudaSuccess)
 		return 0;
 
@@ -345,10 +347,13 @@ int cuda_copy_from_dev(uint64_t device, void *dst, const void *src, size_t size)
 	return -FI_EIO;
 }
 
-int cuda_dev_register(const void *addr, size_t size, uint64_t *handle)
+int cuda_dev_register(const void *addr, size_t size, uint64_t *handle,
+		      void **host_addr)
 {
-	if (cuda_is_gdrcopy_enabled())
-		return cuda_gdrcopy_dev_register(addr, size, handle);
+	if (hmem_cuda_use_gdrcopy)
+		return cuda_gdrcopy_dev_register(addr, size, handle,
+						 host_addr);
+
 	return -FI_ENOSYS;
 }
 
@@ -958,12 +963,14 @@ int cuda_get_base_addr(const void *ptr, void **base, size_t *size)
 
 #else
 
-int cuda_copy_to_dev(uint64_t device, void *dev, const void *host, size_t size)
+int cuda_copy_to_dev(uint64_t device, uint64_t handle, void *dev,
+		     const void *host, size_t size)
 {
 	return -FI_ENOSYS;
 }
 
-int cuda_copy_from_dev(uint64_t device, void *host, const void *dev, size_t size)
+int cuda_copy_from_dev(uint64_t device, uint64_t handle, void *host,
+		       const void *dev, size_t size)
 {
 	return -FI_ENOSYS;
 }
@@ -993,7 +1000,8 @@ int cuda_host_unregister(void *ptr)
 	return -FI_ENOSYS;
 }
 
-int cuda_dev_register(const void *addr, size_t size, uint64_t *handle)
+int cuda_dev_register(const void *addr, size_t size, uint64_t *handle,
+		      void **host_addr)
 {
 	return -FI_ENOSYS;
 }

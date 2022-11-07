@@ -62,6 +62,9 @@ struct efa_mr {
 	struct efa_mr_peer	peer;
 	bool			inserted_to_mr_map;
 	bool 			needs_sync;
+	/* HMEM device reg fields */
+	uint64_t		handle;
+	void			*host_addr;
 };
 
 extern int efa_mr_cache_enable;
