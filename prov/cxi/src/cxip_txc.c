@@ -17,6 +17,200 @@
 #define CXIP_DBG(...) _CXIP_DBG(FI_LOG_EP_CTRL, __VA_ARGS__)
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_EP_CTRL, __VA_ARGS__)
 
+struct cxip_md *cxip_txc_ibuf_md(void *ibuf)
+{
+	return ofi_buf_hdr(ibuf)->region->context;
+}
+
+/*
+ * cxip_txc_ibuf_alloc() - Allocate an inject buffer.
+ */
+void *cxip_txc_ibuf_alloc(struct cxip_txc *txc)
+{
+	void *ibuf;
+
+	ofi_spin_lock(&txc->ibuf_lock);
+	ibuf = (struct cxip_req *)ofi_buf_alloc(txc->ibuf_pool);
+	ofi_spin_unlock(&txc->ibuf_lock);
+
+	if (ibuf)
+		CXIP_DBG("Allocated inject buffer: %p\n", ibuf);
+	else
+		CXIP_WARN("Failed to allocate inject buffer\n");
+
+	return ibuf;
+}
+
+/*
+ * cxip_txc_ibuf_free() - Free an inject buffer.
+ */
+void cxip_txc_ibuf_free(struct cxip_txc *txc, void *ibuf)
+{
+	ofi_spin_lock(&txc->ibuf_lock);
+	ofi_buf_free(ibuf);
+	ofi_spin_unlock(&txc->ibuf_lock);
+
+	CXIP_DBG("Freed inject buffer: %p\n", ibuf);
+}
+
+int cxip_ibuf_chunk_init(struct ofi_bufpool_region *region)
+{
+	struct cxip_txc *txc = region->pool->attr.context;
+	struct cxip_md *md;
+	int ret;
+
+	ret = cxip_map(txc->domain, region->mem_region,
+		       region->pool->region_size, OFI_MR_NOCACHE, &md);
+	if (ret != FI_SUCCESS) {
+		CXIP_WARN("Failed to map inject buffer chunk\n");
+		return ret;
+	}
+
+	region->context = md;
+
+	return FI_SUCCESS;
+}
+
+void cxip_ibuf_chunk_fini(struct ofi_bufpool_region *region)
+{
+	cxip_unmap(region->context);
+}
+
+int cxip_txc_ibuf_create(struct cxip_txc *txc)
+{
+	struct ofi_bufpool_attr bp_attrs = {};
+	int ret;
+
+	bp_attrs.size = CXIP_INJECT_SIZE;
+	bp_attrs.alignment = 8;
+	bp_attrs.max_cnt = UINT16_MAX;
+	bp_attrs.chunk_cnt = 64;
+	bp_attrs.alloc_fn = cxip_ibuf_chunk_init;
+	bp_attrs.free_fn = cxip_ibuf_chunk_fini;
+	bp_attrs.context = txc;
+
+	ret = ofi_bufpool_create_attr(&bp_attrs, &txc->ibuf_pool);
+	if (ret)
+		ret = -FI_ENOMEM;
+
+	return ret;
+}
+
+/*
+ * cxip_tx_id_alloc() - Allocate a TX ID.
+ *
+ * TX IDs are assigned to Put operations that need to be tracked by the target.
+ * One example of this is a Send with completion that guarantees match
+ * completion at the target. This only applies to eager, unexpected Sends.
+ */
+int cxip_tx_id_alloc(struct cxip_txc *txc, void *ctx)
+{
+	int id;
+
+	ofi_spin_lock(&txc->tx_id_lock);
+
+	id = ofi_idx_insert(&txc->tx_ids, ctx);
+
+	if (id < 0 || id >= CXIP_TX_IDS) {
+		CXIP_DBG("Failed to allocate TX ID: %d\n", id);
+		if (id > 0)
+			ofi_idx_remove(&txc->tx_ids, id);
+		ofi_spin_unlock(&txc->tx_id_lock);
+		return -FI_ENOSPC;
+	}
+
+	ofi_spin_unlock(&txc->tx_id_lock);
+
+	CXIP_DBG("Allocated ID: %d\n", id);
+
+	return id;
+}
+
+/*
+ * cxip_tx_id_free() - Free a TX ID.
+ */
+int cxip_tx_id_free(struct cxip_txc *txc, int id)
+{
+	if (id < 0 || id >= CXIP_TX_IDS)
+		return -FI_EINVAL;
+
+	ofi_spin_lock(&txc->tx_id_lock);
+	ofi_idx_remove(&txc->tx_ids, id);
+	ofi_spin_unlock(&txc->tx_id_lock);
+
+	CXIP_DBG("Freed ID: %d\n", id);
+
+	return FI_SUCCESS;
+}
+
+void *cxip_tx_id_lookup(struct cxip_txc *txc, int id)
+{
+	void *entry;
+
+	ofi_spin_lock(&txc->tx_id_lock);
+	entry = ofi_idx_lookup(&txc->tx_ids, id);
+	ofi_spin_unlock(&txc->tx_id_lock);
+
+	return entry;
+}
+
+/*
+ * cxip_rdzv_id_alloc() - Allocate a rendezvous ID.
+ *
+ * A Rendezvous ID are assigned to rendezvous Send operation. The ID is used by
+ * the target to differentiate rendezvous Send operations initiated by a source.
+ */
+int cxip_rdzv_id_alloc(struct cxip_txc *txc, void *ctx)
+{
+	int id;
+
+	ofi_spin_lock(&txc->rdzv_id_lock);
+
+	id = ofi_idx_insert(&txc->rdzv_ids, ctx);
+
+	if (id < 0 || id >= CXIP_RDZV_IDS) {
+		CXIP_DBG("Failed to allocate rdzv ID: %d\n", id);
+		if (id > 0)
+			ofi_idx_remove(&txc->rdzv_ids, id);
+		ofi_spin_unlock(&txc->rdzv_id_lock);
+		return -FI_ENOSPC;
+	}
+
+	ofi_spin_unlock(&txc->rdzv_id_lock);
+
+	CXIP_DBG("Allocated ID: %d\n", id);
+
+	return id;
+}
+
+/*
+ * cxip_rdzv_id_free() - Free a rendezvous ID.
+ */
+int cxip_rdzv_id_free(struct cxip_txc *txc, int id)
+{
+	if (id < 0 || id >= CXIP_RDZV_IDS)
+		return -FI_EINVAL;
+
+	ofi_spin_lock(&txc->rdzv_id_lock);
+	ofi_idx_remove(&txc->rdzv_ids, id);
+	ofi_spin_unlock(&txc->rdzv_id_lock);
+
+	CXIP_DBG("Freed ID: %d\n", id);
+
+	return FI_SUCCESS;
+}
+
+void *cxip_rdzv_id_lookup(struct cxip_txc *txc, int id)
+{
+	void *entry;
+
+	ofi_spin_lock(&txc->rdzv_id_lock);
+	entry = ofi_idx_lookup(&txc->rdzv_ids, id);
+	ofi_spin_unlock(&txc->rdzv_id_lock);
+
+	return entry;
+}
+
 /*
  * txc_msg_init() - Initialize an RX context for messaging.
  *
@@ -90,10 +284,22 @@ int cxip_txc_enable(struct cxip_txc *txc)
 		goto unlock;
 	}
 
+	ret = cxip_txc_ibuf_create(txc);
+	if (ret) {
+		CXIP_WARN("Failed to create inject bufpool %d\n", ret);
+		goto unlock;
+	}
+
+	memset(&txc->rdzv_ids, 0, sizeof(txc->rdzv_ids));
+	ofi_spin_init(&txc->rdzv_id_lock);
+
+	memset(&txc->tx_ids, 0, sizeof(txc->tx_ids));
+	ofi_spin_init(&txc->tx_id_lock);
+
 	ret = cxip_cq_enable(txc->send_cq, txc->ep_obj);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("cxip_cq_enable returned: %d\n", ret);
-		goto unlock;
+		goto destroy_ibuf;
 	}
 
 	ret = cxip_ep_cmdq(txc->ep_obj, txc->tx_id, true, txc->tclass,
@@ -101,7 +307,7 @@ int cxip_txc_enable(struct cxip_txc *txc)
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Unable to allocate TX CMDQ, ret: %d\n", ret);
 		ret = -FI_EDOMAIN;
-		goto unlock;
+		goto destroy_ibuf;
 	}
 
 	if (ofi_send_allowed(txc->attr.caps)) {
@@ -121,6 +327,12 @@ int cxip_txc_enable(struct cxip_txc *txc)
 
 put_tx_cmdq:
 	cxip_ep_cmdq_put(txc->ep_obj, txc->tx_id, true);
+destroy_ibuf:
+	ofi_idx_reset(&txc->tx_ids);
+	ofi_spin_destroy(&txc->tx_id_lock);
+	ofi_idx_reset(&txc->rdzv_ids);
+	ofi_spin_destroy(&txc->rdzv_id_lock);
+	ofi_bufpool_destroy(txc->ibuf_pool);
 unlock:
 	ofi_spin_unlock(&txc->lock);
 
@@ -164,6 +376,12 @@ static void txc_cleanup(struct cxip_txc *txc)
 		dlist_remove(&fc_peer->txc_entry);
 		free(fc_peer);
 	}
+
+	ofi_idx_reset(&txc->tx_ids);
+	ofi_spin_destroy(&txc->tx_id_lock);
+	ofi_idx_reset(&txc->rdzv_ids);
+	ofi_spin_destroy(&txc->rdzv_id_lock);
+	ofi_bufpool_destroy(txc->ibuf_pool);
 }
 
 /*
@@ -227,6 +445,8 @@ struct cxip_txc *cxip_txc_alloc(const struct fi_tx_attr *attr, void *context)
 	txc->rdzv_eager_size = cxip_env.rdzv_eager_size;
 	txc->hmem = !!(attr->caps & FI_HMEM);
 
+	/* TODO: The below should be covered by txc->lock */
+	ofi_spin_init(&txc->ibuf_lock);
 	return txc;
 }
 
@@ -237,6 +457,7 @@ void cxip_txc_free(struct cxip_txc *txc)
 {
 	txc_disable(txc);
 	ofi_spin_destroy(&txc->lock);
+	ofi_spin_destroy(&txc->ibuf_lock);
 	free(txc);
 }
 
