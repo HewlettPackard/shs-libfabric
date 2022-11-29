@@ -826,6 +826,16 @@ int ofi_check_ep_attr(const struct util_prov *util_prov, uint32_t api_version,
 		}
 	}
 
+	if (user_attr->auth_key && !user_attr->auth_key_size) {
+		FI_INFO(prov, FI_LOG_CORE, "Missing authentication key size\n");
+		return -FI_ENODATA;
+	}
+
+	if (!user_attr->auth_key && user_attr->auth_key_size) {
+		FI_INFO(prov, FI_LOG_CORE, "NULL authentication key\n");
+		return -FI_ENODATA;
+	}
+
 	if ((user_info->caps & FI_TAGGED) && user_attr->mem_tag_format &&
 	    ofi_max_tag(user_attr->mem_tag_format) >
 		    ofi_max_tag(prov_attr->mem_tag_format)) {
