@@ -977,7 +977,47 @@ static void cxip_alter_info(struct fi_info *info, const struct fi_info *hints,
 	}
 }
 
-static int cxip_alter_info_auth_key(struct fi_info **info)
+static int cxip_alter_auth_key_align_domain_ep(struct fi_info **info)
+{
+	struct fi_info *fi_ptr;
+
+	/* CXI provider requires the endpoint to have the same service ID as the
+	 * domain. Account for edge case where users only set endpoint auth_key
+	 * and leave domain auth_key as NULL by duplicating the endpoint
+	 * auth_key to the domain.
+	 */
+	for (fi_ptr = *info; fi_ptr; fi_ptr = fi_ptr->next) {
+		if (!fi_ptr->domain_attr->auth_key &&
+		    fi_ptr->ep_attr->auth_key) {
+			fi_ptr->domain_attr->auth_key =
+				mem_dup(fi_ptr->ep_attr->auth_key,
+					fi_ptr->ep_attr->auth_key_size);
+			if (!fi_ptr->domain_attr->auth_key)
+				return -FI_ENOMEM;
+
+			fi_ptr->domain_attr->auth_key_size =
+				fi_ptr->ep_attr->auth_key_size;
+		}
+	}
+
+	return FI_SUCCESS;
+}
+
+static void cxip_alter_auth_key_scrub_auth_key_size(struct fi_info **info)
+{
+	struct fi_info *fi_ptr;
+
+	/* Zero the auth_key_size for any NULL auth_key. */
+	for (fi_ptr = *info; fi_ptr; fi_ptr = fi_ptr->next) {
+		if (!fi_ptr->domain_attr->auth_key)
+			fi_ptr->domain_attr->auth_key_size = 0;
+
+		if (!fi_ptr->ep_attr->auth_key)
+			fi_ptr->ep_attr->auth_key_size = 0;
+	}
+}
+
+static int cxip_alter_auth_key_validate(struct fi_info **info)
 {
 	struct fi_info *fi_ptr;
 	struct fi_info *fi_ptr_tmp;
@@ -1012,35 +1052,179 @@ static int cxip_alter_info_auth_key(struct fi_info **info)
 		fi_ptr = fi_ptr->next;
 	}
 
-	/* CXI provider requires the endpoint to have the same service ID as the
-	 * domain. Account for edge case where users only set endpoint auth_key
-	 * and leave domain auth_key as NULL by duplicating the endpoint
-	 * auth_key to the domain.
-	 */
-	for (fi_ptr = *info; fi_ptr; fi_ptr = fi_ptr->next) {
-		if (!fi_ptr->domain_attr->auth_key &&
-		    fi_ptr->ep_attr->auth_key) {
-			fi_ptr->domain_attr->auth_key =
-				mem_dup(fi_ptr->ep_attr->auth_key,
-					fi_ptr->ep_attr->auth_key_size);
-			if (!fi_ptr->domain_attr->auth_key)
-				return -FI_ENOMEM;
+	return FI_SUCCESS;
+}
 
-			fi_ptr->domain_attr->auth_key_size =
-				fi_ptr->ep_attr->auth_key_size;
-		}
+static int cxip_alter_auth_key_ss_plugin_get_vni(void)
+{
+	char *vni_str;
+	char *vni_str_dup;
+	char *token;
+	int vni = -FI_EINVAL;
+
+	vni_str = getenv("SLINGSHOT_VNIS");
+	if (!vni_str) {
+		CXIP_INFO("SLINGSHOT_VNIS not found\n");
+		return -FI_ENOSYS;
 	}
 
-	/* Zero the auth_key_size for any NULL auth_key. */
-	for (fi_ptr = *info; fi_ptr; fi_ptr = fi_ptr->next) {
-		if (!fi_ptr->domain_attr->auth_key)
-			fi_ptr->domain_attr->auth_key_size = 0;
+	vni_str_dup = strdup(vni_str);
+	if (!vni_str_dup)
+		return -FI_ENOMEM;
 
-		if (!fi_ptr->ep_attr->auth_key)
-			fi_ptr->ep_attr->auth_key_size = 0;
+	/* Index/token zero is the per job-step VNI. Only use this value. Index
+	 * one is the inter-job-step VNI. Ignore this one.
+	 */
+	token = strtok(vni_str_dup, ",");
+	if (token)
+		vni = (uint16_t)atoi(token);
+	else
+		CXIP_WARN("VNI not found in SLINGSHOT_VNIS: %s\n", vni_str);
+
+	free(vni_str_dup);
+
+	return vni;
+}
+
+static int cxip_alter_auth_key_ss_plugin_get_svc_id(struct fi_info *info)
+{
+	char *svc_id_str;
+	char *dev_str;
+	char *svc_id_str_dup;
+	char *dev_str_dup;
+	int device_index;
+	char *token;
+	bool found;
+	int svc_id;
+
+	if (!info->domain_attr->name) {
+		CXIP_WARN("Domain attr name is NULL\n");
+		return -FI_EINVAL;
+	}
+
+	svc_id_str = getenv("SLINGSHOT_SVC_IDS");
+	if (!svc_id_str) {
+		CXIP_INFO("SLINGSHOT_SVC_IDS not found\n");
+		return -FI_ENOSYS;
+	}
+
+	dev_str = getenv("SLINGSHOT_DEVICES");
+	if (!dev_str) {
+		CXIP_INFO("SLINGSHOT_DEVICES not found\n");
+		return -FI_ENOSYS;
+	}
+
+	dev_str_dup = strdup(dev_str);
+	if (!dev_str_dup)
+		return -FI_ENOMEM;
+
+	found = false;
+	device_index = 0;
+	token = strtok(dev_str_dup, ",");
+	while (token != NULL) {
+		if (strcmp(token, info->domain_attr->name) == 0) {
+			found = true;
+			break;
+		}
+
+		device_index++;
+		token = strtok(NULL, ",");
+	}
+
+	free(dev_str_dup);
+
+	if (!found) {
+		CXIP_WARN("Failed to find %s in SLINGSHOT_DEVICES: %s\n",
+			  info->domain_attr->name, dev_str);
+		return -FI_ENOSYS;
+	}
+
+	svc_id_str_dup = strdup(svc_id_str);
+	if (!svc_id_str_dup)
+		return -FI_ENOMEM;
+
+	found = false;
+	token = strtok(svc_id_str_dup, ",");
+	while (token != NULL) {
+		if (device_index == 0) {
+			svc_id = atoi(token);
+			found = true;
+			break;
+		}
+
+		device_index--;
+		token = strtok(NULL, ",");
+	}
+
+	free(svc_id_str_dup);
+
+	if (!found) {
+		CXIP_WARN("Failed to find service ID in SLINGSHOT_SVC_IDS: %s\n",
+			  svc_id_str);
+		return -FI_EINVAL;
+	}
+
+	return svc_id;
+}
+
+static int cxip_alter_auth_key_ss_plugin(struct fi_info **info)
+{
+	int ret;
+	struct cxi_auth_key auth_key;
+	struct fi_info *fi_ptr;
+
+	/* For any domain with a NULL auth_key, attempt to generate an auth_key
+	 * using the Slingshot plugin.
+	 */
+	for (fi_ptr = *info; fi_ptr; fi_ptr = fi_ptr->next) {
+		if (fi_ptr->domain_attr->auth_key)
+			continue;
+
+		ret = cxip_alter_auth_key_ss_plugin_get_vni();
+		if (ret == -FI_ENOSYS)
+			return FI_SUCCESS;
+		else if (ret < 0)
+			return ret;
+
+		auth_key.vni = ret;
+
+		ret = cxip_alter_auth_key_ss_plugin_get_svc_id(fi_ptr);
+		if (ret == -FI_ENOSYS)
+			continue;
+		else if (ret < 0)
+			return ret;
+
+		auth_key.svc_id = ret;
+
+		fi_ptr->domain_attr->auth_key =
+			mem_dup(&auth_key, sizeof(auth_key));
+		if (!fi_ptr->domain_attr->auth_key)
+			return -FI_ENOMEM;
+
+		fi_ptr->domain_attr->auth_key_size = sizeof(auth_key);
+
+		CXIP_INFO("Assigned auth key (%u:%u) to %s\n", auth_key.svc_id,
+			  auth_key.vni, fi_ptr->domain_attr->name);
 	}
 
 	return FI_SUCCESS;
+}
+
+static int cxip_alter_auth_key(struct fi_info **info)
+{
+	int ret;
+
+	ret = cxip_alter_auth_key_align_domain_ep(info);
+	if (ret)
+		return ret;
+
+	cxip_alter_auth_key_scrub_auth_key_size(info);
+
+	ret = cxip_alter_auth_key_ss_plugin(info);
+	if (ret)
+		return ret;
+
+	return cxip_alter_auth_key_validate(info);
 }
 
 static int cxip_validate_iface_auth_key(struct cxip_if *iface,
@@ -1371,7 +1555,7 @@ cxip_getinfo(uint32_t version, const char *node, const char *service,
 		}
 	}
 
-	ret = cxip_alter_info_auth_key(info);
+	ret = cxip_alter_auth_key(info);
 	if (ret)
 		goto freeinfo;
 
