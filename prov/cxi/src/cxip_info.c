@@ -747,9 +747,8 @@ static void cxip_env_init(void)
 	}
 
 	fi_param_define(&cxip_prov, "default_vni", FI_PARAM_SIZE_T,
-			"Default VNI value.");
-	fi_param_get_size_t(&cxip_prov, "default_vni",
-			    &cxip_env.default_vni);
+			"Default VNI value used only for service IDs where the VNI is not restricted.");
+	fi_param_get_size_t(&cxip_prov, "default_vni", &cxip_env.default_vni);
 
 	fi_param_define(&cxip_prov, "eq_ack_batch_size", FI_PARAM_SIZE_T,
 			"Number of EQ events to process before acknowledgement");
@@ -1055,7 +1054,7 @@ static int cxip_alter_auth_key_validate(struct fi_info **info)
 	return FI_SUCCESS;
 }
 
-static int cxip_alter_auth_key_ss_plugin_get_vni(void)
+static int cxip_gen_auth_key_ss_env_get_vni(void)
 {
 	char *vni_str;
 	char *vni_str_dup;
@@ -1086,7 +1085,7 @@ static int cxip_alter_auth_key_ss_plugin_get_vni(void)
 	return vni;
 }
 
-static int cxip_alter_auth_key_ss_plugin_get_svc_id(struct fi_info *info)
+static int cxip_gen_auth_key_ss_env_get_svc_id(struct fi_info *info)
 {
 	char *svc_id_str;
 	char *dev_str;
@@ -1167,34 +1166,197 @@ static int cxip_alter_auth_key_ss_plugin_get_svc_id(struct fi_info *info)
 	return svc_id;
 }
 
-static int cxip_alter_auth_key_ss_plugin(struct fi_info **info)
+static int cxip_gen_auth_key_ss_env(struct fi_info *info,
+				    struct cxi_auth_key *key)
+{
+	int ret;
+	uint16_t vni;
+
+	ret = cxip_gen_auth_key_ss_env_get_vni();
+	if (ret < 0)
+		return ret;
+
+	vni = ret;
+
+	ret = cxip_gen_auth_key_ss_env_get_svc_id(info);
+	if (ret < 0)
+		return ret;
+
+	key->vni = vni;
+	key->svc_id = ret;
+
+	CXIP_INFO("Generated auth key (%u:%u) for %s\n", ret, vni,
+		  info->domain_attr->name);
+
+	return FI_SUCCESS;
+}
+
+static int cxip_gen_auth_key_best_svc_id(struct fi_info *info,
+					 struct cxi_auth_key *key)
+{
+	int ret;
+	struct cxi_auth_key auth_key;
+	struct cxip_addr *src_addr;
+	struct cxip_if *iface;
+	struct cxil_svc_list *svc_list;
+	uid_t uid;
+	gid_t gid;
+	int i;
+	int j;
+	struct cxi_svc_desc *desc;
+	int found_uid;
+	int found_gid;
+	int found_unrestricted;
+
+	uid = geteuid();
+	gid = getegid();
+
+	src_addr = (struct cxip_addr *)info->src_addr;
+	if (!src_addr) {
+		CXIP_WARN("NULL src_addr in fi_info\n");
+		return -FI_EINVAL;
+	}
+
+	ret = cxip_get_if(src_addr->nic, &iface);
+	if (ret) {
+		CXIP_WARN("cxip_get_if with NIC %#x failed: %d:%s\n",
+			  src_addr->nic, ret, fi_strerror(-ret));
+		return ret;
+	}
+
+	ret = cxil_get_svc_list(iface->dev, &svc_list);
+	if (ret) {
+		CXIP_WARN("cxil_get_svc_list failed: %d:%s\n", ret,
+			  strerror(-ret));
+		cxip_put_if(iface);
+		return ret;
+	}
+
+	/* Find the service indexes which can be used by this process. These are
+	 * services which are unrestricted, have a matching UID, or have a
+	 * matching GID. If there are multiple service IDs which could match
+	 * unrestricted, UID, and GID, only the first one found is selected.
+	 */
+	found_uid = -1;
+	found_gid = -1;
+	found_unrestricted = -1;
+
+	for (i = 0; i < svc_list->count; i++) {
+		desc = svc_list->descs + i;
+
+		if (!desc->enable || desc->is_system_svc)
+			continue;
+
+		if (!desc->restricted_members) {
+			if (found_unrestricted == -1)
+				found_unrestricted = i;
+			continue;
+		}
+
+		for (j = 0; j < CXI_SVC_MAX_MEMBERS; j++) {
+			if (desc->members[j].type == CXI_SVC_MEMBER_UID &&
+			    desc->members[j].svc_member.uid == uid &&
+			    found_uid == -1)
+				found_uid = i;
+			else if (desc->members[j].type == CXI_SVC_MEMBER_GID &&
+				 desc->members[j].svc_member.gid == gid &&
+				 found_gid == -1)
+				found_gid = i;
+		}
+	}
+
+	/* Prioritized list for matching service ID. */
+	if (found_uid != -1)
+		i = found_uid;
+	else if (found_gid != -1) {
+		i = found_gid;
+	} else if (found_unrestricted != -1) {
+		CXIP_WARN("Security Issue: Using unrestricted service ID for %s. "
+			  "Please provide a service ID via auth_key fields.\n",
+			  info->domain_attr->name);
+		i = found_unrestricted;
+	} else {
+		cxil_free_svc_list(svc_list);
+		cxip_put_if(iface);
+		return -FI_ENOSYS;
+	}
+
+	/* Generate auth_key using matched service ID. */
+	desc = svc_list->descs + i;
+
+	if (desc->restricted_vnis) {
+		if (desc->num_vld_vnis == 0) {
+			CXIP_WARN("No valid VNIs for %s service ID %u\n",
+				  info->domain_attr->name, i);
+
+			cxil_free_svc_list(svc_list);
+			cxip_put_if(iface);
+
+			return -FI_EINVAL;
+		}
+
+		auth_key.vni = (uint16_t)desc->vnis[0];
+	} else {
+		CXIP_WARN("Security Issue: Using service ID with unrestricted VNI access %s. "
+			  "Please provide a service ID via auth_key fields.\n",
+			  info->domain_attr->name);
+		auth_key.vni = (uint16_t)cxip_env.default_vni;
+	}
+
+	auth_key.svc_id = desc->svc_id;
+
+	cxil_free_svc_list(svc_list);
+	cxip_put_if(iface);
+
+	*key = auth_key;
+
+	CXIP_INFO("Generated auth key (%u:%u) for %s\n", auth_key.svc_id,
+		  auth_key.vni, info->domain_attr->name);
+
+	return FI_SUCCESS;
+}
+
+int cxip_gen_auth_key(struct fi_info *info, struct cxi_auth_key *key)
+{
+	int ret;
+
+	memset(key, 0, sizeof(*key));
+
+	if (info->domain_attr->auth_key) {
+		CXIP_WARN("Domain auth_key not NULL\n");
+		return -FI_EINVAL;
+	}
+
+	ret = cxip_gen_auth_key_ss_env(info, key);
+	if (ret == FI_SUCCESS)
+		return FI_SUCCESS;
+
+	return cxip_gen_auth_key_best_svc_id(info, key);
+}
+
+static int cxip_alter_auth_key(struct fi_info **info)
 {
 	int ret;
 	struct cxi_auth_key auth_key;
 	struct fi_info *fi_ptr;
 
-	/* For any domain with a NULL auth_key, attempt to generate an auth_key
-	 * using the Slingshot plugin.
+	ret = cxip_alter_auth_key_align_domain_ep(info);
+	if (ret)
+		return ret;
+
+	cxip_alter_auth_key_scrub_auth_key_size(info);
+
+	/* For any domain with a NULL auth_key, attempt to generate an auth_key.
 	 */
 	for (fi_ptr = *info; fi_ptr; fi_ptr = fi_ptr->next) {
 		if (fi_ptr->domain_attr->auth_key)
 			continue;
 
-		ret = cxip_alter_auth_key_ss_plugin_get_vni();
-		if (ret == -FI_ENOSYS)
-			return FI_SUCCESS;
-		else if (ret < 0)
-			return ret;
-
-		auth_key.vni = ret;
-
-		ret = cxip_alter_auth_key_ss_plugin_get_svc_id(fi_ptr);
+		ret = cxip_gen_auth_key(fi_ptr, &auth_key);
 		if (ret == -FI_ENOSYS)
 			continue;
-		else if (ret < 0)
+		else if (ret)
 			return ret;
-
-		auth_key.svc_id = ret;
 
 		fi_ptr->domain_attr->auth_key =
 			mem_dup(&auth_key, sizeof(auth_key));
@@ -1206,23 +1368,6 @@ static int cxip_alter_auth_key_ss_plugin(struct fi_info **info)
 		CXIP_INFO("Assigned auth key (%u:%u) to %s\n", auth_key.svc_id,
 			  auth_key.vni, fi_ptr->domain_attr->name);
 	}
-
-	return FI_SUCCESS;
-}
-
-static int cxip_alter_auth_key(struct fi_info **info)
-{
-	int ret;
-
-	ret = cxip_alter_auth_key_align_domain_ep(info);
-	if (ret)
-		return ret;
-
-	cxip_alter_auth_key_scrub_auth_key_size(info);
-
-	ret = cxip_alter_auth_key_ss_plugin(info);
-	if (ret)
-		return ret;
 
 	return cxip_alter_auth_key_validate(info);
 }
