@@ -2,7 +2,7 @@
 # Copyright (c) 2016 Cisco Systems, Inc.  All rights reserved.
 # Copyright (c) 2017-2018 Intel Corporation, Inc. All right reserved.
 # Copyright (c) 2018 Amazon.com, Inc. or its affiliates. All rights reserved.
-# (C) Copyright 2020 Hewlett Packard Enterprise Development LP
+# (C) Copyright 2020-2023 Hewlett Packard Enterprise Development LP
 #
 # Makefile.am for libfabric
 
@@ -100,7 +100,9 @@ common_srcs =				\
 	prov/coll/src/coll_eq.c		\
 	prov/coll/src/coll_fabric.c	\
 	prov/coll/src/coll_init.c	\
-	prov/coll/src/coll.h
+	prov/coll/src/coll.h		\
+	prov/util/src/util_coll.c       \
+	prov/util/src/kdreg2_mem_monitor.c
 
 if MACOS
 common_srcs += src/osx/osd.c
