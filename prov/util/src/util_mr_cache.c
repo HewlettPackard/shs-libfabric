@@ -372,7 +372,7 @@ int ofi_mr_cache_search(struct ofi_mr_cache *cache, const struct ofi_mr_info *in
 		if (*entry &&
 		    ofi_iov_within(&info->iov, &(*entry)->info.iov) &&
 		    ((*entry)->info.iface == attr->iface) &&
-		    monitor->valid(monitor, info, *entry))
+		    util_mr_entry_valid(monitor, *entry))
 			goto hit;
 
 		/* Purge regions that overlap with new region */
