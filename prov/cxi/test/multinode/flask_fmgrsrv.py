@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0
-# Copyright (c) 2021 Hewlett Packard Enterprise Development LP
+# Copyright (c) 2021-2023 Hewlett Packard Enterprise Development LP
 
 help = f'''
 Multicast REST server simulation for distributed testing
@@ -171,9 +171,16 @@ class fabtestServer(Resource):
             }
             return info, 400
 
-        # Otherwise, record and return
+        # Otherwise, record and return complete record
         mcastroots.append(mac)
         mcastaddrs.append(adr)
+
+        info['jobID'] = request.json['jobID']
+        info['jobStepID'] = request.json['jobStepID']
+        info['macs'] = request.json['macs']
+        info['timeout'] = request.json['timeout']
+        info['documentSelfLink'] = 'fabric/collectives/mcastID/' + adr
+
         return info, 200
 
 def main(argv):

@@ -271,7 +271,11 @@ int cxip_curl_perform(const char *endpoint, const char *request,
 	headers = curl_slist_append(headers, "charset: utf-8");
 	token = NULL;
 	if (sessionToken) {
-		asprintf(&token, "x-xenon-auth-token: %s", sessionToken);
+		ret = asprintf(&token, "x-xenon-auth-token: %s", sessionToken);
+		if (ret < 0) {
+			CXIP_WARN("x-xenon-auth-token create failed\n");
+			goto fail;
+		}
 		headers = curl_slist_append(headers, token);
 	}
 	handle->headers = (void *)headers;
@@ -311,9 +315,9 @@ fail:
 /**
  * Progress the CURL requests.
  *
- * This progresses concurrent CURL requests, and returns the following: 0
- * indicates an operation completed
+ * This progresses concurrent CURL requests, and returns the following:
  *
+ * -  0 indicates an operation completed
  * -  -FI_EAGAIN  indicates operations are pending, none completed
  * -  -FI_ENODATA indicates no operations are pending
  * -  -errorcode  a fatal error
@@ -336,10 +340,8 @@ fail:
  * user callback is called after completion of the request, before the handle is
  * destroyed.
  *
- * The callback routine has full access to the handle, as well as its own data
- * area, available as handle->usrptr, and its content can be freely modified by
- * the usrfunc. The handle itself should be treated as read-only by the callback
- * routine.
+ * The callback routine has read-only access to the handle, and read-write
+ * access to its own data area, available as handle->usrptr.
  *
  * The handle contains the following documented fields:
  *
