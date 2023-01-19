@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2017 Intel Corporation, Inc.  All rights reserved.
  * Copyright (c) 2018 Cray Inc. All rights reserved.
+ * Copyright (c) 2020-2023 Hewlett Packard Enterprise Development LP
  */
 
 #include "config.h"
@@ -21,17 +22,6 @@ static int cxip_mr_init(struct cxip_mr *mr, struct cxip_domain *dom,
 			const struct fi_mr_attr *attr, uint64_t flags);
 static void cxip_mr_fini(struct cxip_mr *mr);
 static int cxip_mr_prov_cache_enable_std(struct cxip_mr *mr);
-
-/* No-op with FI_MR_PROV_KEY */
-static void cxip_mr_domain_remove_prov(struct cxip_mr *mr)
-{
-}
-
-/* No-op with FI_MR_PROV_KEY */
-static int cxip_mr_domain_insert_prov(struct cxip_mr *mr)
-{
-	return FI_SUCCESS;
-}
 
 void cxip_mr_domain_fini(struct cxip_mr_domain *mr_domain)
 {
@@ -65,9 +55,7 @@ void cxip_mr_domain_init(struct cxip_mr_domain *mr_domain)
  */
 static void cxip_ep_mr_insert(struct cxip_ep_obj *ep_obj, struct cxip_mr *mr)
 {
-	ofi_mutex_lock(&ep_obj->lock);
 	dlist_insert_tail(&mr->ep_entry, &ep_obj->mr_list);
-	ofi_mutex_unlock(&ep_obj->lock);
 }
 
 /*
@@ -75,9 +63,7 @@ static void cxip_ep_mr_insert(struct cxip_ep_obj *ep_obj, struct cxip_mr *mr)
  */
 static void cxip_ep_mr_remove(struct cxip_mr *mr)
 {
-	ofi_mutex_lock(&mr->ep->ep_obj->lock);
 	dlist_remove(&mr->ep_entry);
-	ofi_mutex_unlock(&mr->ep->ep_obj->lock);
 }
 
 /*
@@ -126,7 +112,7 @@ static int cxip_mr_wait_append(struct cxip_ep_obj *ep_obj,
 	/* Wait for PTE LE append status update */
 	do {
 		sched_yield();
-		cxip_ep_ctrl_progress(ep_obj);
+		cxip_ep_ctrl_progress_locked(ep_obj);
 	} while (mr->mr_state != CXIP_MR_LINKED &&
 		 mr->mr_state != CXIP_MR_LINK_ERR);
 
@@ -145,12 +131,15 @@ static int cxip_mr_wait_append(struct cxip_ep_obj *ep_obj,
  * supported is limited by the total number of NIC LEs. Because a matching LE
  * is used, unrestricted commands must be used to target standard MRs.
  *
- * Caller must hold mr->lock.
+ * Caller must hold mr->lock, mr->ep->ep_obj->lock.
  */
 static int cxip_mr_enable_std(struct cxip_mr *mr)
 {
 	int ret;
 	struct cxip_ep_obj *ep_obj = mr->ep->ep_obj;
+	struct cxip_mr_key key = {
+		.raw = mr->key,
+	};
 	uint32_t le_flags;
 
 	mr->req.cb = cxip_mr_cb;
@@ -167,7 +156,7 @@ static int cxip_mr_enable_std(struct cxip_mr *mr)
 			      mr->len ? CXI_VA_TO_IOVA(mr->md->md, mr->buf) : 0,
 			      mr->len, mr->len ? mr->md->md->lac : 0,
 			      C_PTL_LIST_PRIORITY, mr->req.req_id,
-			      mr->key, 0, CXI_MATCH_ID_ANY,
+			      key.key, 0, CXI_MATCH_ID_ANY,
 			      0, le_flags, mr->cntr, ep_obj->ctrl_tgq, true);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Failed to write Append command: %d\n", ret);
@@ -188,7 +177,7 @@ static int cxip_mr_enable_std(struct cxip_mr *mr)
 /*
  * cxip_mr_disable_std() - Free HW resources from the standard MR.
  *
- * Caller must hold mr->lock.
+ * Caller must hold mr->lock, mr->ep->ep_obj->lock.
  */
 static int cxip_mr_disable_std(struct cxip_mr *mr)
 {
@@ -202,7 +191,7 @@ static int cxip_mr_disable_std(struct cxip_mr *mr)
 
 	do {
 		sched_yield();
-		cxip_ep_ctrl_progress(ep_obj);
+		cxip_ep_ctrl_progress_locked(ep_obj);
 	} while (mr->mr_state != CXIP_MR_UNLINKED);
 
 	ret = cxil_invalidate_pte_le(ep_obj->ctrl_pte->pte, mr->key,
@@ -245,7 +234,7 @@ void cxip_mr_opt_pte_cb(struct cxip_pte *pte, const union c_event *event)
  * MR. Because a non-matching interface is used, optimized MRs can be targeted
  * with restricted commands. This may result in better performance.
  *
- * Caller must hold mr->lock.
+ * Caller must hold mr->lock, mr->ep->ep_obj->lock.
  */
 static int cxip_mr_enable_opt(struct cxip_mr *mr)
 {
@@ -258,15 +247,14 @@ static int cxip_mr_enable_opt(struct cxip_mr *mr)
 
 	mr->req.cb = cxip_mr_cb;
 
-	ret = cxip_pte_alloc_nomap(ep_obj->if_dom[0], ep_obj->ctrl_tgt_evtq,
+	ret = cxip_pte_alloc_nomap(ep_obj->if_dom, ep_obj->ctrl_tgt_evtq,
 				   &opts, cxip_mr_opt_pte_cb, mr, &mr->pte);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Failed to allocate PTE: %d\n", ret);
 		return ret;
 	}
 
-	pid_idx = mr->domain->mr_util->key_to_ptl_idx(mr->domain,
-						      mr->key, true);
+	pid_idx = cxip_generic_mr_key_to_ptl_idx(mr->domain, mr->key, true);
 	ret = cxip_pte_map(mr->pte, pid_idx, false);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Failed to map write pid_idx %d to PTE: %d\n",
@@ -274,8 +262,7 @@ static int cxip_mr_enable_opt(struct cxip_mr *mr)
 		goto err_pte_free;
 	}
 
-	pid_idx = mr->domain->mr_util->key_to_ptl_idx(mr->domain,
-						      mr->key, false);
+	pid_idx = cxip_generic_mr_key_to_ptl_idx(mr->domain, mr->key, false);
 	ret = cxip_pte_map(mr->pte, pid_idx, false);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Failed to map read pid_idx %d to PTE: %d\n",
@@ -341,7 +328,7 @@ err_pte_free:
  * cxip_mr_disable_opt() - Free hardware resources for non-cached
  * optimized MR.
  *
- * Caller must hold mr->lock.
+ * Caller must hold mr->lock, mr->ep->ep_obj->lock.
  */
 static int cxip_mr_disable_opt(struct cxip_mr *mr)
 {
@@ -357,7 +344,7 @@ static int cxip_mr_disable_opt(struct cxip_mr *mr)
 
 	do {
 		sched_yield();
-		cxip_ep_ctrl_progress(ep_obj);
+		cxip_ep_ctrl_progress_locked(ep_obj);
 	} while (mr->mr_state != CXIP_MR_UNLINKED);
 
 cleanup:
@@ -387,7 +374,7 @@ static void cxip_mr_prov_opt_to_std(struct cxip_mr *mr)
  * cxip_mr_prov_enable_opt() - Enable a provider key optimized
  * MR, falling back to a standard MR if resources are not available.
  *
- * Caller must hold mr->lock.
+ * Caller must hold mr->lock, mr->ep->ep_obj->lock.
  */
 static int cxip_mr_prov_enable_opt(struct cxip_mr *mr)
 {
@@ -406,7 +393,7 @@ static int cxip_mr_prov_enable_opt(struct cxip_mr *mr)
  * cxip_mr_prov_cache_enable_opt() - Enable a provider key optimized
  * MR configuring hardware if not already cached.
  *
- * Caller must hold mr->lock.
+ * Caller must hold mr->lock, mr->ep->ep_obj->lock.
  */
 static int cxip_mr_prov_cache_enable_opt(struct cxip_mr *mr)
 {
@@ -419,7 +406,6 @@ static int cxip_mr_prov_cache_enable_opt(struct cxip_mr *mr)
 	uint32_t le_flags;
 	uint64_t ib = 0;
 
-	ofi_spin_lock(&ep_obj->mr_cache_lock);
 	mr_cache = &ep_obj->opt_mr_cache[lac];
 	ofi_atomic_inc32(&mr_cache->ref);
 
@@ -455,7 +441,7 @@ static int cxip_mr_prov_cache_enable_opt(struct cxip_mr *mr)
 	mr_cache->ctrl_req->mr.mr->optimized = true;
 	mr_cache->ctrl_req->mr.mr->mr_state = CXIP_MR_DISABLED;
 
-	ret = cxip_pte_alloc_nomap(ep_obj->if_dom[0], ep_obj->ctrl_tgt_evtq,
+	ret = cxip_pte_alloc_nomap(ep_obj->if_dom, ep_obj->ctrl_tgt_evtq,
 				   &opts, cxip_mr_opt_pte_cb,
 				   _mr, &_mr->pte);
 	if (ret != FI_SUCCESS) {
@@ -516,7 +502,6 @@ done:
 	mr->enabled = true;
 
 	CXIP_DBG("Optimized MR enabled: %p (key: 0x%016lX)\n", mr, mr->key);
-	ofi_spin_unlock(&ep_obj->mr_cache_lock);
 
 	return FI_SUCCESS;
 
@@ -530,8 +515,6 @@ err_free_req:
 	free(mr_cache->ctrl_req);
 	mr_cache->ctrl_req = NULL;
 err:
-	ofi_spin_unlock(&ep_obj->mr_cache_lock);
-
 	cxip_mr_prov_opt_to_std(mr);
 
 	return cxip_mr_prov_cache_enable_std(mr);
@@ -541,7 +524,7 @@ err:
  * cxip_mr_prov_cache_disable_opt() - Disable a provider key
  * optimized MR.
  *
- * Caller must hold mr->lock.
+ * Caller must hold mr->lock, mr->ep->ep_obj->lock.
  */
 static int cxip_mr_prov_cache_disable_opt(struct cxip_mr *mr)
 {
@@ -556,16 +539,12 @@ static int cxip_mr_prov_cache_disable_opt(struct cxip_mr *mr)
 	CXIP_DBG("Disable optimized cached MR: %p (key: 0x%016lX)\n",
 		 mr, mr->key);
 
-	ofi_spin_lock(&ep_obj->mr_cache_lock);
 	if (ofi_atomic_get32(&ep_obj->opt_mr_cache[lac].ref) <= 0) {
 		CXIP_WARN("Cached optimized MR reference underflow\n");
-		ofi_spin_unlock(&ep_obj->mr_cache_lock);
-
 		return -FI_EINVAL;
 	}
 	ofi_atomic_dec32(&ep_obj->opt_mr_cache[lac].ref);
 	mr->enabled = false;
-	ofi_spin_unlock(&ep_obj->mr_cache_lock);
 
 	return FI_SUCCESS;
 }
@@ -574,7 +553,7 @@ static int cxip_mr_prov_cache_disable_opt(struct cxip_mr *mr)
  * cxip_mr_prov_cache_enable_std() - Enable a provider key standard
  * MR configuring hardware if not already cached.
  *
- * Caller must hold mr->lock.
+ * Caller must hold mr->lock, mr->ep->ep_obj->lock.
  */
 static int cxip_mr_prov_cache_enable_std(struct cxip_mr *mr)
 {
@@ -587,9 +566,6 @@ static int cxip_mr_prov_cache_enable_std(struct cxip_mr *mr)
 	uint32_t le_flags;
 
 	/* TODO: Handle enabling for each bound endpoint */
-
-	ofi_spin_lock(&ep_obj->mr_cache_lock);
-
 	mr_cache = &ep_obj->std_mr_cache[lac];
 	ofi_atomic_inc32(&mr_cache->ref);
 
@@ -653,7 +629,6 @@ done:
 
 	CXIP_DBG("Enable cached standard MR: %p (key: 0x%016lX\n",
 		 mr, mr->key);
-	ofi_spin_unlock(&ep_obj->mr_cache_lock);
 
 	return FI_SUCCESS;
 
@@ -666,7 +641,6 @@ err_free_req:
 	mr_cache->ctrl_req = NULL;
 err:
 	ofi_atomic_dec32(&mr_cache->ref);
-	ofi_spin_unlock(&ep_obj->mr_cache_lock);
 
 	return ret;
 }
@@ -675,7 +649,7 @@ err:
  * cxip_mr_prov_cache_disable_std() - Disable a provider standard
  * cached MR.
  *
- * Caller must hold mr->lock.
+ * Caller must hold mr->lock, mr->ep->ep_obj->lock.
  */
 static int cxip_mr_prov_cache_disable_std(struct cxip_mr *mr)
 {
@@ -687,17 +661,12 @@ static int cxip_mr_prov_cache_disable_std(struct cxip_mr *mr)
 
 	CXIP_DBG("Disable standard cached MR: %p (key: 0x%016lX)\n",
 		 mr, mr->key);
-
-	ofi_spin_lock(&ep_obj->mr_cache_lock);
 	if (ofi_atomic_get32(&ep_obj->std_mr_cache[lac].ref) <= 0) {
 		CXIP_WARN("Cached standard MR reference underflow\n");
-		ofi_spin_unlock(&ep_obj->mr_cache_lock);
-
 		return -FI_EINVAL;
 	}
 	ofi_atomic_dec32(&ep_obj->std_mr_cache[lac].ref);
 	mr->enabled = false;
-	ofi_spin_unlock(&ep_obj->mr_cache_lock);
 
 	return FI_SUCCESS;
 }
@@ -707,6 +676,13 @@ static int cxip_mr_prov_cache_disable_std(struct cxip_mr *mr)
  */
 static void cxip_mr_domain_remove(struct cxip_mr *mr)
 {
+	if (mr->domain->is_prov_key)
+		return;
+
+	/* Only remotely accessible MR were assigned an RKEY */
+	if (!(mr->attr.access & (FI_REMOTE_READ | FI_REMOTE_WRITE)))
+		return;
+
 	ofi_spin_lock(&mr->domain->mr_domain.lock);
 	dlist_remove(&mr->mr_domain_entry);
 	ofi_spin_unlock(&mr->domain->mr_domain.lock);
@@ -722,9 +698,16 @@ static int cxip_mr_domain_insert(struct cxip_mr *mr)
 	int bucket;
 	struct cxip_mr *clash_mr;
 
+	if (mr->domain->is_prov_key)
+		return FI_SUCCESS;
+
+	/* Only remotely accessible MR are assigned an RKEY */
+	if (!(mr->attr.access & (FI_REMOTE_READ | FI_REMOTE_WRITE)))
+		return FI_SUCCESS;
+
 	mr->key = mr->attr.requested_key;
 
-	if (!mr->domain->mr_util->key_is_valid(mr->key))
+	if (!cxip_generic_is_valid_mr_key(mr->key))
 		return -FI_EKEYREJECTED;
 
 	bucket = fasthash64(&mr->key, sizeof(mr->key), 0) %
@@ -750,6 +733,7 @@ static int cxip_mr_domain_insert(struct cxip_mr *mr)
 static int cxip_init_mr_key(struct cxip_mr *mr, uint64_t req_key)
 {
 	mr->key = req_key;
+
 	return FI_SUCCESS;
 }
 
@@ -769,6 +753,7 @@ static int cxip_prov_init_mr_key(struct cxip_mr *mr, uint64_t req_key)
 
 	key.opt = cxip_env.optimized_mrs &&
 			mr->mr_id < CXIP_PTL_IDX_PROV_MR_OPT_CNT;
+	key.is_prov = 1;
 	key.key = mr->mr_id;
 
 	CXIP_DBG("Init non-cached MR key 0x%016lX\n", key.raw);
@@ -790,6 +775,7 @@ static int cxip_prov_cache_init_mr_key(struct cxip_mr *mr,
 	/* If optimized enabled it is preferred for caching */
 	key.opt = cxip_env.optimized_mrs;
 	key.cached = true;
+	key.is_prov = 1;
 	key.lac = mr->len ? md->lac : 0;
 	key.lac_off = mr->len ? CXI_VA_TO_IOVA(md, mr->buf) : 0;
 	mr->key = key.raw;
@@ -815,13 +801,25 @@ static bool cxip_is_valid_prov_mr_key(uint64_t key)
 	};
 
 	if (cxip_key.cached)
-		return cxip_key.unused1 == 0;
+		return cxip_key.is_prov == 1;
 
 	if (cxip_key.opt)
 		return CXIP_MR_UNCACHED_KEY_TO_IDX(cxip_key.key) <
 				CXIP_PTL_IDX_PROV_MR_OPT_CNT;
 
 	return cxip_is_valid_mr_key(cxip_key.key);
+}
+
+bool cxip_generic_is_valid_mr_key(uint64_t key)
+{
+	struct cxip_mr_key cxip_key = {
+		.raw = key,
+	};
+
+	if (cxip_key.is_prov)
+		return cxip_is_valid_prov_mr_key(key);
+
+	return cxip_is_valid_mr_key(key);
 }
 
 static bool cxip_mr_key_opt(uint64_t key)
@@ -841,6 +839,18 @@ static bool cxip_prov_mr_key_opt(uint64_t key)
 	return false;
 }
 
+bool cxip_generic_is_mr_key_opt(uint64_t key)
+{
+	struct cxip_mr_key cxip_key = {
+		.raw = key,
+	};
+
+	if (cxip_key.is_prov)
+		return cxip_prov_mr_key_opt(key);
+
+	return cxip_mr_key_opt(key);
+}
+
 /*
  * cxip_mr_key_to_ptl_idx() Maps a client generated key to the
  * PtlTE index.
@@ -848,7 +858,7 @@ static bool cxip_prov_mr_key_opt(uint64_t key)
 static int cxip_mr_key_to_ptl_idx(struct cxip_domain *dom,
 				  uint64_t key, bool write)
 {
-	if (dom->mr_util->key_is_opt(key))
+	if (cxip_generic_is_mr_key_opt(key))
 		return write ? CXIP_PTL_IDX_WRITE_MR_OPT(key) :
 			CXIP_PTL_IDX_READ_MR_OPT(key);
 
@@ -867,7 +877,7 @@ static int cxip_prov_mr_key_to_ptl_idx(struct cxip_domain *dom,
 	};
 	int idx;
 
-	if (dom->mr_util->key_is_opt(key)) {
+	if (cxip_generic_is_mr_key_opt(key)) {
 		idx = write ? CXIP_PTL_IDX_WRITE_MR_OPT_BASE :
 			      CXIP_PTL_IDX_READ_MR_OPT_BASE;
 
@@ -889,13 +899,28 @@ static int cxip_prov_mr_key_to_ptl_idx(struct cxip_domain *dom,
 	return write ? CXIP_PTL_IDX_WRITE_MR_STD : CXIP_PTL_IDX_READ_MR_STD;
 }
 
+/*
+ * cxip_generic_mr_key_to_ptl_idx() - Maps a MR RKEY to the PtlTE index.
+ */
+int cxip_generic_mr_key_to_ptl_idx(struct cxip_domain *dom, uint64_t key,
+				   bool write)
+{
+	struct cxip_mr_key cxip_key = {
+		.raw = key,
+	};
+
+	if (cxip_key.is_prov)
+		return cxip_prov_mr_key_to_ptl_idx(dom, key, write);
+
+	return cxip_mr_key_to_ptl_idx(dom, key, write);
+}
+
+/* Caller should hold ep_obj->lock */
 void cxip_ctrl_mr_cache_flush(struct cxip_ep_obj *ep_obj)
 {
 	int lac;
 	struct cxip_mr_lac_cache *mr_cache;
 	int ret;
-
-	ofi_spin_lock(&ep_obj->mr_cache_lock);
 
 	/* Flush standard MR resources hardware resources not in use */
 	for (lac = 0; lac < CXIP_NUM_CACHED_KEY_LE; lac++) {
@@ -910,12 +935,9 @@ void cxip_ctrl_mr_cache_flush(struct cxip_ep_obj *ep_obj)
 				      ep_obj->ctrl_tgq);
 		assert(ret == FI_SUCCESS);
 
-		/* TODO: Holding this lock should not be an issue, but is
-		 * seems bad. See what else can be done.
-		 */
 		do {
 			sched_yield();
-			cxip_ep_ctrl_progress(ep_obj);
+			cxip_ep_ctrl_progress_locked(ep_obj);
 		} while (mr_cache->ctrl_req->mr.mr->mr_state !=
 			 CXIP_MR_UNLINKED);
 
@@ -951,7 +973,7 @@ void cxip_ctrl_mr_cache_flush(struct cxip_ep_obj *ep_obj)
 
 		do {
 			sched_yield();
-			cxip_ep_ctrl_progress(ep_obj);
+			cxip_ep_ctrl_progress_locked(ep_obj);
 		} while (mr_cache->ctrl_req->mr.mr->mr_state !=
 			 CXIP_MR_UNLINKED);
 
@@ -962,27 +984,7 @@ cleanup:
 		free(mr_cache->ctrl_req);
 		mr_cache->ctrl_req = NULL;
 	}
-
-	ofi_spin_unlock(&ep_obj->mr_cache_lock);
 }
-
-struct cxip_domain_mr_util_ops cxip_client_domain_mr_ops = {
-	.is_prov = false,
-	.key_is_valid = cxip_is_valid_mr_key,
-	.key_is_opt = cxip_mr_key_opt,
-	.key_to_ptl_idx = cxip_mr_key_to_ptl_idx,
-	.domain_insert = cxip_mr_domain_insert,
-	.domain_remove = cxip_mr_domain_remove,
-};
-
-struct cxip_domain_mr_util_ops cxip_prov_domain_mr_ops = {
-	.is_prov = true,
-	.key_is_valid = cxip_is_valid_prov_mr_key,
-	.key_is_opt = cxip_prov_mr_key_opt,
-	.key_to_ptl_idx = cxip_prov_mr_key_to_ptl_idx,
-	.domain_insert = cxip_mr_domain_insert_prov,
-	.domain_remove = cxip_mr_domain_remove_prov,
-};
 
 struct cxip_mr_util_ops cxip_client_key_mr_util_ops = {
 	.is_cached = false,
@@ -1025,7 +1027,7 @@ int cxip_mr_enable(struct cxip_mr *mr)
 	/* Set MR operations based on key management and whether
 	 * the MR is cache-able.
 	 */
-	if (!mr->domain->mr_util->is_prov)
+	if (!mr->domain->is_prov_key)
 		mr->mr_util = &cxip_client_key_mr_util_ops;
 	else if (mr->md && mr->md->cached && !mr->cntr)
 		mr->mr_util = &cxip_prov_key_cache_mr_util_ops;
@@ -1033,7 +1035,7 @@ int cxip_mr_enable(struct cxip_mr *mr)
 		mr->mr_util = &cxip_prov_key_mr_util_ops;
 
 	/* Officially set MR key */
-	if (mr->domain->mr_util->is_prov) {
+	if (mr->domain->is_prov_key) {
 		ret = mr->mr_util->init_key(mr, mr->attr.requested_key);
 		if (ret) {
 			CXIP_WARN("Failed to initialize MR key: %d\n", ret);
@@ -1041,13 +1043,16 @@ int cxip_mr_enable(struct cxip_mr *mr)
 		}
 		mr->mr_fid.key = mr->key;
 	}
-	mr->optimized = mr->domain->mr_util->key_is_opt(mr->key);
+	mr->optimized = cxip_generic_is_mr_key_opt(mr->key);
+
+	ofi_genlock_lock(&mr->ep->ep_obj->lock);
 	cxip_ep_mr_insert(mr->ep->ep_obj, mr);
 
 	if (mr->optimized)
 		ret = mr->mr_util->enable_opt(mr);
 	else
 		ret = mr->mr_util->enable_std(mr);
+	ofi_genlock_unlock(&mr->ep->ep_obj->lock);
 
 	if (ret != FI_SUCCESS)
 		goto err_remove_mr;
@@ -1068,12 +1073,14 @@ int cxip_mr_disable(struct cxip_mr *mr)
 	    !(mr->attr.access & (FI_REMOTE_READ | FI_REMOTE_WRITE)))
 		return FI_SUCCESS;
 
+	ofi_genlock_lock(&mr->ep->ep_obj->lock);
 	if (mr->optimized)
 		ret = mr->mr_util->disable_opt(mr);
 	else
 		ret = mr->mr_util->disable_std(mr);
 
 	cxip_ep_mr_remove(mr);
+	ofi_genlock_unlock(&mr->ep->ep_obj->lock);
 
 	return ret;
 }
@@ -1100,7 +1107,8 @@ static int cxip_mr_close(struct fid *fid)
 	if (mr->len)
 		cxip_unmap(mr->md);
 
-	mr->domain->mr_util->domain_remove(mr);
+	cxip_mr_domain_remove(mr);
+
 	if (mr->ep)
 		ofi_atomic_dec32(&mr->ep->ep_obj->ref);
 
@@ -1154,7 +1162,6 @@ static int cxip_mr_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 		break;
 
 	case FI_CLASS_EP:
-	case FI_CLASS_SEP:
 		ep = container_of(bfid, struct cxip_ep, ep.fid);
 		if (mr->domain != ep->ep_obj->domain || mr->enabled) {
 			ret = -FI_EINVAL;
@@ -1299,14 +1306,16 @@ static int cxip_regattr(struct fid *fid, const struct fi_mr_attr *attr,
 	if (ret)
 		goto err_free_mr;
 
-	ret = dom->mr_util->domain_insert(_mr);
+	ret = cxip_mr_domain_insert(_mr);
 	if (ret)
 		goto err_cleanup_mr;
 
 	/* Client key can be set now and will be used to
-	 * detect duplicate errors.
+	 * detect duplicate errors. Note only remote MR
+	 * are assigned a RKEY.
 	 */
-	if (!_mr->domain->mr_util->is_prov)
+	if (!_mr->domain->is_prov_key &&
+	    _mr->attr.access & (FI_REMOTE_READ | FI_REMOTE_WRITE))
 		_mr->mr_fid.key = _mr->key;
 
 	if (_mr->len) {
@@ -1324,7 +1333,8 @@ static int cxip_regattr(struct fid *fid, const struct fi_mr_attr *attr,
 	return FI_SUCCESS;
 
 err_remove_mr:
-	dom->mr_util->domain_remove(_mr);
+	cxip_mr_domain_remove(_mr);
+
 err_cleanup_mr:
 	cxip_mr_fini(_mr);
 err_free_mr:

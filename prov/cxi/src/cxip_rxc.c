@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2014 Intel Corporation. All rights reserved.
  * Copyright (c) 2019 Cray Inc. All rights reserved.
+ * Copyright (c) 2020-2023 Hewlett Packard Enterprise Development LP
  */
 
 /* CXI RX Context Management */
@@ -29,7 +30,7 @@
  * will be accepted by hardware. Prepare all messaging resources before
  * enabling the RX PtlTE.
  *
- * Caller must hold rxc->lock.
+ * Caller must hold ep_obj->lock.
  */
 int cxip_rxc_msg_enable(struct cxip_rxc *rxc, uint32_t drop_count)
 {
@@ -57,7 +58,7 @@ int cxip_rxc_msg_enable(struct cxip_rxc *rxc, uint32_t drop_count)
  * Change the RXC RX PtlTE to disabled state. Once in disabled state, the PtlTE
  * will receive no additional events.
  *
- * Caller must hold rxc->lock.
+ * Caller must hold rxc->ep_obj->lock.
  */
 static int rxc_msg_disable(struct cxip_rxc *rxc)
 {
@@ -70,14 +71,10 @@ static int rxc_msg_disable(struct cxip_rxc *rxc)
 
 	rxc->state = RXC_DISABLED;
 
-	ofi_spin_unlock(&rxc->lock);
-
-	ret = cxip_pte_set_state_wait(rxc->rx_pte, rxc->rx_cmdq, rxc->recv_cq,
+	ret = cxip_pte_set_state_wait(rxc->rx_pte, rxc->rx_cmdq, &rxc->rx_evtq,
 				      C_PTLTE_DISABLED, 0);
 	if (ret == FI_SUCCESS)
 		CXIP_DBG("RXC PtlTE disabled: %p\n", rxc);
-
-	ofi_spin_lock(&rxc->lock);
 
 	return ret;
 }
@@ -90,7 +87,7 @@ static int rxc_msg_disable(struct cxip_rxc *rxc)
  * Allocates and initializes hardware resources used for receiving expected and
  * unexpected message data.
  *
- * Caller must hold rxc->lock.
+ * Caller must hold ep_obj->lock.
  */
 static int rxc_msg_init(struct cxip_rxc *rxc)
 {
@@ -103,8 +100,8 @@ static int rxc_msg_init(struct cxip_rxc *rxc)
 	};
 	struct cxi_cq_alloc_opts cq_opts = {};
 
-	ret = cxip_ep_cmdq(rxc->ep_obj, rxc->rx_id, false, FI_TC_UNSPEC,
-			   rxc->recv_cq->eq.eq, &rxc->rx_cmdq);
+	ret = cxip_ep_cmdq(rxc->ep_obj, false, FI_TC_UNSPEC,
+			   rxc->rx_evtq.eq, &rxc->rx_cmdq);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Unable to allocate RX CMDQ, ret: %d\n", ret);
 		return -FI_EDOMAIN;
@@ -116,8 +113,8 @@ static int rxc_msg_init(struct cxip_rxc *rxc)
 	 * context command queue and changing the communication profile.
 	 */
 	if (cxip_env.rget_tc == FI_TC_UNSPEC) {
-		ret = cxip_ep_cmdq(rxc->ep_obj, rxc->rx_id, true, FI_TC_UNSPEC,
-				   rxc->recv_cq->eq.eq, &rxc->tx_cmdq);
+		ret = cxip_ep_cmdq(rxc->ep_obj, true, FI_TC_UNSPEC,
+				   rxc->rx_evtq.eq, &rxc->tx_cmdq);
 		if (ret != FI_SUCCESS) {
 			CXIP_WARN("Unable to allocate TX CMDQ, ret: %d\n", ret);
 			ret = -FI_EDOMAIN;
@@ -129,7 +126,7 @@ static int rxc_msg_init(struct cxip_rxc *rxc)
 		cq_opts.policy = cxip_env.cq_policy;
 
 		ret = cxip_cmdq_alloc(rxc->ep_obj->domain->lni,
-				      rxc->recv_cq->eq.eq, &cq_opts,
+				      rxc->rx_evtq.eq, &cq_opts,
 				      rxc->ep_obj->auth_key.vni,
 				      cxip_ofi_to_cxi_tc(cxip_env.rget_tc),
 				      CXI_TC_TYPE_DEFAULT, &rxc->tx_cmdq);
@@ -148,8 +145,8 @@ static int rxc_msg_init(struct cxip_rxc *rxc)
 		pt_opts.use_logical = 1;
 	}
 
-	ret = cxip_pte_alloc(rxc->ep_obj->if_dom[rxc->rx_id],
-			     rxc->recv_cq->eq.eq, CXIP_PTL_IDX_RXQ, false,
+	ret = cxip_pte_alloc(rxc->ep_obj->if_dom,
+			     rxc->rx_evtq.eq, CXIP_PTL_IDX_RXQ, false,
 			     &pt_opts, cxip_recv_pte_cb, rxc, &rxc->rx_pte);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Failed to allocate RX PTE: %d\n", ret);
@@ -159,8 +156,8 @@ static int rxc_msg_init(struct cxip_rxc *rxc)
 	/* One slot must be reserved to support hardware generated state change
 	 * events.
 	 */
-	ret = cxip_cq_adjust_reserved_fc_event_slots(rxc->recv_cq,
-						     RXC_RESERVED_FC_SLOTS);
+	ret = cxip_evtq_adjust_reserved_fc_event_slots(&rxc->rx_evtq,
+						       RXC_RESERVED_FC_SLOTS);
 	if (ret) {
 		CXIP_WARN("Unable to adjust RX reserved event slots: %d\n",
 			  ret);
@@ -173,11 +170,11 @@ free_pte:
 	cxip_pte_free(rxc->rx_pte);
 put_tx_cmdq:
 	if (cxip_env.rget_tc == FI_TC_UNSPEC)
-		cxip_ep_cmdq_put(rxc->ep_obj, rxc->rx_id, true);
+		cxip_ep_cmdq_put(rxc->ep_obj, true);
 	else
 		cxip_cmdq_free(rxc->tx_cmdq);
 put_rx_cmdq:
-	cxip_ep_cmdq_put(rxc->ep_obj, rxc->rx_id, false);
+	cxip_ep_cmdq_put(rxc->ep_obj, false);
 
 	return ret;
 }
@@ -188,7 +185,7 @@ put_rx_cmdq:
  * Free hardware resources allocated when the RX context was initialized for
  * messaging.
  *
- * Caller must hold rxc->lock.
+ * Caller must hold ep_obj->lock.
  */
 static int rxc_msg_fini(struct cxip_rxc *rxc)
 {
@@ -196,15 +193,17 @@ static int rxc_msg_fini(struct cxip_rxc *rxc)
 
 	cxip_pte_free(rxc->rx_pte);
 
-	cxip_ep_cmdq_put(rxc->ep_obj, rxc->rx_id, false);
+	cxip_ep_cmdq_put(rxc->ep_obj, false);
 
 	if (cxip_env.rget_tc == FI_TC_UNSPEC)
-		cxip_ep_cmdq_put(rxc->ep_obj, rxc->rx_id, true);
+		cxip_ep_cmdq_put(rxc->ep_obj, true);
 	else
 		cxip_cmdq_free(rxc->tx_cmdq);
 
-	cxip_cq_adjust_reserved_fc_event_slots(rxc->recv_cq,
-					       -1 * RXC_RESERVED_FC_SLOTS);
+	cxip_evtq_adjust_reserved_fc_event_slots(&rxc->rx_evtq,
+						 -1 * RXC_RESERVED_FC_SLOTS);
+
+	cxip_evtq_fini(&rxc->rx_evtq);
 
 	return FI_SUCCESS;
 }
@@ -261,40 +260,36 @@ int cxip_rxc_enable(struct cxip_rxc *rxc)
 {
 	int ret;
 	int tmp;
+	size_t min_eq_size;
 	enum c_ptlte_state state;
 
-	ofi_spin_lock(&rxc->lock);
-
-	if (rxc->state != RXC_DISABLED) {
-		ofi_spin_unlock(&rxc->lock);
+	if (rxc->state != RXC_DISABLED)
 		return FI_SUCCESS;
-	}
 
 	if (!ofi_recv_allowed(rxc->attr.caps)) {
 		rxc->state = RXC_ENABLED;
-		ofi_spin_unlock(&rxc->lock);
 		return FI_SUCCESS;
 	}
 
 	if (!rxc->recv_cq) {
 		CXIP_WARN("Undefined recv CQ\n");
-		ofi_spin_unlock(&rxc->lock);
 		return -FI_ENOCQ;
 	}
 
-	ret = cxip_cq_enable(rxc->recv_cq, rxc->ep_obj);
-	if (ret != FI_SUCCESS) {
-		CXIP_WARN("cxip_cq_enable returned: %d\n", ret);
-		ofi_spin_unlock(&rxc->lock);
+	min_eq_size = (rxc->recv_cq->attr.size + rxc->recv_cq->ack_batch_size) *
+			C_EE_CFG_ECB_SIZE;
+	ret = cxip_evtq_init(rxc->recv_cq, &rxc->rx_evtq, min_eq_size, 0, 0);
+	if (ret) {
+		CXIP_WARN("Failed to initialize RXC event queue: %d, %s\n",
+			  ret, fi_strerror(-ret));
 		return ret;
 	}
-
-	ofi_spin_unlock(&rxc->lock);
 
 	ret = rxc_msg_init(rxc);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("rxc_msg_init returned: %d\n", ret);
-		return -FI_EDOMAIN;
+		ret = -FI_EDOMAIN;
+		goto evtq_fini;
 	}
 
 	/* If starting in or able to transition to software managed
@@ -325,12 +320,12 @@ int cxip_rxc_enable(struct cxip_rxc *rxc)
 	/* Wait for PTE state change */
 	do {
 		sched_yield();
-		cxip_cq_progress(rxc->recv_cq);
+		cxip_evtq_progress(&rxc->rx_evtq);
 	} while (rxc->rx_pte->state != state);
 
-	CXIP_DBG("RXC messaging enabled: %p\n", rxc);
-
 	rxc->pid_bits = rxc->domain->iface->dev->info.pid_bits;
+	CXIP_DBG("RXC messaging enabled: %p, pid_bits: %d\n",
+		 rxc, rxc->pid_bits);
 
 	return FI_SUCCESS;
 
@@ -346,6 +341,9 @@ err_msg_fini:
 	tmp = rxc_msg_fini(rxc);
 	if (tmp != FI_SUCCESS)
 		CXIP_WARN("rxc_msg_fini returned: %d\n", tmp);
+
+evtq_fini:
+	cxip_evtq_fini(&rxc->rx_evtq);
 
 	return ret;
 }
@@ -369,10 +367,10 @@ static void rxc_cleanup(struct cxip_rxc *rxc)
 	if (!ofi_atomic_get32(&rxc->orx_reqs))
 		return;
 
-	cxip_cq_req_discard(rxc->recv_cq, rxc);
+	cxip_evtq_req_discard(&rxc->rx_evtq, rxc);
 
 	do {
-		ret = cxip_cq_req_cancel(rxc->recv_cq, rxc, 0, false);
+		ret = cxip_evtq_req_cancel(&rxc->rx_evtq, rxc, 0, false);
 		if (ret == FI_SUCCESS)
 			canceled++;
 	} while (ret == FI_SUCCESS);
@@ -383,7 +381,7 @@ static void rxc_cleanup(struct cxip_rxc *rxc)
 	start = ofi_gettime_ms();
 	while (ofi_atomic_get32(&rxc->orx_reqs)) {
 		sched_yield();
-		cxip_cq_progress(rxc->recv_cq);
+		cxip_evtq_progress(&rxc->rx_evtq);
 
 		if (ofi_gettime_ms() - start > CXIP_REQ_CLEANUP_TO) {
 			CXIP_WARN("Timeout waiting for outstanding requests.\n");
@@ -406,51 +404,6 @@ static void rxc_cleanup(struct cxip_rxc *rxc)
 			  rxc->num_fc_req_full, rxc->num_fc_unexp,
 			  rxc->num_sc_nic_hw2sw_unexp,
 			  rxc->num_sc_nic_hw2sw_append_fail);
-}
-
-/*
- * cxip_rxc_disable() - Disable an RX context.
- *
- * Free hardware resources allocated when the context was enabled. Called via
- * fi_close(). The context could be used in a standard endpoint or a scalable
- * endpoint.
- */
-static void rxc_disable(struct cxip_rxc *rxc)
-{
-	int ret;
-
-	ofi_spin_lock(&rxc->lock);
-
-	if (rxc->state == RXC_DISABLED) {
-		ofi_spin_unlock(&rxc->lock);
-		return;
-	}
-
-	if (ofi_recv_allowed(rxc->attr.caps)) {
-		/* Stop accepting Puts. */
-		ret = rxc_msg_disable(rxc);
-		if (ret != FI_SUCCESS)
-			CXIP_WARN("rxc_msg_disable returned: %d\n", ret);
-
-		ofi_spin_unlock(&rxc->lock);
-
-		cxip_rxc_free_ux_entries(rxc);
-
-		rxc_cleanup(rxc);
-
-		if (cxip_software_pte_allowed())
-			cxip_req_bufpool_fini(rxc);
-
-		if (cxip_env.msg_offload)
-			cxip_oflow_bufpool_fini(rxc);
-
-		/* Free hardware resources. */
-		ret = rxc_msg_fini(rxc);
-		if (ret != FI_SUCCESS)
-			CXIP_WARN("rxc_msg_fini returned: %d\n", ret);
-	} else {
-		ofi_spin_unlock(&rxc->lock);
-	}
 }
 
 static void cxip_rxc_dump_counters(struct cxip_rxc *rxc)
@@ -492,29 +445,16 @@ static void cxip_rxc_dump_counters(struct cxip_rxc *rxc)
 	}
 }
 
-/*
- * cxip_rxc_alloc() - Allocate an RX context.
- *
- * Used to support creating an RX context for fi_endpoint() or fi_rx_context().
- */
-struct cxip_rxc *cxip_rxc_alloc(const struct fi_rx_attr *attr, void *context)
+void cxip_rxc_struct_init(struct cxip_rxc *rxc, const struct fi_rx_attr *attr,
+			  void *context)
 {
-	struct cxip_rxc *rxc;
 	int i;
 
-	rxc = calloc(1, sizeof(*rxc));
-	if (!rxc)
-		return NULL;
-
 	dlist_init(&rxc->ep_list);
-	ofi_spin_init(&rxc->lock);
 	ofi_atomic_initialize32(&rxc->orx_reqs, 0);
 
-	rxc->ctx.fid.fclass = FI_CLASS_RX_CTX;
-	rxc->ctx.fid.context = context;
+	rxc->context = context;
 	rxc->attr = *attr;
-
-	ofi_spin_init(&rxc->rx_lock);
 
 	for (i = 0; i < CXIP_DEF_EVENT_HT_BUCKETS; i++)
 		dlist_init(&rxc->deferred_events.bh[i]);
@@ -538,18 +478,42 @@ struct cxip_rxc *cxip_rxc_alloc(const struct fi_rx_attr *attr, void *context)
 					cxip_env.cacheline_size - 1 : 0;
 
 	cxip_msg_counters_init(&rxc->cntrs);
-
-	return rxc;
 }
 
 /*
- * cxip_rxc_free() - Free an RX context allocated using cxip_rxc_alloc()
+ * cxip_rxc_disable() - Disable the RX context of an base endpoint object.
+ *
+ * Free hardware resources allocated when the context was enabled. Called via
+ * fi_close().
  */
-void cxip_rxc_free(struct cxip_rxc *rxc)
+void cxip_rxc_disable(struct cxip_rxc *rxc)
 {
+	int ret;
+
 	cxip_rxc_dump_counters(rxc);
 
-	rxc_disable(rxc);
-	ofi_spin_destroy(&rxc->lock);
-	free(rxc);
+	if (rxc->state == RXC_DISABLED)
+		return;
+
+	if (ofi_recv_allowed(rxc->attr.caps)) {
+		/* Stop accepting Puts. */
+		ret = rxc_msg_disable(rxc);
+		if (ret != FI_SUCCESS)
+			CXIP_WARN("rxc_msg_disable returned: %d\n", ret);
+
+		cxip_rxc_free_ux_entries(rxc);
+
+		rxc_cleanup(rxc);
+
+		if (cxip_software_pte_allowed())
+			cxip_req_bufpool_fini(rxc);
+
+		if (cxip_env.msg_offload)
+			cxip_oflow_bufpool_fini(rxc);
+
+		/* Free hardware resources. */
+		ret = rxc_msg_fini(rxc);
+		if (ret != FI_SUCCESS)
+			CXIP_WARN("rxc_msg_fini returned: %d\n", ret);
+	}
 }

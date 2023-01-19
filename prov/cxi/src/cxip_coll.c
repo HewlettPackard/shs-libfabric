@@ -587,6 +587,7 @@ static int _gen_tx_dfa(struct cxip_coll_reduction *reduction,
  * Exported for unit testing.
  *
  * This will return -FI_EAGAIN on transient errors.
+ * Caller should hold ep_obj->lock.
  */
 int cxip_coll_send(struct cxip_coll_reduction *reduction,
 		   int av_set_idx, const void *buffer, size_t buflen,
@@ -619,8 +620,8 @@ int cxip_coll_send(struct cxip_coll_reduction *reduction,
 	if (ret)
 		return ret;
 
-	if (cxip_cq_saturated(ep_obj->coll.tx_cq)) {
-		CXIP_DBG("CQ saturated\n");
+	if (cxip_evtq_saturated(ep_obj->coll.tx_evtq)) {
+		CXIP_DBG("TX HW EQ saturated\n");
 		return -FI_EAGAIN;
 	}
 
@@ -631,19 +632,17 @@ int cxip_coll_send(struct cxip_coll_reduction *reduction,
 		cmd.full_dma.restricted = 1;
 		cmd.full_dma.reduction = is_mcast;
 		cmd.full_dma.index_ext = index_ext;
-		cmd.full_dma.eq = cxip_cq_tx_eqn(ep_obj->coll.tx_cq);
+		cmd.full_dma.eq = cxip_evtq_eqn(ep_obj->coll.tx_evtq);
 		cmd.full_dma.dfa = dfa;
 		cmd.full_dma.lac = md->lac;
 		cmd.full_dma.local_addr = CXI_VA_TO_IOVA(md, buffer);
 		cmd.full_dma.request_len = buflen;
 
-		ofi_spin_lock(&cmdq->lock);
-
 		/* this uses cached values, returns -FI_EAGAIN if queue full */
 		ret = cxip_txq_cp_set(cmdq, ep_obj->auth_key.vni,
 				      mc_obj->tc, mc_obj->tc_type);
 		if (ret)
-			goto err_unlock;
+			goto err;
 
 		ret = cxi_cq_emit_dma(cmdq->dev_cmdq, &cmd.full_dma);
 	} else {
@@ -652,24 +651,22 @@ int cxip_coll_send(struct cxip_coll_reduction *reduction,
 		cmd.c_state.restricted = 1;
 		cmd.c_state.reduction = is_mcast;
 		cmd.c_state.index_ext = index_ext;
-		cmd.c_state.eq = cxip_cq_tx_eqn(ep_obj->coll.tx_cq);
+		cmd.c_state.eq = cxip_evtq_eqn(ep_obj->coll.tx_evtq);
 		cmd.c_state.initiator = CXI_MATCH_ID(
 			ep_obj->domain->iface->dev->info.pid_bits,
 			ep_obj->src_addr.pid, ep_obj->src_addr.nic);
-
-		ofi_spin_lock(&cmdq->lock);
 
 		/* this uses cached values, returns -FI_EAGAIN if queue full */
 		ret = cxip_txq_cp_set(cmdq, ep_obj->auth_key.vni,
 				      mc_obj->tc, mc_obj->tc_type);
 		if (ret)
-			goto err_unlock;
+			goto err;
 
 		/* returns -FI_EAGAIN on failure */
 		ret = cxip_cmdq_emit_c_state(cmdq, &cmd.c_state);
 		if (ret) {
 			ret = -FI_EAGAIN;
-			goto err_unlock;
+			goto err;
 		}
 
 		memset(&cmd.idc_put, 0, sizeof(cmd.idc_put));
@@ -678,14 +675,14 @@ int cxip_coll_send(struct cxip_coll_reduction *reduction,
 					  buffer, buflen);
 		if (ret) {
 			ret = -FI_EAGAIN;
-			goto err_unlock;
+			goto err;
 		}
 	}
 
 	if (ret) {
 		/* Return error according to Domain Resource Management */
 		ret = -FI_EAGAIN;
-		goto err_unlock;
+		goto err;
 	}
 
 	cxi_cq_ring(cmdq->dev_cmdq);
@@ -693,8 +690,7 @@ int cxip_coll_send(struct cxip_coll_reduction *reduction,
 
 	ofi_atomic_inc32(&reduction->mc_obj->send_cnt);
 
-err_unlock:
-	ofi_spin_unlock(&cmdq->lock);
+err:
 	return ret;
 }
 
@@ -706,6 +702,8 @@ err_unlock:
  * roll over the buffers if appropriate.
  *
  * NOTE: req may be invalid after this call.
+ *
+ * Caller must hold ep_obj->lock.
  */
 static void _coll_rx_req_report(struct cxip_req *req)
 {
@@ -788,7 +786,7 @@ static void _coll_rx_req_report(struct cxip_req *req)
 			CXIP_WARN("Re-link buffer failed: %d\n", ret);
 
 		/* Hardware has silently unlinked this */
-		cxip_cq_req_free(req);
+		cxip_evtq_req_free(req);
 	}
 }
 
@@ -907,7 +905,7 @@ static int _hw_coll_recv(struct cxip_coll_pte *coll_pte, struct cxip_req *req)
 			      C_PTL_LIST_PRIORITY,
 			      req->req_id,
 			      0, 0, 0,
-			      coll_pte->ep_obj->min_multi_recv,
+			      coll_pte->ep_obj->rxc.min_multi_recv,
 			      le_flags, coll_pte->ep_obj->coll.rx_cntr,
 			      coll_pte->ep_obj->coll.rx_cmdq,
 			      true);
@@ -919,7 +917,10 @@ static int _hw_coll_recv(struct cxip_coll_pte *coll_pte, struct cxip_req *req)
 	return FI_SUCCESS;
 }
 
-/* Append a receive buffer to the PTE, with callback to handle receives */
+/* Append a receive buffer to the PTE, with callback to handle receives.
+ *
+ * Caller must hold ep_obj->lock.
+ */
 static ssize_t _coll_append_buffer(struct cxip_coll_pte *coll_pte,
 				   struct cxip_coll_buf *buf)
 {
@@ -939,7 +940,7 @@ static ssize_t _coll_append_buffer(struct cxip_coll_pte *coll_pte,
 	 * - req->discard to false
 	 * - Inserts into the cq->req_list
 	 */
-	req = cxip_cq_req_alloc(coll_pte->ep_obj->coll.rx_cq, 1, buf);
+	req = cxip_evtq_req_alloc(coll_pte->ep_obj->coll.rx_evtq, 1, buf);
 	if (!req) {
 		ret = -FI_ENOMEM;
 		goto recv_unmap;
@@ -981,7 +982,7 @@ static ssize_t _coll_append_buffer(struct cxip_coll_pte *coll_pte,
 	return FI_SUCCESS;
 
 recv_dequeue:
-	cxip_cq_req_free(req);
+	cxip_evtq_req_free(req);
 
 recv_unmap:
 	cxip_unmap(buf->cxi_md);
@@ -1011,7 +1012,7 @@ int _coll_pte_enable(struct cxip_coll_pte *coll_pte, uint32_t drop_count)
 {
 	return cxip_pte_set_state_wait(coll_pte->pte,
 				       coll_pte->ep_obj->coll.rx_cmdq,
-				       coll_pte->ep_obj->coll.rx_cq,
+				       coll_pte->ep_obj->coll.rx_evtq,
 				       C_PTLTE_ENABLED, drop_count);
 }
 
@@ -1021,11 +1022,14 @@ int _coll_pte_disable(struct cxip_coll_pte *coll_pte)
 {
 	return cxip_pte_set_state_wait(coll_pte->pte,
 				       coll_pte->ep_obj->coll.rx_cmdq,
-				       coll_pte->ep_obj->coll.rx_cq,
+				       coll_pte->ep_obj->coll.rx_evtq,
 				       C_PTLTE_DISABLED, 0);
 }
 
-/* Destroy and unmap all buffers used by the collectives PTE */
+/* Destroy and unmap all buffers used by the collectives PTE.
+ *
+ * Caller must hold ep_obj->lock.
+ */
 static void _coll_destroy_buffers(struct cxip_coll_pte *coll_pte)
 {
 	struct dlist_entry *list = &coll_pte->buf_list;
@@ -1084,7 +1088,7 @@ static int _coll_add_buffers(struct cxip_coll_pte *coll_pte, size_t size,
 	/* Block until PTE completes buffer appends */
 	do {
 		sched_yield();
-		cxip_cq_progress(coll_pte->ep_obj->coll.rx_cq);
+		cxip_evtq_progress(coll_pte->ep_obj->coll.rx_evtq);
 	} while (ofi_atomic_get32(&coll_pte->buf_cnt) < count);
 
 	return FI_SUCCESS;
@@ -2123,12 +2127,17 @@ ssize_t cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 	if (reduction_id)
 		*reduction_id = reduction->red_id;
 
+	ofi_genlock_lock(&mc_obj->ep_obj->lock);
+
 	/* if we didn't find a match, start a new reduction */
 	if (!reduction->in_use) {
 		/* acquire a request structure */
-		req = cxip_cq_req_alloc(mc_obj->ep_obj->coll.tx_cq, 1, NULL);
-		if (!req)
-			return -FI_ENOMEM;
+		req = cxip_evtq_req_alloc(mc_obj->ep_obj->coll.tx_evtq,
+					  1, NULL);
+		if (!req) {
+			ofi_genlock_unlock(&mc_obj->ep_obj->lock);
+			return -FI_EAGAIN;
+		}
 
 		/* Set up the reduction structure */
 		_init_reduction(reduction);
@@ -2144,8 +2153,10 @@ ssize_t cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 	}
 
 	/* illegal to add more data after reduction has begun */
-	if (reduction->dispatched)
+	if (reduction->dispatched) {
+		ofi_genlock_unlock(&mc_obj->ep_obj->lock);
 		return -FI_EINVAL;
+	}
 
 	/* Convert user data to local coll_data structure */
 	_init_coll_data(&coll_data, cxi_opcode, op_send_data, bytcnt);
@@ -2155,8 +2166,10 @@ ssize_t cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 	_dump_coll_data("pre_accum initialized", &reduction->pre_accum);
 
 	/* Local captain-rank reduction returns without progress */
-	if (flags & FI_MORE)
+	if (flags & FI_MORE) {
+		ofi_genlock_unlock(&mc_obj->ep_obj->lock);
 		return FI_SUCCESS;
+	}
 
 	/* Mark this reduction as dispatched to the fabric */
 	reduction->dispatched = true;
@@ -2169,6 +2182,8 @@ ssize_t cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 
 	/* Progress the collective */
 	_progress_coll(reduction, NULL);
+	ofi_genlock_unlock(&mc_obj->ep_obj->lock);
+
 	return FI_SUCCESS;
 }
 
@@ -2406,6 +2421,8 @@ static int _close_mc(struct fid *fid)
 /**
  * Utility routine to set up the collective framework. Any failures are reported
  * to all endpoints with PACK_INIT_FAIL bit set in the final zbcoll state.
+ *
+ * Caller must hold ep_obj->lock.
  */
 static int _mc_initialize(void *ptr)
 {
@@ -2496,7 +2513,7 @@ static int _mc_initialize(void *ptr)
 	}
 
 	/* bind PTE to domain */
-	ret = cxip_pte_alloc(ep_obj->if_dom[0], ep_obj->coll.rx_cq->eq.eq,
+	ret = cxip_pte_alloc(ep_obj->if_dom, ep_obj->coll.rx_evtq->eq,
 			     jstate->pid_idx, jstate->is_mcast, &pt_opts,
 			     _coll_pte_cb, coll_pte, &coll_pte->pte);
 	if (ret)
@@ -2525,10 +2542,10 @@ static int _mc_initialize(void *ptr)
 
 	/* Set this now to instantiate cmdq CP */
 	cmdq = ep_obj->coll.tx_cmdq;
-	ofi_spin_lock(&cmdq->lock);
+
 	ret = cxip_txq_cp_set(cmdq, ep_obj->auth_key.vni,
 			      mc_obj->tc, mc_obj->tc_type);
-	ofi_spin_unlock(&cmdq->lock);
+
 	if (ret)
 		goto fail;
 
@@ -3131,6 +3148,8 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	/* rank 0 (av_set->fi_addr_cnt[0]) does zb broadcast, so all nodes will
 	 * share whatever bcast_data rank 0 ends up with.
 	 */
+	ofi_genlock_lock(&ep_obj->lock);
+
 	ret = -FI_EINVAL;
 	switch (av_set->comm_key.keytype) {
 	case COMM_KEY_NONE:
@@ -3238,6 +3257,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 
 	jstate->zb = zb;
 	_append_sched(zb, jstate);
+	ofi_genlock_unlock(&ep_obj->lock);
 
 	return FI_SUCCESS;
 
@@ -3246,6 +3266,7 @@ fail:
 	TRACE_JOIN("fail cxip_join_collective\n");
 	cxip_zbcoll_free(zb);
 	free(jstate);
+	ofi_genlock_unlock(&ep_obj->lock);
 
 	return ret;
 }
@@ -3325,8 +3346,8 @@ void cxip_coll_init(struct cxip_ep_obj *ep_obj)
 	ep_obj->coll.tx_cmdq = NULL;
 	ep_obj->coll.rx_cntr = NULL;
 	ep_obj->coll.tx_cntr = NULL;
-	ep_obj->coll.rx_cq = NULL;
-	ep_obj->coll.tx_cq = NULL;
+	ep_obj->coll.rx_evtq = NULL;
+	ep_obj->coll.tx_evtq = NULL;
 	ep_obj->coll.min_multi_recv = CXIP_COLL_MIN_FREE;
 	ep_obj->coll.buffer_count = CXIP_COLL_MIN_RX_BUFS;
 	ep_obj->coll.buffer_size = CXIP_COLL_MIN_RX_SIZE;
@@ -3346,8 +3367,8 @@ int cxip_coll_enable(struct cxip_ep_obj *ep_obj)
 		return FI_SUCCESS;
 
 	/* A read-only or write-only endpoint is legal */
-	if (!(ofi_recv_allowed(ep_obj->rxcs[0]->attr.caps) &&
-	      ofi_send_allowed(ep_obj->txcs[0]->attr.caps))) {
+	if (!(ofi_recv_allowed(ep_obj->rxc.attr.caps) &&
+	      ofi_send_allowed(ep_obj->txc.attr.caps))) {
 		CXIP_INFO("EP not recv/send, collectives not enabled\n");
 		return FI_SUCCESS;
 	}
@@ -3363,12 +3384,12 @@ int cxip_coll_enable(struct cxip_ep_obj *ep_obj)
 		return -FI_EINVAL;
 
 	/* Bind all STD EP objects to the coll object */
-	ep_obj->coll.rx_cmdq = ep_obj->rxcs[0]->rx_cmdq;
-	ep_obj->coll.tx_cmdq = ep_obj->txcs[0]->tx_cmdq;
-	ep_obj->coll.rx_cntr = ep_obj->rxcs[0]->recv_cntr;
-	ep_obj->coll.tx_cntr = ep_obj->txcs[0]->send_cntr;
-	ep_obj->coll.rx_cq = ep_obj->rxcs[0]->recv_cq;
-	ep_obj->coll.tx_cq = ep_obj->txcs[0]->send_cq;
+	ep_obj->coll.rx_cmdq = ep_obj->rxc.rx_cmdq;
+	ep_obj->coll.tx_cmdq = ep_obj->txc.tx_cmdq;
+	ep_obj->coll.rx_cntr = ep_obj->rxc.recv_cntr;
+	ep_obj->coll.tx_cntr = ep_obj->txc.send_cntr;
+	ep_obj->coll.rx_evtq = &ep_obj->rxc.rx_evtq;
+	ep_obj->coll.tx_evtq = &ep_obj->txc.tx_evtq;
 	ep_obj->coll.eq = ep_obj->eq;
 
 	ep_obj->coll.enabled = true;
@@ -3387,8 +3408,8 @@ int cxip_coll_disable(struct cxip_ep_obj *ep_obj)
 	ep_obj->coll.tx_cmdq = NULL;
 	ep_obj->coll.rx_cntr = NULL;
 	ep_obj->coll.tx_cntr = NULL;
-	ep_obj->coll.rx_cq = NULL;
-	ep_obj->coll.tx_cq = NULL;
+	ep_obj->coll.rx_evtq = NULL;
+	ep_obj->coll.tx_evtq = NULL;
 	ep_obj->coll.eq = NULL;
 
 	return FI_SUCCESS;

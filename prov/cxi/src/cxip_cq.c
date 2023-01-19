@@ -5,6 +5,7 @@
  * Copyright (c) 2014 Intel Corporation, Inc. All rights reserved.
  * Copyright (c) 2016 Cisco Systems, Inc. All rights reserved.
  * Copyright (c) 2018-2020 Cray Inc. All rights reserved.
+ * Copyright (c) 2021-2023 Hewlett Packard Enterprise Development LP
  */
 
 #include "config.h"
@@ -57,7 +58,7 @@ int cxip_cq_req_complete_addr(struct cxip_req *req, fi_addr_t src)
 }
 
 /*
- * cxip_cq_req_complete() - Generate an error event for the request.
+ * cxip_cq_req_error() - Generate an error event for the request.
  */
 int cxip_cq_req_error(struct cxip_req *req, size_t olen,
 		      int err, int prov_errno, void *err_data,
@@ -88,19 +89,12 @@ int cxip_cq_req_error(struct cxip_req *req, size_t olen,
 /*
  * cxip_cq_progress() - Progress the CXI Completion Queue.
  *
- * Process events on the underlying Cassini event queue.
+ * The CQ lock must not be held and this function can not be
+ * called from within event queue callback processing.
  */
 void cxip_cq_progress(struct cxip_cq *cq)
 {
-	ofi_spin_lock(&cq->lock);
-
-	if (!cq->enabled)
-		goto out;
-
-	cxip_cq_eq_progress(cq, &cq->eq);
-
-out:
-	ofi_spin_unlock(&cq->lock);
+	cxip_util_cq_progress(&cq->util_cq);
 }
 
 /*
@@ -109,12 +103,15 @@ out:
 void cxip_util_cq_progress(struct util_cq *util_cq)
 {
 	struct cxip_cq *cq = container_of(util_cq, struct cxip_cq, util_cq);
+	struct fid_list_entry *fid_entry;
+	struct dlist_entry *item;
 
-	cxip_cq_progress(cq);
-
-	/* TODO support multiple EPs/CQ */
-	if (cq->ep_obj)
-		cxip_ep_ctrl_progress(cq->ep_obj);
+	ofi_genlock_lock(&cq->ep_list_lock);
+	dlist_foreach(&util_cq->ep_list, item) {
+		fid_entry = container_of(item, struct fid_list_entry, entry);
+		cxip_ep_progress(fid_entry->fid, cq);
+	}
+	ofi_genlock_unlock(&cq->ep_list_lock);
 }
 
 /*
@@ -134,6 +131,8 @@ static const char *cxip_cq_strerror(struct fid_cq *cq, int prov_errno,
 static int cxip_cq_trywait(void *arg)
 {
 	struct cxip_cq *cq = (struct cxip_cq *)arg;
+	struct fid_list_entry *fid_entry;
+	struct dlist_entry *item;
 
 	assert(cq->util_cq.wait);
 
@@ -142,20 +141,53 @@ static int cxip_cq_trywait(void *arg)
 		return -FI_EINVAL;
 	}
 
-	if (cxi_eq_peek_event(cq->eq.eq))
-		return -FI_EAGAIN;
+	ofi_genlock_lock(&cq->ep_list_lock);
+	dlist_foreach(&cq->util_cq.ep_list, item) {
+		fid_entry = container_of(item, struct fid_list_entry, entry);
+		if (cxip_ep_peek(fid_entry->fid)) {
+			ofi_genlock_unlock(&cq->ep_list_lock);
+
+			return -FI_EAGAIN;
+		}
+	}
 
 	/* Clear wait, and check for any events */
-	ofi_spin_lock(&cq->lock);
 	cxil_clear_wait_obj(cq->priv_wait);
+	dlist_foreach(&cq->util_cq.ep_list, item) {
+		fid_entry = container_of(item, struct fid_list_entry, entry);
+		if (cxip_ep_peek(fid_entry->fid)) {
+			ofi_genlock_unlock(&cq->ep_list_lock);
 
-	if (cxi_eq_peek_event(cq->eq.eq)) {
-		ofi_spin_unlock(&cq->lock);
-		return -FI_EAGAIN;
+			return -FI_EAGAIN;
+		}
 	}
-	ofi_spin_unlock(&cq->lock);
+	ofi_genlock_unlock(&cq->ep_list_lock);
 
 	return FI_SUCCESS;
+}
+
+/*
+ * cxip_cq_flush_trig_reqs() - Flush all triggered requests on the CQ.
+ *
+ * This function will free all triggered requests associated with the
+ * CQ. This should only be called after canceling triggered operations
+ * against all counters in use and verifying the cancellations have
+ * completed successfully.
+ */
+void cxip_cq_flush_trig_reqs(struct cxip_cq *cq)
+{
+	struct fid_list_entry *fid_entry;
+	struct dlist_entry *item;
+	struct cxip_ep *ep;
+
+	ofi_genlock_lock(&cq->ep_list_lock);
+	dlist_foreach(&cq->util_cq.ep_list, item) {
+		fid_entry = container_of(item, struct fid_list_entry, entry);
+		ep = container_of(fid_entry->fid, struct cxip_ep, ep.fid);
+
+		cxip_ep_flush_trig_reqs(ep->ep_obj);
+	}
+	ofi_genlock_unlock(&cq->ep_list_lock);
 }
 
 /*
@@ -163,14 +195,12 @@ static int cxip_cq_trywait(void *arg)
  */
 static int cxip_cq_close(struct fid *fid)
 {
-	struct cxip_cq *cq;
+	struct cxip_cq *cq = container_of(fid, struct cxip_cq,
+					  util_cq.cq_fid.fid);
 	int ret;
 
-	cq = container_of(fid, struct cxip_cq, util_cq.cq_fid.fid);
-	if (ofi_atomic_get32(&cq->ref))
+	if (ofi_atomic_get32(&cq->util_cq.ref))
 		return -FI_EBUSY;
-
-	cxip_cq_disable(cq);
 
 	if (cq->priv_wait) {
 		ret = ofi_wait_del_fd(cq->util_cq.wait,
@@ -184,11 +214,7 @@ static int cxip_cq_close(struct fid *fid)
 	}
 
 	ofi_cq_cleanup(&cq->util_cq);
-
-	ofi_spin_destroy(&cq->lock);
-
-	ofi_spin_destroy(&cq->req_lock);
-
+	ofi_genlock_destroy(&cq->ep_list_lock);
 	cxip_domain_remove_cq(cq->domain, cq);
 
 	free(cq);
@@ -352,9 +378,12 @@ int cxip_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 
 	cxi_cq->domain = cxi_dom;
 	cxi_cq->ack_batch_size = cxip_env.eq_ack_batch_size;
-	ofi_atomic_initialize32(&cxi_cq->ref, 0);
-	ofi_spin_init(&cxi_cq->lock);
-	ofi_spin_init(&cxi_cq->req_lock);
+
+	/* Optimize locking when possible */
+	if (cxi_dom->util_domain.threading == FI_THREAD_DOMAIN)
+		ofi_genlock_init(&cxi_cq->ep_list_lock, OFI_LOCK_NONE);
+	else
+		ofi_genlock_init(&cxi_cq->ep_list_lock, OFI_LOCK_SPINLOCK);
 
 	if (cxi_cq->util_cq.wait) {
 		ret = cxip_cq_alloc_priv_wait(cxi_cq);

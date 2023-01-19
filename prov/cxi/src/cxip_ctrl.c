@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2017 Intel Corporation, Inc.  All rights reserved.
  * Copyright (c) 2018-2020 Cray Inc. All rights reserved.
+ * Copyright (c) 2021-2023 Hewlett Packard Enterprise Development LP
  */
 
 #include "config.h"
@@ -78,6 +79,8 @@ int cxip_ctrl_msg_cb(struct cxip_ctrl_req *req, const union c_event *event)
 
 /*
  * cxip_ctrl_msg_send() - Send a control message.
+ *
+ * Caller should hold req->ep_obj->lock.
  */
 int cxip_ctrl_msg_send(struct cxip_ctrl_req *req)
 {
@@ -101,15 +104,9 @@ int cxip_ctrl_msg_send(struct cxip_ctrl_req *req)
 	cmd.c_state.eq = req->ep_obj->ctrl_tx_evtq->eqn;
 	cmd.c_state.initiator = match_id;
 
-	/* Cannot use ep_obj->lock else a deadlock will occur. Thus serialize on
-	 * TXQ lock instead.
-	 */
-	ofi_spin_lock(&txq->lock);
-
 	if (!req->ep_obj->ctrl_tx_credits) {
 		CXIP_WARN("Control TX credits exhausted\n");
-		ret = -FI_EAGAIN;
-		goto err_unlock;
+		return -FI_EAGAIN;
 	}
 
 	req->ep_obj->ctrl_tx_credits--;
@@ -137,16 +134,12 @@ int cxip_ctrl_msg_send(struct cxip_ctrl_req *req)
 
 	cxi_cq_ring(txq->dev_cmdq);
 
-	ofi_spin_unlock(&txq->lock);
-
 	CXIP_DBG("Queued control message: %p\n", req);
 
 	return FI_SUCCESS;
 
 err_return_credit:
 	req->ep_obj->ctrl_tx_credits++;
-err_unlock:
-	ofi_spin_unlock(&txq->lock);
 
 	return ret;
 }
@@ -305,13 +298,11 @@ static struct cxip_ctrl_req *cxip_ep_ctrl_event_req(struct cxip_ep_obj *ep_obj,
 	return req;
 }
 
+/* Caller must hold ep_obj->lock. */
 static void cxip_ep_return_ctrl_tx_credits(struct cxip_ep_obj *ep_obj,
 					   unsigned int credits)
 {
-	/* Control TX credits are serialized on TXQ lock. */
-	ofi_spin_lock(&ep_obj->ctrl_txq->lock);
 	ep_obj->ctrl_tx_credits += credits;
-	ofi_spin_unlock(&ep_obj->ctrl_txq->lock);
 }
 
 void cxip_ep_ctrl_eq_progress(struct cxip_ep_obj *ep_obj,
@@ -327,7 +318,7 @@ void cxip_ep_ctrl_eq_progress(struct cxip_ep_obj *ep_obj,
 		return;
 
 	if (!ep_obj_locked)
-		ofi_mutex_lock(&ep_obj->lock);
+		ofi_genlock_lock(&ep_obj->lock);
 
 	while ((event = cxi_eq_peek_event(ctrl_evtq))) {
 		req = cxip_ep_ctrl_event_req(ep_obj, event);
@@ -351,7 +342,7 @@ void cxip_ep_ctrl_eq_progress(struct cxip_ep_obj *ep_obj,
 		CXIP_FATAL("Control EQ drops detected\n");
 
 	if (!ep_obj_locked)
-		ofi_mutex_unlock(&ep_obj->lock);
+		ofi_genlock_unlock(&ep_obj->lock);
 }
 
 void cxip_ep_tx_ctrl_progress(struct cxip_ep_obj *ep_obj)
@@ -374,30 +365,40 @@ void cxip_ep_ctrl_progress(struct cxip_ep_obj *ep_obj)
 }
 
 /*
+ * cxip_ep_ctrl_progress_locked() - Progress operations using the control EQ.
+ */
+void cxip_ep_ctrl_progress_locked(struct cxip_ep_obj *ep_obj)
+{
+	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl_tgt_evtq, false, true);
+	cxip_ep_tx_ctrl_progress_locked(ep_obj);
+}
+
+/*
  * cxip_ep_ctrl_trywait() - Return 0 if no events need to be progressed.
  */
 int cxip_ep_ctrl_trywait(void *arg)
 {
-	struct cxip_cq *cq = (struct cxip_cq *)arg;
+	struct cxip_ep_obj *ep_obj = (struct cxip_ep_obj *)arg;
 
-	if (!cq->ep_obj->ctrl_wait) {
+	if (!ep_obj->ctrl_wait) {
 		CXIP_WARN("No CXI ep_obj wait object\n");
 		return -FI_EINVAL;
 	}
 
-	if (cxi_eq_peek_event(cq->ep_obj->ctrl_tgt_evtq) ||
-	    cxi_eq_peek_event(cq->ep_obj->ctrl_tx_evtq))
+	if (cxi_eq_peek_event(ep_obj->ctrl_tgt_evtq) ||
+	    cxi_eq_peek_event(ep_obj->ctrl_tx_evtq))
 		return -FI_EAGAIN;
 
-	ofi_mutex_lock(&cq->ep_obj->lock);
-	cxil_clear_wait_obj(cq->ep_obj->ctrl_wait);
+	ofi_genlock_lock(&ep_obj->lock);
+	cxil_clear_wait_obj(ep_obj->ctrl_wait);
 
-	if (cxi_eq_peek_event(cq->ep_obj->ctrl_tgt_evtq) ||
-	    cxi_eq_peek_event(cq->ep_obj->ctrl_tx_evtq)) {
-		ofi_mutex_unlock(&cq->ep_obj->lock);
+	if (cxi_eq_peek_event(ep_obj->ctrl_tgt_evtq) ||
+	    cxi_eq_peek_event(ep_obj->ctrl_tx_evtq)) {
+		ofi_genlock_unlock(&ep_obj->lock);
+
 		return -FI_EAGAIN;
 	}
-	ofi_mutex_unlock(&cq->ep_obj->lock);
+	ofi_genlock_unlock(&ep_obj->lock);
 
 	return FI_SUCCESS;
 }
@@ -467,19 +468,103 @@ err:
 }
 
 /*
- * cxip_ctrl_wait_required() - return true if base EP wait object is required.
+ * cxip_ep_wait_required() - return true if base EP wait object is required.
  */
 static bool cxip_ctrl_wait_required(struct cxip_ep_obj *ep_obj)
 {
-	if (ep_obj->rxcs && ep_obj->rxcs[0] && ep_obj->rxcs[0]->recv_cq &&
-	    ep_obj->rxcs[0]->recv_cq->priv_wait)
+	if (ep_obj->rxc.recv_cq && ep_obj->rxc.recv_cq->priv_wait)
 		return true;
 
-	if (ep_obj->txcs && ep_obj->txcs[0] && ep_obj->txcs[0]->send_cq &&
-	    ep_obj->txcs[0]->send_cq->priv_wait)
+	if (ep_obj->txc.send_cq && ep_obj->txc.send_cq->priv_wait)
 		return true;
 
 	return false;
+}
+
+/*
+ * cxip_ep_ctrl_del_wait() - Delete control FD object
+ */
+void cxip_ep_ctrl_del_wait(struct cxip_ep_obj *ep_obj)
+{
+	int wait_fd;
+
+	wait_fd = cxil_get_wait_obj_fd(ep_obj->ctrl_wait);
+
+	if (ep_obj->txc.send_cq) {
+		ofi_wait_del_fd(ep_obj->txc.send_cq->util_cq.wait, wait_fd);
+		CXIP_DBG("Deleted control HW EQ FD: %d from CQ: %p\n",
+			 wait_fd, ep_obj->txc.send_cq);
+	}
+
+	if (ep_obj->rxc.recv_cq && ep_obj->rxc.recv_cq != ep_obj->txc.send_cq) {
+		ofi_wait_del_fd(ep_obj->rxc.recv_cq->util_cq.wait, wait_fd);
+		CXIP_DBG("Deleted control HW EQ FD: %d from CQ %p\n",
+			 wait_fd, ep_obj->rxc.recv_cq);
+	}
+}
+
+/*
+ * cxip_ep_ctrl_add_wait() - Add control FD to CQ object
+ */
+int cxip_ep_ctrl_add_wait(struct cxip_ep_obj *ep_obj)
+{
+	struct cxip_cq *cq;
+	int wait_fd;
+	int ret;
+
+	ret = cxil_alloc_wait_obj(ep_obj->domain->lni->lni,
+				  &ep_obj->ctrl_wait);
+	if (ret) {
+		CXIP_WARN("Control wait object allocation failed: %d\n", ret);
+		return -FI_ENOMEM;
+	}
+
+	wait_fd = cxil_get_wait_obj_fd(ep_obj->ctrl_wait);
+	ret = fi_fd_nonblock(wait_fd);
+	if (ret) {
+		CXIP_WARN("Unable to set control wait non-blocking: %d, %s\n",
+			  ret, fi_strerror(-ret));
+		goto err;
+	}
+
+	cq = ep_obj->txc.send_cq;
+	if (cq) {
+		ret = ofi_wait_add_fd(cq->util_cq.wait, wait_fd,
+				      POLLIN, cxip_ep_ctrl_trywait, ep_obj,
+				      &cq->util_cq.cq_fid.fid);
+		if (ret) {
+			CXIP_WARN("TX CQ add FD failed: %d, %s\n",
+				  ret, fi_strerror(-ret));
+			goto err;
+		}
+	}
+
+	if (ep_obj->rxc.recv_cq && ep_obj->rxc.recv_cq != cq) {
+		cq = ep_obj->rxc.recv_cq;
+
+		ret = ofi_wait_add_fd(cq->util_cq.wait, wait_fd,
+				      POLLIN, cxip_ep_ctrl_trywait, ep_obj,
+				      &cq->util_cq.cq_fid.fid);
+		if (ret) {
+			CXIP_WARN("RX CQ add FD failed: %d, %s\n",
+				  ret, fi_strerror(-ret));
+			goto err_add_fd;
+		}
+	}
+
+	CXIP_DBG("Added control EQ private wait object, intr FD: %d\n",
+		 wait_fd);
+
+	return FI_SUCCESS;
+
+err_add_fd:
+	if (ep_obj->txc.send_cq)
+		ofi_wait_del_fd(ep_obj->txc.send_cq->util_cq.wait, wait_fd);
+err:
+	cxil_destroy_wait_obj(ep_obj->ctrl_wait);
+	ep_obj->ctrl_wait = NULL;
+
+	return ret;
 }
 
 /*
@@ -495,32 +580,21 @@ int cxip_ep_ctrl_init(struct cxip_ep_obj *ep_obj)
 	};
 	const union c_event *event;
 	int ret;
-	int wait_fd;
 	size_t rx_eq_size = MIN(cxip_env.ctrl_rx_eq_max_size,
 				ofi_universe_size * 64);
 
 	/* If CQ(s) are using a wait object, then control event
-	 * queues need to unblock poll as well. CQ will add the
+	 * queues need to unblock CQ poll as well. CQ will add the
 	 * associated FD to the CQ FD list.
 	 */
 	if (cxip_ctrl_wait_required(ep_obj)) {
 		ret = cxil_alloc_wait_obj(ep_obj->domain->lni->lni,
 					  &ep_obj->ctrl_wait);
 		if (ret) {
-			CXIP_WARN("Ctrl internal wait object failed: %d\n",
+			CXIP_WARN("EP ctrl wait object alloc failed: %d\n",
 				  ret);
 			return ret;
 		}
-		wait_fd = cxil_get_wait_obj_fd(ep_obj->ctrl_wait);
-		ret = fi_fd_nonblock(wait_fd);
-		if (ret) {
-			CXIP_WARN("Unable to set ctrl wait non-blocking: %d\n",
-				  ret);
-			goto err;
-		}
-
-		CXIP_DBG("Added control EQ private wait object, intr FD: %d\n",
-			 wait_fd);
 	}
 
 	ret = cxip_ep_ctrl_eq_alloc(ep_obj, 4 * C_PAGE_SIZE,
@@ -542,7 +616,7 @@ int cxip_ep_ctrl_init(struct cxip_ep_obj *ep_obj)
 		goto free_tx_evtq;
 	}
 
-	ret = cxip_ep_cmdq(ep_obj, 0, true, ep_obj->domain->tclass,
+	ret = cxip_ep_cmdq(ep_obj, true, ep_obj->domain->tclass,
 			   ep_obj->ctrl_tx_evtq, &ep_obj->ctrl_txq);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Failed to allocate control TXQ, ret: %d\n", ret);
@@ -550,7 +624,7 @@ int cxip_ep_ctrl_init(struct cxip_ep_obj *ep_obj)
 		goto free_tgt_evtq;
 	}
 
-	ret = cxip_ep_cmdq(ep_obj, 0, false, FI_TC_UNSPEC,
+	ret = cxip_ep_cmdq(ep_obj, false, FI_TC_UNSPEC,
 			   ep_obj->ctrl_tgt_evtq, &ep_obj->ctrl_tgq);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Failed to allocate control TGQ, ret: %d\n", ret);
@@ -558,7 +632,7 @@ int cxip_ep_ctrl_init(struct cxip_ep_obj *ep_obj)
 		goto free_txq;
 	}
 
-	ret = cxip_pte_alloc_nomap(ep_obj->if_dom[0], ep_obj->ctrl_tgt_evtq,
+	ret = cxip_pte_alloc_nomap(ep_obj->if_dom, ep_obj->ctrl_tgt_evtq,
 				   &pt_opts, NULL, NULL, &ep_obj->ctrl_pte);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Failed to allocate control PTE: %d\n", ret);
@@ -631,9 +705,9 @@ int cxip_ep_ctrl_init(struct cxip_ep_obj *ep_obj)
 free_pte:
 	cxip_pte_free(ep_obj->ctrl_pte);
 free_tgq:
-	cxip_ep_cmdq_put(ep_obj, 0, false);
+	cxip_ep_cmdq_put(ep_obj, false);
 free_txq:
-	cxip_ep_cmdq_put(ep_obj, 0, true);
+	cxip_ep_cmdq_put(ep_obj, true);
 free_tgt_evtq:
 	cxip_eq_ctrl_eq_free(ep_obj->ctrl_tgt_evtq_buf,
 			     ep_obj->ctrl_tgt_evtq_buf_md,
@@ -642,8 +716,10 @@ free_tx_evtq:
 	cxip_eq_ctrl_eq_free(ep_obj->ctrl_tx_evtq_buf,
 			     ep_obj->ctrl_tx_evtq_buf_md, ep_obj->ctrl_tx_evtq);
 err:
-	cxil_destroy_wait_obj(ep_obj->ctrl_wait);
-	ep_obj->ctrl_wait = NULL;
+	if (ep_obj->ctrl_wait) {
+		cxil_destroy_wait_obj(ep_obj->ctrl_wait);
+		ep_obj->ctrl_wait = NULL;
+	}
 
 	return ret;
 }
@@ -658,8 +734,8 @@ void cxip_ep_ctrl_fini(struct cxip_ep_obj *ep_obj)
 	cxip_ctrl_mr_cache_flush(ep_obj);
 	cxip_ctrl_msg_fini(ep_obj);
 	cxip_pte_free(ep_obj->ctrl_pte);
-	cxip_ep_cmdq_put(ep_obj, 0, false);
-	cxip_ep_cmdq_put(ep_obj, 0, true);
+	cxip_ep_cmdq_put(ep_obj, false);
+	cxip_ep_cmdq_put(ep_obj, true);
 
 	cxip_eq_ctrl_eq_free(ep_obj->ctrl_tgt_evtq_buf,
 			     ep_obj->ctrl_tgt_evtq_buf_md,
@@ -670,6 +746,9 @@ void cxip_ep_ctrl_fini(struct cxip_ep_obj *ep_obj)
 	if (ep_obj->ctrl_wait) {
 		cxil_destroy_wait_obj(ep_obj->ctrl_wait);
 		ep_obj->ctrl_wait = NULL;
+
+		CXIP_DBG("Deleted control EQ wait object\n");
 	}
+
 	CXIP_DBG("EP control finalized: %p\n", ep_obj);
 }

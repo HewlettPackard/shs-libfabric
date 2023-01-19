@@ -468,7 +468,8 @@ struct cxip_environment cxip_env = {
 	.fc_retry_usec_delay = 1000,
 	.ctrl_rx_eq_max_size = 67108864,
 	.default_cq_size = CXIP_CQ_DEF_SZ,
-	.disable_cq_hugetlb = false,
+	.default_tx_size = CXIP_DEFAULT_TX_SIZE,
+	.disable_eq_hugetlb = false,
 	.zbcoll_radix = 2,
 	.cq_fill_percent = 50,
 	.enable_unrestricted_end_ro = true,
@@ -859,7 +860,7 @@ static void cxip_env_init(void)
 			    &cxip_env.ctrl_rx_eq_max_size);
 
 	fi_param_define(&cxip_prov, "default_cq_size", FI_PARAM_SIZE_T,
-			"Default provider completion queue size (default: %lu).",
+			"Default provider CQ size (default: %lu).",
 			cxip_env.default_cq_size);
 	fi_param_get_size_t(&cxip_prov, "default_cq_size",
 			    &cxip_env.default_cq_size);
@@ -869,11 +870,19 @@ static void cxip_env_init(void)
 			  cxip_env.default_cq_size);
 	}
 
+	/* FI_CXI_DISABLE_EQ_HUGETLB will deprecate use of
+	 * FI_CXI_DISABLE_CQ_HUGETLB, both are allowed for now.
+	 */
 	fi_param_define(&cxip_prov, "disable_cq_hugetlb", FI_PARAM_BOOL,
-			"Disable 2MiB hugetlb allocates for completion queues (default: %u).",
-			cxip_env.disable_cq_hugetlb);
+			"Disable 2MiB hugetlb allocates for HW event queues (default: %u).",
+			cxip_env.disable_eq_hugetlb);
 	fi_param_get_bool(&cxip_prov, "disable_cq_hugetlb",
-			  &cxip_env.disable_cq_hugetlb);
+			  &cxip_env.disable_eq_hugetlb);
+	fi_param_define(&cxip_prov, "disable_eq_hugetlb", FI_PARAM_BOOL,
+			"Disable 2MiB hugetlb allocates for HW event queues (default: %u).",
+			cxip_env.disable_eq_hugetlb);
+	fi_param_get_bool(&cxip_prov, "disable_eq_hugetlb",
+			  &cxip_env.disable_eq_hugetlb);
 
 	fi_param_define(&cxip_prov, "cq_fill_percent", FI_PARAM_SIZE_T,
 			"Fill percent of underlying hardware event queue used to determine when completion queue is saturated (default: %lu).",
@@ -935,6 +944,18 @@ static void cxip_env_init(void)
 	fi_param_define(&cxip_prov, "coll_use_repsum", FI_PARAM_BOOL,
 		"Use reproducible sum for collective double sum (default %d)",
 		cxip_env.coll_use_repsum);
+
+	fi_param_define(&cxip_prov, "default_tx_size", FI_PARAM_SIZE_T,
+			"Default provider tx_attr.size (default: %lu).",
+			cxip_env.default_tx_size);
+	fi_param_get_size_t(&cxip_prov, "default_tx_size",
+			    &cxip_env.default_tx_size);
+	if (cxip_env.default_tx_size < 16 ||
+	    cxip_env.default_tx_size > CXIP_MAX_TX_SIZE) {
+		cxip_env.default_tx_size = CXIP_DEFAULT_TX_SIZE;
+		CXIP_WARN("Default TX size invalid. Setting to %lu\n",
+			  cxip_env.default_tx_size);
+	}
 }
 
 /*
@@ -974,7 +995,7 @@ static void cxip_alter_tx_attr(struct fi_tx_attr *attr,
 			       uint64_t info_caps)
 {
 	if (!hints || hints->size == 0)
-		attr->size = CXIP_DEFAULT_TX_SIZE;
+		attr->size = cxip_env.default_tx_size;
 }
 
 static void cxip_alter_info(struct fi_info *info, const struct fi_info *hints,

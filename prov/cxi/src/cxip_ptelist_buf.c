@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 Cray Inc. All rights reserved.
- * (C) Copyright 2021-2022 Hewlett Packard Enterprise Development LP
+ * (C) Copyright 2021-2023 Hewlett Packard Enterprise Development LP
  *
  * * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -164,7 +164,7 @@ cxip_ptelist_buf_alloc(struct cxip_ptelist_bufpool *pool)
 	if (ret)
 		goto err_unreg_buf;
 
-	buf->req = cxip_cq_req_alloc(rxc->recv_cq, true, buf);
+	buf->req = cxip_evtq_req_alloc(&rxc->rx_evtq, true, buf);
 	if (!buf->req)
 		goto err_unmap_buf;
 
@@ -226,7 +226,7 @@ static void cxip_ptelist_buf_free(struct cxip_ptelist_buf *buf)
 		RXC_FATAL(rxc, "%s buf %p non-zero refcount %u\n",
 			  cxip_ptelist_to_str(buf->pool), buf,
 			  ofi_atomic_get32(&buf->refcount));
-	cxip_cq_req_free(buf->req);
+	cxip_evtq_req_free(buf->req);
 	cxip_unmap(buf->md);
 	if (rxc->hmem && !cxip_env.disable_host_register)
 		ofi_hmem_host_unregister(buf->data);
@@ -382,7 +382,7 @@ void cxip_ptelist_bufpool_fini(struct cxip_ptelist_bufpool *pool)
 	}
 
 	do {
-		cxip_cq_progress(rxc->recv_cq);
+		cxip_evtq_progress(&rxc->rx_evtq);
 	} while (ofi_atomic_get32(&pool->bufs_linked));
 
 	cxip_ptelist_buf_dlist_free(&pool->active_bufs);
@@ -399,7 +399,7 @@ void cxip_ptelist_bufpool_fini(struct cxip_ptelist_bufpool *pool)
  * cxip_ptelist_buf_replenish() - Replenish PtlTE overflow or request list
  * buffers.
  *
- * Caller must hold rxc->rx_lock.
+ * Caller must hold ep_obj->lock.
  */
 int cxip_ptelist_buf_replenish(struct cxip_ptelist_bufpool *pool,
 			       bool seq_restart)

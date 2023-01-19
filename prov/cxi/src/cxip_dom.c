@@ -4,7 +4,7 @@
  * Copyright (c) 2014 Intel Corporation, Inc. All rights reserved.
  * Copyright (c) 2017 DataDirect Networks, Inc. All rights reserved.
  * Copyright (c) 2018,2020 Cray Inc. All rights reserved.
- * Copyright (c) 2021-2022 Hewlett Packard Enterprise Development LP
+ * Copyright (c) 2021-2023 Hewlett Packard Enterprise Development LP
  */
 
 #include "config.h"
@@ -20,8 +20,6 @@
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_DOMAIN, __VA_ARGS__)
 
 extern struct fi_ops_mr cxip_dom_mr_ops;
-extern struct cxip_domain_mr_util_ops cxip_client_domain_mr_ops;
-extern struct cxip_domain_mr_util_ops cxip_prov_domain_mr_ops;
 
 /*
  * cxip_domain_req_alloc() - Allocate a domain control buffer ID
@@ -277,7 +275,7 @@ static int cxip_dom_dwq_op_send(struct cxip_domain *dom, struct fi_op_msg *msg,
 				struct cxip_cntr *comp_cntr,
 				uint64_t trig_thresh)
 {
-	struct cxip_txc *txc;
+	struct cxip_ep *ep = container_of(msg->ep, struct cxip_ep, ep);
 	const void *buf;
 	size_t len;
 	int ret;
@@ -291,20 +289,17 @@ static int cxip_dom_dwq_op_send(struct cxip_domain *dom, struct fi_op_msg *msg,
 		return -FI_EINVAL;
 	}
 
-	ret = cxip_fid_to_txc(msg->ep, &txc);
-	if (ret)
-		return ret;
-
 	buf = msg->msg.iov_count ? msg->msg.msg_iov[0].iov_base : NULL;
 	len = msg->msg.iov_count ? msg->msg.msg_iov[0].iov_len : 0;
 
-	ret = cxip_send_common(txc, txc->tclass, buf, len, NULL, msg->msg.data,
-			       msg->msg.addr, 0, msg->msg.context, msg->flags,
-			       false, true, trig_thresh, trig_cntr, comp_cntr);
+	ret = cxip_send_common(&ep->ep_obj->txc, ep->tx_attr.tclass, buf, len,
+			       NULL, msg->msg.data, msg->msg.addr, 0,
+			       msg->msg.context, msg->flags, false, true,
+			       trig_thresh, trig_cntr, comp_cntr);
 	if (ret)
 		CXIP_DBG("Failed to emit message triggered op, ret=%d\n", ret);
 	else
-		CXIP_DBG("Queued triggered message operation with threshold %lu\n",
+		CXIP_DBG("Queued triggered message op with threshold %lu\n",
 			 trig_thresh);
 
 	return ret;
@@ -316,7 +311,7 @@ static int cxip_dom_dwq_op_tsend(struct cxip_domain *dom,
 				 struct cxip_cntr *comp_cntr,
 				 uint64_t trig_thresh)
 {
-	struct cxip_txc *txc;
+	struct cxip_ep *ep = container_of(tagged->ep, struct cxip_ep, ep);
 	const void *buf;
 	size_t len;
 	int ret;
@@ -330,23 +325,19 @@ static int cxip_dom_dwq_op_tsend(struct cxip_domain *dom,
 		return -FI_EINVAL;
 	}
 
-	ret = cxip_fid_to_txc(tagged->ep, &txc);
-	if (ret)
-		return ret;
-
 	buf = tagged->msg.iov_count ? tagged->msg.msg_iov[0].iov_base : NULL;
 	len = tagged->msg.iov_count ? tagged->msg.msg_iov[0].iov_len : 0;
 
-	ret = cxip_send_common(txc, txc->tclass, buf, len, NULL,
-			       tagged->msg.data, tagged->msg.addr,
+	ret = cxip_send_common(&ep->ep_obj->txc, ep->tx_attr.tclass, buf, len,
+			       NULL, tagged->msg.data, tagged->msg.addr,
 			       tagged->msg.tag, tagged->msg.context,
 			       tagged->flags, true, true, trig_thresh,
 			       trig_cntr, comp_cntr);
 	if (ret)
-		CXIP_DBG("Failed to emit tagged message triggered op, ret=%d\n",
+		CXIP_DBG("Failed to emit tagged msg triggered op, ret=%d\n",
 			 ret);
 	else
-		CXIP_DBG("Queued triggered tagged message operation with threshold %lu\n",
+		CXIP_DBG("Queued triggered tagged msg op with threshold %lu\n",
 			 trig_thresh);
 
 	return ret;
@@ -357,7 +348,7 @@ static int cxip_dom_dwq_op_rma(struct cxip_domain *dom, struct fi_op_rma *rma,
 			       struct cxip_cntr *comp_cntr,
 			       uint64_t trig_thresh)
 {
-	struct cxip_txc *txc;
+	struct cxip_ep *ep = container_of(rma->ep, struct cxip_ep, ep);
 	const void *buf;
 	size_t len;
 	int ret;
@@ -366,17 +357,14 @@ static int cxip_dom_dwq_op_rma(struct cxip_domain *dom, struct fi_op_rma *rma,
 	    !rma->msg.rma_iov || rma->msg.rma_iov_count != 1)
 		return -FI_EINVAL;
 
-	ret = cxip_fid_to_txc(rma->ep, &txc);
-	if (ret)
-		return ret;
-
 	buf = rma->msg.iov_count ? rma->msg.msg_iov[0].iov_base : NULL;
 	len = rma->msg.iov_count ? rma->msg.msg_iov[0].iov_len : 0;
 
-	ret = cxip_rma_common(op, txc, buf, len, NULL, rma->msg.addr,
-			      rma->msg.rma_iov[0].addr, rma->msg.rma_iov[0].key,
-			      rma->msg.data, rma->flags, txc->attr.tclass,
-			      txc->attr.msg_order, rma->msg.context, true,
+	ret = cxip_rma_common(op, &ep->ep_obj->txc, buf, len, NULL,
+			      rma->msg.addr, rma->msg.rma_iov[0].addr,
+			      rma->msg.rma_iov[0].key, rma->msg.data,
+			      rma->flags, ep->tx_attr.tclass,
+			      ep->tx_attr.msg_order, rma->msg.context, true,
 			      trig_thresh, trig_cntr, comp_cntr);
 	if (ret)
 		CXIP_DBG("Failed to emit RMA triggered op, ret=%d\n", ret);
@@ -393,19 +381,16 @@ static int cxip_dom_dwq_op_atomic(struct cxip_domain *dom,
 				  struct cxip_cntr *comp_cntr,
 				  uint64_t trig_thresh)
 {
-	struct cxip_txc *txc;
+	struct cxip_ep *ep = container_of(amo->ep, struct cxip_ep, ep);
 	int ret;
 
 	if (!amo)
 		return -FI_EINVAL;
 
-	ret = cxip_fid_to_txc(amo->ep, &txc);
-	if (ret)
-		return ret;
-
-	ret = cxip_amo_common(CXIP_RQ_AMO, txc, txc->tclass, &amo->msg,
-			      NULL, NULL, 0, NULL, NULL, 0, amo->flags,
-			      true, trig_thresh, trig_cntr, comp_cntr);
+	ret = cxip_amo_common(CXIP_RQ_AMO, &ep->ep_obj->txc, ep->tx_attr.tclass,
+			      &amo->msg, NULL, NULL, 0, NULL, NULL, 0,
+			      amo->flags, true, trig_thresh, trig_cntr,
+			      comp_cntr);
 	if (ret)
 		CXIP_DBG("Failed to emit AMO triggered op, ret=%d\n", ret);
 	else
@@ -421,26 +406,23 @@ static int cxip_dom_dwq_op_fetch_atomic(struct cxip_domain *dom,
 					struct cxip_cntr *comp_cntr,
 					uint64_t trig_thresh)
 {
-	struct cxip_txc *txc;
+	struct cxip_ep *ep = container_of(fetch_amo->ep, struct cxip_ep, ep);
 	int ret;
 
 	if (!fetch_amo)
 		return -FI_EINVAL;
 
-	ret = cxip_fid_to_txc(fetch_amo->ep, &txc);
-	if (ret)
-		return ret;
-
-	ret = cxip_amo_common(CXIP_RQ_AMO_FETCH, txc, txc->tclass,
-			      &fetch_amo->msg, NULL, NULL, 0,
-			      fetch_amo->fetch.msg_iov, fetch_amo->fetch.desc,
-			      fetch_amo->fetch.iov_count, fetch_amo->flags,
-			      true, trig_thresh, trig_cntr, comp_cntr);
+	ret = cxip_amo_common(CXIP_RQ_AMO_FETCH, &ep->ep_obj->txc,
+			      ep->tx_attr.tclass, &fetch_amo->msg, NULL, NULL,
+			      0, fetch_amo->fetch.msg_iov,
+			      fetch_amo->fetch.desc, fetch_amo->fetch.iov_count,
+			      fetch_amo->flags, true, trig_thresh, trig_cntr,
+			      comp_cntr);
 	if (ret)
 		CXIP_DBG("Failed to emit fetching AMO triggered op, ret=%d\n",
 			 ret);
 	else
-		CXIP_DBG("Queued triggered fetching AMO operation with threshold %lu\n",
+		CXIP_DBG("Queued triggered fetching AMO op with threshold %lu\n",
 			 trig_thresh);
 
 	return ret;
@@ -452,19 +434,15 @@ static int cxip_dom_dwq_op_comp_atomic(struct cxip_domain *dom,
 				       struct cxip_cntr *comp_cntr,
 				       uint64_t trig_thresh)
 {
-	struct cxip_txc *txc;
+	struct cxip_ep *ep = container_of(comp_amo->ep, struct cxip_ep, ep);
 	int ret;
 
 	if (!comp_amo)
 		return -FI_EINVAL;
 
-	ret = cxip_fid_to_txc(comp_amo->ep, &txc);
-	if (ret)
-		return ret;
-
-	ret = cxip_amo_common(CXIP_RQ_AMO_SWAP, txc, txc->tclass,
-			      &comp_amo->msg, comp_amo->compare.msg_iov,
-			      comp_amo->compare.desc,
+	ret = cxip_amo_common(CXIP_RQ_AMO_SWAP, &ep->ep_obj->txc,
+			      ep->tx_attr.tclass, &comp_amo->msg,
+			      comp_amo->compare.msg_iov, comp_amo->compare.desc,
 			      comp_amo->compare.iov_count,
 			      comp_amo->fetch.msg_iov, comp_amo->fetch.desc,
 			      comp_amo->fetch.iov_count, comp_amo->flags, true,
@@ -473,7 +451,7 @@ static int cxip_dom_dwq_op_comp_atomic(struct cxip_domain *dom,
 		CXIP_DBG("Failed to emit compare AMO triggered op, ret=%d\n",
 			 ret);
 	else
-		CXIP_DBG("Queued triggered compare AMO operation with threshold %lu\n",
+		CXIP_DBG("Queued triggered compare AMO op with threshold %lu\n",
 			 trig_thresh);
 
 	return ret;
@@ -511,14 +489,14 @@ static int cxip_dom_dwq_op_cntr(struct cxip_domain *dom,
 	cmd.set_ct_success = 1;
 	cmd.ct_success = cntr->value;
 
-	ofi_spin_lock(&dom->trig_cmdq->lock);
+	ofi_genlock_lock(&dom->trig_cmdq_lock);
 	ret = cxi_cq_emit_ct(dom->trig_cmdq->dev_cmdq, opcode, &cmd);
 	if (ret) {
 		/* TODO: Handle this assert. */
 		assert(!ret);
 	}
 	cxi_cq_ring(dom->trig_cmdq->dev_cmdq);
-	ofi_spin_unlock(&dom->trig_cmdq->lock);
+	ofi_genlock_unlock(&dom->trig_cmdq_lock);
 
 	return FI_SUCCESS;
 }
@@ -528,24 +506,20 @@ static int cxip_dom_dwq_op_recv(struct cxip_domain *dom, struct fi_op_msg *msg,
 				struct cxip_cntr *comp_cntr,
 				uint64_t trig_thresh)
 {
-	struct cxip_rxc *rxc;
+	struct cxip_ep *ep = container_of(msg->ep, struct cxip_ep, ep);
 	void *buf;
 	size_t len;
-	int ret;
 
 	/* Non-zero thresholds for triggered receives are not supported. */
 	if (!msg || msg->msg.iov_count > 1 || trig_thresh)
 		return -FI_EINVAL;
 
-	ret = cxip_fid_to_rxc(msg->ep, &rxc);
-	if (ret)
-		return ret;
-
 	buf = msg->msg.iov_count ? msg->msg.msg_iov[0].iov_base : NULL;
 	len = msg->msg.iov_count ? msg->msg.msg_iov[0].iov_len : 0;
 
-	return cxip_recv_common(rxc, buf, len, NULL, msg->msg.addr, 0, 0,
-				msg->msg.context, msg->flags, false, comp_cntr);
+	return cxip_recv_common(&ep->ep_obj->rxc, buf, len, NULL, msg->msg.addr,
+				0, 0, msg->msg.context, msg->flags, false,
+				comp_cntr);
 }
 
 static int cxip_dom_dwq_op_trecv(struct cxip_domain *dom,
@@ -554,23 +528,18 @@ static int cxip_dom_dwq_op_trecv(struct cxip_domain *dom,
 				 struct cxip_cntr *comp_cntr,
 				 uint64_t trig_thresh)
 {
-	struct cxip_rxc *rxc;
+	struct cxip_ep *ep = container_of(tagged->ep, struct cxip_ep, ep);
 	void *buf;
 	size_t len;
-	int ret;
 
 	/* Non-zero thresholds for triggered receives are not supported. */
 	if (!tagged || tagged->msg.iov_count > 1 || trig_thresh)
 		return -FI_EINVAL;
 
-	ret = cxip_fid_to_rxc(tagged->ep, &rxc);
-	if (ret)
-		return ret;
-
 	buf = tagged->msg.iov_count ? tagged->msg.msg_iov[0].iov_base : NULL;
 	len = tagged->msg.iov_count ? tagged->msg.msg_iov[0].iov_len : 0;
 
-	return cxip_recv_common(rxc, buf, len, tagged->msg.desc,
+	return cxip_recv_common(&ep->ep_obj->rxc, buf, len, tagged->msg.desc,
 				tagged->msg.addr, tagged->msg.tag,
 				tagged->msg.ignore, tagged->msg.context,
 				tagged->flags, true, comp_cntr);
@@ -583,7 +552,7 @@ static void cxip_dom_progress_all_cqs(struct cxip_domain *dom)
 
 	dlist_foreach_container(&dom->cq_list, struct cxip_cq, cq,
 				dom_entry)
-		cxip_cq_progress(cq);
+		cxip_util_cq_progress(&cq->util_cq);
 }
 
 static int cxip_dom_control(struct fid *fid, int command, void *arg)
@@ -720,7 +689,7 @@ static int cxip_dom_control(struct fid *fid, int command, void *arg)
 			return FI_SUCCESS;
 		}
 
-		ofi_spin_lock(&dom->trig_cmdq->lock);
+		ofi_genlock_lock(&dom->trig_cmdq_lock);
 
 		/* Issue cancels to all allocated counters. */
 		dlist_foreach_container(&dom->cntr_list, struct cxip_cntr,
@@ -774,8 +743,12 @@ static int cxip_dom_control(struct fid *fid, int command, void *arg)
 		 * from the TX context first.
 		 */
 		dlist_foreach_container(&dom->txc_list, struct cxip_txc, txc,
-					dom_entry)
+					dom_entry) {
+
+			ofi_genlock_lock(&txc->ep_obj->lock);
 			cxip_txc_flush_msg_trig_reqs(txc);
+			ofi_genlock_unlock(&txc->ep_obj->lock);
+		}
 
 		/* Flush all the CQs of any remaining non-message triggered
 		 * operation requests.
@@ -784,7 +757,7 @@ static int cxip_dom_control(struct fid *fid, int command, void *arg)
 				dom_entry)
 			cxip_cq_flush_trig_reqs(cq);
 
-		ofi_spin_unlock(&dom->trig_cmdq->lock);
+		ofi_genlock_unlock(&dom->trig_cmdq_lock);
 		ofi_spin_unlock(&dom->lock);
 
 		return FI_SUCCESS;
@@ -1046,7 +1019,7 @@ static struct fi_ops_domain cxip_dom_ops = {
 	.av_open = cxip_av_open,
 	.cq_open = cxip_cq_open,
 	.endpoint = cxip_endpoint,
-	.scalable_ep = cxip_scalable_ep,
+	.scalable_ep = fi_no_scalable_ep,
 	.cntr_open = cxip_cntr_open,
 	.poll_open = fi_no_poll_open,
 	.stx_ctx = fi_no_stx_context,
@@ -1163,11 +1136,9 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 		goto cleanup_dom;
 	}
 
-	/* Handle client vs provider MR key differences */
+	/* Handle client vs provider MR RKEY differences */
 	if (cxi_domain->util_domain.mr_mode & FI_MR_PROV_KEY)
-		cxi_domain->mr_util = &cxip_prov_domain_mr_ops;
-	else
-		cxi_domain->mr_util = &cxip_client_domain_mr_ops;
+		cxi_domain->is_prov_key = true;
 
 	*dom = &cxi_domain->util_domain.domain_fid;
 	return 0;
