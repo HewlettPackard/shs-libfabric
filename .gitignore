@@ -92,3 +92,6 @@ fabtests/pytest/*/__pycache__
 .vscode
 prov/efa/docs/doxygen/html
 prov/efa/docs/doxygen/latex
+prov/cxi/test/multinode/test_coll
+prov/cxi/test/multinode/test_frmwk
+prov/cxi/test/multinode/test_zbcoll
