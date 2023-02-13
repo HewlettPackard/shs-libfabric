@@ -436,19 +436,6 @@ struct cxip_domain;
 struct cxip_mr_domain;
 struct cxip_mr;
 
-/* CXI provider domain MR helper functions that are specific
- * to client or provider generated keys.
- */
-struct cxip_domain_mr_util_ops {
-	bool is_prov;
-	bool (*key_is_valid)(uint64_t key);
-	bool (*key_is_opt)(uint64_t key);
-	int (*key_to_ptl_idx)(struct cxip_domain *dom, uint64_t key,
-			      bool write);
-	int (*domain_insert)(struct cxip_mr *mr);
-	void (*domain_remove)(struct cxip_mr *mr);
-};
-
 /* CXI provider MR operations that are specific for the MR
  * based on MR key type and caching.
  */
@@ -2935,6 +2922,9 @@ extern cxip_trace_t cxip_trace_attr cxip_trace_fn;
 		   (dom)->iface->info->dev_id, (dom)->lni->lni->id, \
 		   (dom)->auth_key.svc_id, (dom)->auth_key.vni, \
 		   (dom)->nic_addr, ##__VA_ARGS__)
+
+#define CXIP_UNEXPECTED_EVENT_STS "Unexpected event status, %s rc = %s\n"
+#define CXIP_UNEXPECTED_EVENT "Unexpected event %s, rc = %s\n"
 
 #define CXIP_DEFAULT_CACHE_LINE_SIZE 64
 
