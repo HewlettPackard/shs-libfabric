@@ -265,6 +265,8 @@ struct cxip_environment {
 	char hostname[255];
 	char *telemetry;
 	int telemetry_rgid;
+	int disable_hmem_dev_register;
+	int ze_hmem_supported;
 };
 
 extern struct cxip_environment cxip_env;

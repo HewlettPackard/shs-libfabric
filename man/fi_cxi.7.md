@@ -428,9 +428,20 @@ supported and may lead to undefined behavior. To avoid issues, fork safety can
 be enabled by defining the environment variables CXI_FORK_SAFE and
 CXI_FORK_SAFE_HP.
 
-## GPUs
+## Heterogenous Memory (HMEM) Supported Interfaces
 
-GPU support is planned.
+The CXI provider supports the following OFI iface types: FI_HMEM_CUDA, FI_HMEM_ROCR, and FI_HMEM_ZE.
+
+### FI_HMEM_ZE Limitations
+
+The CXI provider only supports GPU direct RDMA with ZE device buffers if implicit scaling
+is disabled. The following ZE environment variables disable implicit scaling:
+EnableImplicitScaling=0 NEOReadDebugKeys=1.
+
+For testing purposes only, the implicit scaling check can be disabled by setting the
+following environment variable: FI_CXI_FORCE_ZE_HMEM_SUPPORT=1. This may need to be
+combined with the following environment variable to get CXI provider memory registration
+to work: FI_CXI_DISABLE_HMEM_DEV_REGISTER=1.
 
 # OPTIMIZATION
 
@@ -790,6 +801,19 @@ The CXI provider checks for the following environment variables:
     Linux sum and uses the reproducible sum algorithm, which is fully associative. Using this
     incurs no performance penalty within the fabric, but the on-compute-node performance
     will be slower, as it is done in software. Default is false.
+
+*FI_CXI_DISABLE_HMEM_DEV_REGISTER*
+:   Disable registering HMEM device buffer for load/store access. Some HMEM devices
+    (e.g. AMD, Nvidia, and Intel GPUs) support backing the device memory by the PCIe BAR.
+    This enables software to perform load/stores to the device memory via the BAR instead
+    of using device DMA engines. Direct load/store access may improve performance.
+
+*FI_CXI_FORCE_ZE_HMEM_SUPPORT*
+:   Force the enablement of ZE HMEM support. By default, the CXI provider will only
+    support ZE memory registration if implicit scaling is disabled (i.e. the environment
+    variables EnableImplicitScaling=0 NEOReadDebugKeys=1 are set). Set
+    FI_CXI_FORCE_ZE_HMEM_SUPPORT to 1 will cause the CXI provider to skip the implicit
+    scaling checks. GPU direct RDMA may or may not work in this case.
 
 Note: Use the fi_info utility to query provider environment variables:
 <code>fi_info -p cxi -e</code>
