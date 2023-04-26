@@ -972,6 +972,7 @@ struct cxip_req_recv {
 	uint32_t rdzv_id;		// DMA initiator rendezvous ID
 	uint8_t rdzv_lac;		// Rendezvous source LAC
 	int rdzv_events;		// Processed rdzv event count
+	enum c_event_type rdzv_event_types[3];
 	uint32_t rdzv_initiator;	// Rendezvous initiator used of mrecvs
 	uint32_t rget_nic;
 	uint32_t rget_pid;
@@ -982,6 +983,8 @@ struct cxip_req_recv {
 	bool tgt_event;
 	uint64_t start_offset;
 	uint64_t mrecv_bytes;
+	uint64_t mrecv_unlink_bytes;
+	bool auto_unlinked;
 	struct cxip_req *parent;
 	struct dlist_entry children;
 	uint64_t src_offset;

@@ -207,6 +207,8 @@ static int cxip_recv_req_alloc(struct cxip_rxc *rxc, void *buf, size_t len,
 
 	/* Software EP only mode receives are not posted to hardware
 	 * and are not constrained by hardware buffer ID limits.
+	 *
+	 * Note: cxip_evtq_req_alloc() zeros the req.
 	 */
 	req = cxip_evtq_req_alloc(&rxc->rx_evtq, !rxc->sw_ep_only, rxc);
 	if (!req) {
@@ -225,20 +227,13 @@ static int cxip_recv_req_alloc(struct cxip_rxc *rxc, void *buf, size_t len,
 
 	/* Initialize common receive request attributes. */
 	req->type = CXIP_REQ_RECV;
-	req->buf = 0;
 	req->cb = cxip_recv_cb;
 	req->recv.rxc = rxc;
 	req->recv.recv_buf = buf;
 	req->recv.recv_md = recv_md;
 	req->recv.ulen = len;
-	req->recv.start_offset = 0;
-	req->recv.mrecv_bytes = len;
-	req->recv.parent = NULL;
 	dlist_init(&req->recv.children);
 	dlist_init(&req->recv.rxc_entry);
-
-	/* Count Put, Rendezvous, and Reply events during offloaded RPut. */
-	req->recv.rdzv_events = 0;
 
 	ofi_atomic_inc32(&rxc->orx_reqs);
 	*cxip_req = req;
@@ -305,22 +300,27 @@ static inline int recv_req_event_success(struct cxip_rxc *rxc,
 static void recv_req_report(struct cxip_req *req)
 {
 	int ret;
-	int truncated;
 	int err;
 	int success_event = (req->flags & FI_COMPLETION);
 	struct cxip_rxc *rxc = req->recv.rxc;
+	ssize_t truncated = req->recv.rlen - req->data_len;
+
+	/* data_len (i.e. mlength) should NEVER be greater than rlength. */
+	assert(truncated >= 0);
 
 	req->flags &= (FI_MSG | FI_TAGGED | FI_RECV | FI_REMOTE_CQ_DATA);
 
 	if (req->recv.parent) {
 		struct cxip_req *parent = req->recv.parent;
 
-		parent->recv.mrecv_bytes -= req->data_len;
+		parent->recv.mrecv_bytes += req->data_len;
 		RXC_DBG(rxc,
-			"Putting %lu mrecv bytes (req: %p left: %lu addr: %#lx)\n",
+			"Putting %lu mrecv bytes (req: %p consumed: %lu auto_unlinked: %u unlink_bytes: %lu addr: %#lx)\n",
 			req->data_len, parent, parent->recv.mrecv_bytes,
+			parent->recv.auto_unlinked, parent->recv.mrecv_unlink_bytes,
 			req->buf);
-		if (parent->recv.mrecv_bytes < req->recv.rxc->min_multi_recv) {
+		if (parent->recv.auto_unlinked &&
+		    parent->recv.mrecv_bytes == parent->recv.mrecv_unlink_bytes) {
 			RXC_DBG(rxc, "Freeing parent: %p\n", req->recv.parent);
 			cxip_recv_req_free(req->recv.parent);
 
@@ -328,7 +328,6 @@ static void recv_req_report(struct cxip_req *req)
 		}
 	}
 
-	truncated = req->recv.rlen - req->data_len;
 	if (req->recv.rc == C_RC_OK && !truncated) {
 		RXC_DBG(rxc, "Request success: %p\n", req);
 
@@ -458,10 +457,10 @@ recv_req_tgt_event(struct cxip_req *req, const union c_event *event)
  * rdzv_mrecv_req_lookup() - Search for a matching rendezvous, multi-receive
  * child request.
  */
-static struct cxip_req *rdzv_mrecv_req_lookup(struct cxip_req *req,
-					      const union c_event *event,
-					      uint32_t *initiator,
-					      uint32_t *rdzv_id)
+static int rdzv_mrecv_req_lookup(struct cxip_req *req,
+				 const union c_event *event,
+				 uint32_t *initiator, uint32_t *rdzv_id,
+				 struct cxip_req **req_out)
 {
 	struct cxip_rxc *rxc = req->recv.rxc;
 	struct cxip_req *child_req;
@@ -470,6 +469,7 @@ static struct cxip_req *rdzv_mrecv_req_lookup(struct cxip_req *req,
 	uint32_t ev_rdzv_id;
 	struct cxip_addr caddr;
 	int ret;
+	int i;
 
 	if (event->hdr.event_type == C_EVENT_REPLY) {
 		struct cxi_rdzv_user_ptr *user_ptr;
@@ -477,8 +477,10 @@ static struct cxip_req *rdzv_mrecv_req_lookup(struct cxip_req *req,
 		/* Events for software-issued operations will return a
 		 * reference to the correct request.
 		 */
-		if (!event->init_short.rendezvous)
-			return req;
+		if (!event->init_short.rendezvous) {
+			*req_out = req;
+			return FI_SUCCESS;
+		}
 
 		user_ptr = (struct cxi_rdzv_user_ptr *)
 				&event->init_short.user_ptr;
@@ -530,11 +532,29 @@ static struct cxip_req *rdzv_mrecv_req_lookup(struct cxip_req *req,
 				recv.children) {
 		if (child_req->recv.rdzv_id == ev_rdzv_id &&
 		    child_req->recv.rdzv_initiator == ev_init) {
-			return child_req;
+
+			/* There is an edge case where source may reuse the
+			 * same rendezvous ID before the target has had time to
+			 * process the C_EVENT_REPLY. If this is the case, an
+			 * incorrect child_req match would occur. To prevent
+			 * this, the events seen are stored with the child_req.
+			 * If a redundant event is seen, this is a sign
+			 * C_EVENT_REPLY needs to be process. Thus, return
+			 * -FI_EAGAIN to process TX EQ.
+			 */
+			for (i = 0; i < child_req->recv.rdzv_events; i++) {
+				if (child_req->recv.rdzv_event_types[i] == event->hdr.event_type) {
+					assert(event->hdr.event_type != C_EVENT_REPLY);
+					return -FI_EAGAIN;
+				}
+			}
+
+			*req_out = child_req;
+			return FI_SUCCESS;
 		}
 	}
 
-	return NULL;
+	return -FI_ENOMSG;
 }
 
 /*
@@ -583,14 +603,20 @@ rdzv_mrecv_req_event(struct cxip_req *mrecv_req, const union c_event *event)
 	uint32_t ev_rdzv_id;
 	struct cxip_req *req;
 	struct cxip_rxc *rxc __attribute__((unused)) = mrecv_req->recv.rxc;
+	int ret;
 
 	assert(event->hdr.event_type == C_EVENT_REPLY ||
 	       event->hdr.event_type == C_EVENT_PUT ||
 	       event->hdr.event_type == C_EVENT_PUT_OVERFLOW ||
 	       event->hdr.event_type == C_EVENT_RENDEZVOUS);
 
-	req = rdzv_mrecv_req_lookup(mrecv_req, event, &ev_init, &ev_rdzv_id);
-	if (!req) {
+	ret = rdzv_mrecv_req_lookup(mrecv_req, event, &ev_init, &ev_rdzv_id,
+				    &req);
+	switch (ret) {
+	case -FI_EAGAIN:
+		return NULL;
+
+	case -FI_ENOMSG:
 		req = mrecv_req_dup(mrecv_req);
 		if (!req)
 			return NULL;
@@ -604,12 +630,16 @@ rdzv_mrecv_req_event(struct cxip_req *mrecv_req, const union c_event *event)
 
 		RXC_DBG(rxc, "New child: %p parent: %p event: %s\n", req,
 			mrecv_req, cxi_event_to_str(event));
-	} else {
+		return req;
+
+	case FI_SUCCESS:
 		RXC_DBG(rxc, "Found child: %p parent: %p event: %s\n", req,
 			mrecv_req, cxi_event_to_str(event));
-	}
+		return req;
 
-	return req;
+	default:
+		RXC_FATAL(rxc, "Unhandled rdzv_mrecv_req_lookup %d\n", ret);
+	}
 }
 
 /*
@@ -624,8 +654,10 @@ rdzv_mrecv_req_event(struct cxip_req *mrecv_req, const union c_event *event)
  * In either case, the events could be generated in any order. As soon as three
  * events are processed, the request is complete.
  */
-static void rdzv_recv_req_event(struct cxip_req *req)
+static void rdzv_recv_req_event(struct cxip_req *req, enum c_event_type type)
 {
+	req->recv.rdzv_event_types[req->recv.rdzv_events] = type;
+
 	if (++req->recv.rdzv_events == 3) {
 		if (req->recv.multi_recv) {
 			dlist_remove(&req->recv.children);
@@ -841,17 +873,15 @@ static int cxip_notify_match(struct cxip_req *req, const union c_event *event)
  */
 static int mrecv_req_put_bytes(struct cxip_req *req, uint32_t rlen)
 {
-	uintptr_t send_tail;
+	uintptr_t mrecv_head;
 	uintptr_t mrecv_tail;
+	size_t mrecv_bytes_remaining;
 
-	send_tail = (uintptr_t)req->recv.recv_buf +
-			req->recv.start_offset +
-			rlen;
+	mrecv_head = (uintptr_t)req->recv.recv_buf + req->recv.start_offset;
 	mrecv_tail = (uintptr_t)req->recv.recv_buf + req->recv.ulen;
+	mrecv_bytes_remaining = mrecv_tail - mrecv_head;
 
-	if (send_tail > mrecv_tail)
-		rlen -= send_tail - mrecv_tail;
-
+	rlen = MIN(mrecv_bytes_remaining, rlen);
 	req->recv.start_offset += rlen;
 
 	return rlen;
@@ -955,7 +985,7 @@ static int cxip_ux_send(struct cxip_req *match_req, struct cxip_req *oflow_req,
 		if (remove_recv_entry)
 			dlist_remove_init(&parent_req->recv.rxc_entry);
 
-		rdzv_recv_req_event(match_req);
+		rdzv_recv_req_event(match_req, put_event->hdr.event_type);
 		return FI_SUCCESS;
 	}
 
@@ -1482,23 +1512,32 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 		 * if not found defer until it arrives.
 		 */
 		def_ev = match_put_event(rxc, req, event, &matched);
-		if (!matched) {
-			if (def_ev) {
-				/* Calculate start, length */
-				def_ev->mrecv_start = req->recv.start_offset;
-				def_ev->mrecv_len = mrecv_req_put_bytes(req,
-						event->tgt_long.rlength);
-			}
+		if (!def_ev)
+			return -FI_EAGAIN;
 
-			return !def_ev ? -FI_EAGAIN : FI_SUCCESS;
+		/* For multi-recv, management of start_offset requires events
+		 * manage_local related events to arrive in order.
+		 * Only C_EVENT_PUT_OVERFLOW events meet this criteria.
+		 */
+		def_ev->mrecv_start = req->recv.start_offset;
+		def_ev->mrecv_len =
+			mrecv_req_put_bytes(req, event->tgt_long.rlength);
+
+		if (req->recv.multi_recv && event->tgt_long.auto_unlinked) {
+			/* If a C_EVENT_PUT_OVERFLOW unlinks a multi-recv
+			 * buffer, mrecv_start contains the number of bytes
+			 * consumed before this C_EVENT_PUT_OVERFLOW. Adding in
+			 * mrecv_len gets the total bytes consumed.
+			 */
+			req->recv.auto_unlinked = true;
+			req->recv.mrecv_unlink_bytes =
+				def_ev->mrecv_start + def_ev->mrecv_len;
 		}
 
-		RXC_DBG(rxc, "Matched deferred event: %p\n", def_ev);
+		if (!matched)
+			return FI_SUCCESS;
 
-		/* Calculate start, length */
-		def_ev->mrecv_start = req->recv.start_offset;
-		def_ev->mrecv_len = mrecv_req_put_bytes(req,
-				event->tgt_long.rlength);
+		RXC_DBG(rxc, "Matched deferred event: %p\n", def_ev);
 
 		ret = cxip_ux_send(req, def_ev->req, &def_ev->ev,
 				   def_ev->mrecv_start, def_ev->mrecv_len,
@@ -1512,6 +1551,31 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 	case C_EVENT_PUT:
 		/* Eager data was delivered directly to the user buffer. */
 		if (req->recv.multi_recv) {
+			if (event->tgt_long.auto_unlinked) {
+				uintptr_t mrecv_head;
+				uintptr_t mrecv_tail;
+				size_t mrecv_bytes_remaining;
+				size_t rlen;
+
+				/* For C_EVENT_PUT, need to calculate how much
+				 * of the multi-recv buffer was consumed while
+				 * factoring in any truncation.
+				 */
+				mrecv_head =
+					CXI_IOVA_TO_VA(req->recv.recv_md->md,
+						       event->tgt_long.start);
+				mrecv_tail = (uintptr_t)req->recv.recv_buf +
+					req->recv.ulen;
+				mrecv_bytes_remaining = mrecv_tail - mrecv_head;
+				rlen = MIN(mrecv_bytes_remaining,
+					   event->tgt_long.rlength);
+
+				req->recv.auto_unlinked = true;
+				req->recv.mrecv_unlink_bytes =
+					mrecv_head -
+					(uintptr_t)req->recv.recv_buf + rlen;
+			}
+
 			req = rdzv_mrecv_req_event(req, event);
 			if (!req)
 				return -FI_EAGAIN;
@@ -1525,7 +1589,7 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 		recv_req_tgt_event(req, event);
 
 		/* Count the rendezvous event. */
-		rdzv_recv_req_event(req);
+		rdzv_recv_req_event(req, event->hdr.event_type);
 		return FI_SUCCESS;
 	case C_EVENT_RENDEZVOUS:
 		if (req->recv.multi_recv) {
@@ -1537,25 +1601,22 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 			 * data_len for expected Sends.
 			 */
 			struct cxip_req *parent = req->recv.parent;
-			uintptr_t rtail;
-			uintptr_t mrecv_tail;
+			size_t mrecv_bytes_remaining;
 
 			req->buf = CXI_IOVA_TO_VA(
 					parent->recv.recv_md->md,
 					event->tgt_long.start) -
 					event->tgt_long.mlength;
 			req->recv.recv_buf = (void *)req->buf;
-			rtail = req->buf + event->tgt_long.rlength;
-			mrecv_tail = (uint64_t)parent->recv.recv_buf +
-				parent->recv.ulen;
 
-			req->data_len = event->tgt_long.rlength;
-			if (rtail > mrecv_tail)
-				req->data_len -= rtail - mrecv_tail;
+			mrecv_bytes_remaining =
+				(uint64_t)parent->recv.recv_buf +
+				parent->recv.ulen -
+				(uint64_t)req->recv.recv_buf;
+			req->data_len = MIN(mrecv_bytes_remaining,
+					    event->tgt_long.rlength);
 		} else {
-			req->data_len = event->tgt_long.rlength;
-			if (req->data_len > req->recv.ulen)
-				req->data_len = req->recv.ulen;
+			req->data_len = MIN(req->recv.ulen, event->tgt_long.rlength);
 		}
 
 		recv_req_tgt_event(req, event);
@@ -1580,7 +1641,7 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 		}
 
 		/* Count the rendezvous event. */
-		rdzv_recv_req_event(req);
+		rdzv_recv_req_event(req, event->hdr.event_type);
 		return FI_SUCCESS;
 	case C_EVENT_REPLY:
 		/* If mrecv, look up the correct child request. */
@@ -1594,7 +1655,7 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 		req->recv.rc = cxi_init_event_rc(event);
 
 		/* Count the rendezvous event. */
-		rdzv_recv_req_event(req);
+		rdzv_recv_req_event(req, event->hdr.event_type);
 
 		/* If RGet initiated by software return the TX credit */
 		if (!event->init_short.rendezvous) {
@@ -1731,6 +1792,9 @@ static int cxip_recv_cb(struct cxip_req *req, const union c_event *event)
 	case C_EVENT_UNLINK:
 		assert(!event->tgt_long.auto_unlinked);
 
+		/* TODO: This is broken with multi-recv. The multi-recv request
+		 * may be freed with pending child requests.
+		 */
 		req->recv.unlinked = true;
 		recv_req_report(req);
 		cxip_recv_req_free(req);
@@ -1791,21 +1855,30 @@ static int cxip_recv_cb(struct cxip_req *req, const union c_event *event)
 		 * if not found defer until it arrives.
 		 */
 		def_ev = match_put_event(rxc, req, event, &matched);
-		if (!matched) {
-			if (def_ev) {
-				/* Calculate start, length */
-				def_ev->mrecv_start = req->recv.start_offset;
-				def_ev->mrecv_len = mrecv_req_put_bytes(req,
-						event->tgt_long.rlength);
-			}
+		if (!def_ev)
+			return -FI_EAGAIN;
 
-			return !def_ev ? -FI_EAGAIN : FI_SUCCESS;
+		/* For multi-recv, management of start_offset requires events
+		 * manage_local related events to arrive in order.
+		 * Only C_EVENT_PUT_OVERFLOW events meet this criteria.
+		 */
+		def_ev->mrecv_start = req->recv.start_offset;
+		def_ev->mrecv_len =
+			mrecv_req_put_bytes(req, event->tgt_long.rlength);
+
+		if (req->recv.multi_recv && event->tgt_long.auto_unlinked) {
+			/* If a C_EVENT_PUT_OVERFLOW unlinks a multi-recv
+			 * buffer, mrecv_start contains the number of bytes
+			 * consumed before this C_EVENT_PUT_OVERFLOW. Adding in
+			 * mrecv_len gets the total bytes consumed.
+			 */
+			req->recv.auto_unlinked = true;
+			req->recv.mrecv_unlink_bytes =
+				def_ev->mrecv_start + def_ev->mrecv_len;
 		}
 
-		/* Calculate start, length */
-		def_ev->mrecv_start = req->recv.start_offset;
-		def_ev->mrecv_len = mrecv_req_put_bytes(req,
-				event->tgt_long.rlength);
+		if (!matched)
+			return FI_SUCCESS;
 
 		ret = cxip_ux_send(req, def_ev->req, &def_ev->ev,
 				   def_ev->mrecv_start, def_ev->mrecv_len,
@@ -1822,6 +1895,24 @@ static int cxip_recv_cb(struct cxip_req *req, const union c_event *event)
 		 * request.
 		 */
 		if (req->recv.multi_recv) {
+			if (event->tgt_long.auto_unlinked) {
+				uintptr_t mrecv_head;
+
+				/* For C_EVENT_PUT, need to calculate how much
+				 * of the multi-recv buffer was consumed while
+				 * factoring in any truncation.
+				 */
+				mrecv_head =
+					CXI_IOVA_TO_VA(req->recv.recv_md->md,
+						       event->tgt_long.start);
+
+				req->recv.auto_unlinked = true;
+				req->recv.mrecv_unlink_bytes =
+					mrecv_head -
+					(uintptr_t)req->recv.recv_buf +
+					event->tgt_long.mlength;
+			}
+
 			req = mrecv_req_dup(req);
 			if (!req)
 				return -FI_EAGAIN;
@@ -3501,9 +3592,14 @@ static int cxip_recv_sw_matched(struct cxip_req *req,
 		 * cxip_ux_send(). Need to lookup this request.
 		 */
 		if (req->recv.multi_recv) {
-			rdzv_req = rdzv_mrecv_req_lookup(req, &ux_send->put_ev,
-							 &ev_init, &ev_rdzv_id);
-			assert(rdzv_req != NULL);
+			ret = rdzv_mrecv_req_lookup(req, &ux_send->put_ev,
+						    &ev_init, &ev_rdzv_id,
+						    &rdzv_req);
+
+			/* If the previous cxip_ux_send() returns FI_SUCCESS,
+			 * a matching rdzv mrecv req will always exist.
+			 */
+			assert(ret == FI_SUCCESS);
 		} else {
 			rdzv_req = req;
 		}
@@ -3511,7 +3607,7 @@ static int cxip_recv_sw_matched(struct cxip_req *req,
 		/* Rendezvous event will not happen. So ack rendezvous event
 		 * now.
 		 */
-		rdzv_recv_req_event(rdzv_req);
+		rdzv_recv_req_event(rdzv_req, ux_send->put_ev.hdr.event_type);
 
 		cxip_recv_req_set_rget_info(rdzv_req);
 
