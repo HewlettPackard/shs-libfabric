@@ -838,9 +838,15 @@ static void ofi_hook_fini(void)
 		ofi_free_string_array(hooks);
 }
 
+static void ofi_child_atfork_handler(void)
+{
+	ofi_memhooks_atfork_handler();
+}
+
 void fi_ini(void)
 {
 	char *param_val = NULL;
+	int ret;
 
 	pthread_mutex_lock(&common_locks.ini_lock);
 
