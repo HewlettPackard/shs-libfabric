@@ -139,14 +139,13 @@ Test(tagged, zbr)
 	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
 }
 
-/* Test basic rendezvous send */
-Test(tagged, rdzv)
+static void simple_rdzv(bool check_invalid_length)
 {
 	int i, ret;
 	uint8_t *recv_buf,
 		*send_buf;
-	int recv_len = 4096;
-	int send_len = 4096;
+	int recv_len = 8192;
+	int send_len = 8192;
 	struct fi_cq_tagged_entry tx_cqe,
 				  rx_cqe;
 	int err = 0;
@@ -167,7 +166,7 @@ Test(tagged, rdzv)
 		       0, NULL);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_trecv failed %d", ret);
 
-	/* Send 64 bytes to self */
+	/* Send 8192 bytes to self */
 	ret = fi_tsend(cxit_ep, send_buf, send_len, NULL, cxit_ep_fi_addr, 0,
 		       NULL);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_tsend failed %d", ret);
@@ -196,14 +195,93 @@ Test(tagged, rdzv)
 	}
 	cr_assert_eq(err, 0, "Data errors seen\n");
 
-	/* Try invalid lengths */
-	ret = fi_tsend(cxit_ep, send_buf, cxit_fi->ep_attr->max_msg_size+1,
-		       NULL, cxit_ep_fi_addr, 0, NULL);
-	cr_assert_eq(ret, -FI_EMSGSIZE, "fi_tsend failed %d", ret);
+	if (check_invalid_length) {
+		ret = fi_tsend(cxit_ep, send_buf,
+			       cxit_fi->ep_attr->max_msg_size+1,
+			       NULL, cxit_ep_fi_addr, 0, NULL);
+		cr_assert_eq(ret, -FI_EMSGSIZE, "fi_tsend failed %d", ret);
+	}
 
 	free(send_buf);
 	free(recv_buf);
 }
+
+/* Test basic rendezvous send */
+Test(tagged, rdzv)
+{
+	simple_rdzv(true);
+}
+
+/* Verify unrestricted non-eager rendezvous get is used if requested */
+Test(tagged, sw_read_rdzv)
+{
+	char *rdzv_proto;
+	uint64_t end_pkt_cnt;
+	uint64_t start_pkt_cnt;
+	int ret;
+
+	/* If not testing sw_read_rdzv protocol skip */
+	rdzv_proto = getenv("FI_CXI_RDZV_PROTO");
+	if (!rdzv_proto || strcmp(rdzv_proto, "sw_read_rdzv")) {
+		cr_assert(1);
+		return;
+	}
+
+	ret = cxit_dom_read_cntr(C_CNTR_IXE_RX_PTL_RESTRICTED_PKT,
+				 &start_pkt_cnt, NULL, true);
+	cr_assert_eq(ret, FI_SUCCESS, "cntr_read failed: %d\n", ret);
+
+	simple_rdzv(false);
+
+	ret = cxit_dom_read_cntr(C_CNTR_IXE_RX_PTL_RESTRICTED_PKT,
+				 &end_pkt_cnt, NULL, true);
+	cr_assert_eq(ret, FI_SUCCESS, "cntr_read failed: %d\n", ret);
+
+	/* Some number of non-eager data restricted get packets need
+	 * have been sent.
+	 */
+	cr_assert(end_pkt_cnt > start_pkt_cnt,
+		  "Incorrect number of restricted packets");
+}
+
+#if ENABLE_DEBUG
+/* Verify fallback to hw_rdzv proto on H/W resource failure */
+Test(tagged, fail_sw_read_rdzv)
+{
+	char *rdzv_proto;
+	uint64_t end_pkt_cnt;
+	uint64_t start_pkt_cnt;
+	int ret;
+	struct cxip_ep *ep = container_of(&cxit_ep->fid,
+					  struct cxip_ep, ep.fid);
+
+	/* If not testing sw_read_rdzv protocol skip */
+	rdzv_proto = getenv("FI_CXI_RDZV_PROTO");
+	if (!rdzv_proto || strcmp(rdzv_proto, "sw_read_rdzv")) {
+		cr_assert(1);
+		return;
+	}
+
+	/* Force error on allocation of hardware resources required
+	 * by sw_read_rdzv rendezvous protocol.
+	 */
+	ep->ep_obj->txc.force_err |= CXIP_TXC_FORCE_ERR_SW_READ_PROTO_ALLOC;
+
+	ret = cxit_dom_read_cntr(C_CNTR_IXE_RX_PTL_RESTRICTED_PKT,
+				 &start_pkt_cnt, NULL, true);
+	cr_assert_eq(ret, FI_SUCCESS, "cntr_read failed: %d\n", ret);
+
+	simple_rdzv(false);
+
+	ret = cxit_dom_read_cntr(C_CNTR_IXE_RX_PTL_RESTRICTED_PKT,
+				 &end_pkt_cnt, NULL, true);
+	cr_assert_eq(ret, FI_SUCCESS, "cntr_read failed: %d\n", ret);
+
+	/* No restricted packets should have been sent */
+	cr_assert(end_pkt_cnt == start_pkt_cnt,
+		  "Incorrect number of restricted packets");
+}
+#endif /* ENABLE_DEBUG */
 
 /* Test basic send/recv w/data */
 Test(tagged, pingdata)
