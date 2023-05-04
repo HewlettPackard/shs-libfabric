@@ -312,15 +312,31 @@ static void recv_req_report(struct cxip_req *req)
 
 	if (req->recv.parent) {
 		struct cxip_req *parent = req->recv.parent;
+		bool unlinked = false;
 
 		parent->recv.mrecv_bytes += req->data_len;
 		RXC_DBG(rxc,
-			"Putting %lu mrecv bytes (req: %p consumed: %lu auto_unlinked: %u unlink_bytes: %lu addr: %#lx)\n",
+			"Putting %lu mrecv bytes (req: %p consumed: %lu auto_unlinked: %u unlink_bytes: %lu addr: %#lx ulen=%u min_free=%lu hw_offloaded=%u)\n",
 			req->data_len, parent, parent->recv.mrecv_bytes,
 			parent->recv.auto_unlinked, parent->recv.mrecv_unlink_bytes,
-			req->buf);
-		if (parent->recv.auto_unlinked &&
-		    parent->recv.mrecv_bytes == parent->recv.mrecv_unlink_bytes) {
+			req->buf, parent->recv.ulen, rxc->min_multi_recv,
+			parent->recv.hw_offloaded);
+
+		/* Handle mrecv edge case. If all unexpected headers were
+		 * onloaded, the entire mrecv buffer may be matched against the
+		 * sw_ux_list list before being offloaded to HW. Detect this
+		 * case.
+		 */
+		if (parent->recv.hw_offloaded) {
+			if (parent->recv.auto_unlinked &&
+			    parent->recv.mrecv_bytes == parent->recv.mrecv_unlink_bytes)
+				unlinked = true;
+		} else {
+			if ((parent->recv.ulen - parent->recv.mrecv_bytes) < rxc->min_multi_recv)
+				unlinked = true;
+		}
+
+		if (unlinked) {
 			RXC_DBG(rxc, "Freeing parent: %p\n", req->recv.parent);
 			cxip_recv_req_free(req->recv.parent);
 
@@ -460,6 +476,7 @@ recv_req_tgt_event(struct cxip_req *req, const union c_event *event)
 static int rdzv_mrecv_req_lookup(struct cxip_req *req,
 				 const union c_event *event,
 				 uint32_t *initiator, uint32_t *rdzv_id,
+				 bool perform_event_checks,
 				 struct cxip_req **req_out)
 {
 	struct cxip_rxc *rxc = req->recv.rxc;
@@ -533,19 +550,21 @@ static int rdzv_mrecv_req_lookup(struct cxip_req *req,
 		if (child_req->recv.rdzv_id == ev_rdzv_id &&
 		    child_req->recv.rdzv_initiator == ev_init) {
 
-			/* There is an edge case where source may reuse the
-			 * same rendezvous ID before the target has had time to
-			 * process the C_EVENT_REPLY. If this is the case, an
-			 * incorrect child_req match would occur. To prevent
-			 * this, the events seen are stored with the child_req.
-			 * If a redundant event is seen, this is a sign
-			 * C_EVENT_REPLY needs to be process. Thus, return
-			 * -FI_EAGAIN to process TX EQ.
-			 */
-			for (i = 0; i < child_req->recv.rdzv_events; i++) {
-				if (child_req->recv.rdzv_event_types[i] == event->hdr.event_type) {
-					assert(event->hdr.event_type != C_EVENT_REPLY);
-					return -FI_EAGAIN;
+			if (perform_event_checks) {
+				/* There is an edge case where source may reuse the
+				 * same rendezvous ID before the target has had time to
+				 * process the C_EVENT_REPLY. If this is the case, an
+				 * incorrect child_req match would occur. To prevent
+				 * this, the events seen are stored with the child_req.
+				 * If a redundant event is seen, this is a sign
+				 * C_EVENT_REPLY needs to be process. Thus, return
+				 * -FI_EAGAIN to process TX EQ.
+				 */
+				for (i = 0; i < child_req->recv.rdzv_events; i++) {
+					if (child_req->recv.rdzv_event_types[i] == event->hdr.event_type) {
+						assert(event->hdr.event_type != C_EVENT_REPLY);
+						return -FI_EAGAIN;
+					}
 				}
 			}
 
@@ -611,7 +630,7 @@ rdzv_mrecv_req_event(struct cxip_req *mrecv_req, const union c_event *event)
 	       event->hdr.event_type == C_EVENT_RENDEZVOUS);
 
 	ret = rdzv_mrecv_req_lookup(mrecv_req, event, &ev_init, &ev_rdzv_id,
-				    &req);
+				    true, &req);
 	switch (ret) {
 	case -FI_EAGAIN:
 		return NULL;
@@ -3590,11 +3609,18 @@ static int cxip_recv_sw_matched(struct cxip_req *req,
 
 		/* If multi-recv, a child request was created from
 		 * cxip_ux_send(). Need to lookup this request.
+		 *
+		 * NOTE: Since the same event will be used, the evenet checks
+		 * must be NOT be performed. The event checks are only needed
+		 * when hardware is generating put and put overflow events for
+		 * an mrecv buffer. If we have reached here, we know a put
+		 * overflow event will never occur since the mrecv buffer has
+		 * not been offloaded to hardware.
 		 */
 		if (req->recv.multi_recv) {
 			ret = rdzv_mrecv_req_lookup(req, &ux_send->put_ev,
 						    &ev_init, &ev_rdzv_id,
-						    &rdzv_req);
+						    false, &rdzv_req);
 
 			/* If the previous cxip_ux_send() returns FI_SUCCESS,
 			 * a matching rdzv mrecv req will always exist.
@@ -3939,6 +3965,8 @@ static ssize_t _cxip_recv_req(struct cxip_req *req, bool restart_seq)
 		recv_iova = CXI_VA_TO_IOVA(recv_md->md,
 					   (uint64_t)req->recv.recv_buf +
 					   req->recv.start_offset);
+
+	req->recv.hw_offloaded = true;
 
 	/* Issue Append command */
 	ret = cxip_pte_append(rxc->rx_pte, recv_iova,
