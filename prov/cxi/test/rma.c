@@ -17,6 +17,112 @@
 TestSuite(rma, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
 	  .timeout = CXIT_DEFAULT_TIMEOUT);
 
+Test(rma, zero_byte_writev)
+{
+	int ret;
+	struct mem_region mem_window;
+	uint64_t key_val = RMA_WIN_KEY;
+	struct fi_cq_tagged_entry cqe;
+
+	mr_create(0, FI_REMOTE_WRITE | FI_REMOTE_READ, 0, &key_val,
+		  &mem_window);
+
+	ret = fi_writev(cxit_ep, NULL, NULL, 0, cxit_ep_fi_addr, 0, key_val,
+			NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_writev failed: %d", ret);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, 1, "fi_cq_read failed %d", ret);
+
+	validate_tx_event(&cqe, FI_RMA | FI_WRITE, NULL);
+
+	mr_destroy(&mem_window);
+}
+
+Test(rma, zero_byte_writemsg)
+{
+	int ret;
+	struct mem_region mem_window;
+	uint64_t key_val = RMA_WIN_KEY;
+	struct fi_cq_tagged_entry cqe;
+	struct fi_msg_rma msg = {};
+	struct fi_rma_iov rma[1] = {};
+
+	mr_create(0, FI_REMOTE_WRITE | FI_REMOTE_READ, 0, &key_val,
+		  &mem_window);
+
+	rma[0].key = key_val;
+
+	msg.rma_iov = rma;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+
+	ret = fi_writemsg(cxit_ep, &msg, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_writemsg failed: %d", ret);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, 1, "fi_cq_read failed %d", ret);
+
+	validate_tx_event(&cqe, FI_RMA | FI_WRITE, NULL);
+
+	mr_destroy(&mem_window);
+}
+
+Test(rma, zero_byte_readv)
+{
+	int ret;
+	struct mem_region mem_window;
+	uint64_t key_val = RMA_WIN_KEY;
+	struct fi_cq_tagged_entry cqe;
+
+	mr_create(0, FI_REMOTE_WRITE | FI_REMOTE_READ, 0, &key_val,
+		  &mem_window);
+
+	ret = fi_readv(cxit_ep, NULL, NULL, 0, cxit_ep_fi_addr, 0, key_val,
+		       NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_readv failed: %d", ret);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, 1, "fi_cq_read failed %d", ret);
+
+	validate_tx_event(&cqe, FI_RMA | FI_READ, NULL);
+
+	mr_destroy(&mem_window);
+}
+
+Test(rma, zero_byte_readmsg)
+{
+	int ret;
+	struct mem_region mem_window;
+	uint64_t key_val = RMA_WIN_KEY;
+	struct fi_cq_tagged_entry cqe;
+	struct fi_msg_rma msg = {};
+	struct fi_rma_iov rma[1] = {};
+
+	mr_create(0, FI_REMOTE_WRITE | FI_REMOTE_READ, 0, &key_val,
+		  &mem_window);
+
+	rma[0].key = key_val;
+
+	msg.rma_iov = rma;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+
+	ret = fi_readmsg(cxit_ep, &msg, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_readmsg failed: %d", ret);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, 1, "fi_cq_read failed %d", ret);
+
+	validate_tx_event(&cqe, FI_RMA | FI_READ, NULL);
+
+	mr_destroy(&mem_window);
+}
+
 /* Test fi_write simple case. Test IDC sizes to multi-packe sizes. */
 Test(rma, simple_write)
 {

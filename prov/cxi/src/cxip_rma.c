@@ -768,15 +768,28 @@ static ssize_t cxip_rma_writev(struct fid_ep *fid_ep, const struct iovec *iov,
 			       uint64_t addr, uint64_t key, void *context)
 {
 	struct cxip_ep *ep = container_of(fid_ep, struct cxip_ep, ep);
+	size_t len;
+	const void *buf;
+	void *mr_desc;
 
-	if (!iov || count != 1)
+	if (count == 0) {
+		len = 0;
+		buf = NULL;
+		mr_desc = NULL;
+	} else if (iov && count == 1) {
+		len = iov[0].iov_len;
+		buf = iov[0].iov_base;
+		mr_desc = desc ? desc[0] : NULL;
+	} else {
+		TXC_WARN(&ep->ep_obj->txc, "Invalid IOV\n");
 		return -FI_EINVAL;
+	}
 
-	return cxip_rma_common(FI_OP_WRITE, &ep->ep_obj->txc, iov[0].iov_base,
-			       iov[0].iov_len, desc ? desc[0] : NULL, dest_addr,
-			       addr, key, 0, ep->tx_attr.op_flags,
-			       ep->tx_attr.tclass, ep->tx_attr.msg_order,
-			       context, false, 0, NULL, NULL);
+	return cxip_rma_common(FI_OP_WRITE, &ep->ep_obj->txc, buf, len,
+			       mr_desc, dest_addr, addr, key, 0,
+			       ep->tx_attr.op_flags, ep->tx_attr.tclass,
+			       ep->tx_attr.msg_order, context, false, 0, NULL,
+			       NULL);
 }
 
 static ssize_t cxip_rma_writemsg(struct fid_ep *fid_ep,
@@ -784,10 +797,32 @@ static ssize_t cxip_rma_writemsg(struct fid_ep *fid_ep,
 {
 	struct cxip_ep *ep = container_of(fid_ep, struct cxip_ep, ep);
 	struct cxip_txc *txc = &ep->ep_obj->txc;
+	size_t len;
+	const void *buf;
+	void *mr_desc;
 
-	if (!msg || !msg->msg_iov || !msg->rma_iov ||
-	    msg->iov_count != 1 || msg->rma_iov_count != 1)
+	if (!msg) {
+		TXC_WARN(txc, "NULL msg not supported\n");
 		return -FI_EINVAL;
+	}
+
+	if (msg->rma_iov_count != 1) {
+		TXC_WARN(txc, "Invalid RMA iov\n");
+		return -FI_EINVAL;
+	}
+
+	if (msg->iov_count == 0) {
+		len = 0;
+		buf = NULL;
+		mr_desc = NULL;
+	} else if (msg->msg_iov && msg->iov_count == 1) {
+		len = msg->msg_iov[0].iov_len;
+		buf = msg->msg_iov[0].iov_base;
+		mr_desc = msg->desc ? msg->desc[0] : NULL;
+	} else {
+		TXC_WARN(&ep->ep_obj->txc, "Invalid IOV\n");
+		return -FI_EINVAL;
+	}
 
 	if (flags & ~(CXIP_WRITEMSG_ALLOWED_FLAGS | FI_CXI_HRP |
 		      FI_CXI_WEAK_FENCE))
@@ -802,9 +837,7 @@ static ssize_t cxip_rma_writemsg(struct fid_ep *fid_ep,
 	if (!txc->selective_completion)
 		flags |= FI_COMPLETION;
 
-	return cxip_rma_common(FI_OP_WRITE, txc, msg->msg_iov[0].iov_base,
-			       msg->msg_iov[0].iov_len,
-			       msg->desc ? msg->desc[0] : NULL, msg->addr,
+	return cxip_rma_common(FI_OP_WRITE, txc, buf, len, mr_desc, msg->addr,
 			       msg->rma_iov[0].addr, msg->rma_iov[0].key,
 			       msg->data, flags, ep->tx_attr.tclass,
 			       ep->tx_attr.msg_order, msg->context, false, 0,
@@ -839,13 +872,25 @@ static ssize_t cxip_rma_readv(struct fid_ep *fid_ep, const struct iovec *iov,
 			      uint64_t addr, uint64_t key, void *context)
 {
 	struct cxip_ep *ep = container_of(fid_ep, struct cxip_ep, ep);
+	size_t len;
+	const void *buf;
+	void *mr_desc;
 
-	if (!iov || count != 1)
+	if (count == 0) {
+		len = 0;
+		buf = NULL;
+		mr_desc = NULL;
+	} else if (iov && count == 1) {
+		len = iov[0].iov_len;
+		buf = iov[0].iov_base;
+		mr_desc = desc ? desc[0] : NULL;
+	} else {
+		TXC_WARN(&ep->ep_obj->txc, "Invalid IOV\n");
 		return -FI_EINVAL;
+	}
 
-	return cxip_rma_common(FI_OP_READ, &ep->ep_obj->txc, iov[0].iov_base,
-			       iov[0].iov_len, desc ? desc[0] : NULL, src_addr,
-			       addr, key, 0, ep->tx_attr.op_flags,
+	return cxip_rma_common(FI_OP_READ, &ep->ep_obj->txc, buf, len, mr_desc,
+			       src_addr, addr, key, 0, ep->tx_attr.op_flags,
 			       ep->tx_attr.tclass, ep->tx_attr.msg_order,
 			       context, false, 0, NULL, NULL);
 }
@@ -855,10 +900,32 @@ static ssize_t cxip_rma_readmsg(struct fid_ep *fid_ep,
 {
 	struct cxip_ep *ep = container_of(fid_ep, struct cxip_ep, ep);
 	struct cxip_txc *txc = &ep->ep_obj->txc;
+	size_t len;
+	const void *buf;
+	void *mr_desc;
 
-	if (!msg || !msg->msg_iov || !msg->rma_iov ||
-	    msg->iov_count != 1 || msg->rma_iov_count != 1)
+	if (!msg) {
+		TXC_WARN(txc, "NULL msg not supported\n");
 		return -FI_EINVAL;
+	}
+
+	if (msg->rma_iov_count != 1) {
+		TXC_WARN(txc, "Invalid RMA iov\n");
+		return -FI_EINVAL;
+	}
+
+	if (msg->iov_count == 0) {
+		len = 0;
+		buf = NULL;
+		mr_desc = NULL;
+	} else if (msg->msg_iov && msg->iov_count == 1) {
+		len = msg->msg_iov[0].iov_len;
+		buf = msg->msg_iov[0].iov_base;
+		mr_desc = msg->desc ? msg->desc[0] : NULL;
+	} else {
+		TXC_WARN(&ep->ep_obj->txc, "Invalid IOV\n");
+		return -FI_EINVAL;
+	}
 
 	if (flags & ~CXIP_READMSG_ALLOWED_FLAGS)
 		return -FI_EBADFLAGS;
@@ -872,9 +939,7 @@ static ssize_t cxip_rma_readmsg(struct fid_ep *fid_ep,
 	if (!txc->selective_completion)
 		flags |= FI_COMPLETION;
 
-	return cxip_rma_common(FI_OP_READ, txc, msg->msg_iov[0].iov_base,
-			       msg->msg_iov[0].iov_len,
-			       msg->desc ? msg->desc[0] : NULL, msg->addr,
+	return cxip_rma_common(FI_OP_READ, txc, buf, len, mr_desc, msg->addr,
 			       msg->rma_iov[0].addr, msg->rma_iov[0].key,
 			       msg->data, flags, ep->tx_attr.tclass,
 			       ep->tx_attr.msg_order, msg->context, false, 0,

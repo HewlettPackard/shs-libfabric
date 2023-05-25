@@ -244,6 +244,56 @@ Test(tagged, sw_read_rdzv)
 		  "Incorrect number of restricted packets");
 }
 
+Test(tagged, zero_byte_tsend_trecv_iov)
+{
+	int ret;
+	struct fi_cq_tagged_entry cqe;
+
+	ret = fi_trecvv(cxit_ep, NULL, NULL, 0, cxit_ep_fi_addr, 0, 0, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_trecvv failed: %d", ret);
+
+	ret = fi_tsendv(cxit_ep, NULL, NULL, 0, cxit_ep_fi_addr, 0, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_tsendv failed: %d", ret);
+
+	do {
+		ret = fi_cq_read(cxit_rx_cq, &cqe, 1);
+	} while (ret == -FI_EAGAIN);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+
+	do {
+		ret = fi_cq_read(cxit_tx_cq, &cqe, 1);
+	} while (ret == -FI_EAGAIN);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+}
+
+Test(tagged, zero_byte_tsend_trecv_msg)
+{
+	int ret;
+	struct fi_cq_tagged_entry cqe;
+	struct fi_msg_tagged rmsg = {};
+	struct fi_msg_tagged smsg = {};
+
+	rmsg.addr = cxit_ep_fi_addr;
+
+	ret = fi_trecvmsg(cxit_ep, &rmsg, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_trecvmsg failed: %d", ret);
+
+	smsg.addr = cxit_ep_fi_addr;
+
+	ret = fi_tsendmsg(cxit_ep, &smsg, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_tsendmsg failed: %d", ret);
+
+	do {
+		ret = fi_cq_read(cxit_rx_cq, &cqe, 1);
+	} while (ret == -FI_EAGAIN);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+
+	do {
+		ret = fi_cq_read(cxit_tx_cq, &cqe, 1);
+	} while (ret == -FI_EAGAIN);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+}
+
 #if ENABLE_DEBUG
 /* Verify fallback to hw_rdzv proto on H/W resource failure */
 Test(tagged, fail_sw_read_rdzv)

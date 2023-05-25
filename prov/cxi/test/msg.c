@@ -1921,3 +1921,53 @@ Test(msg, fc_no_eq_space_expected_multi_recv_onload_ules, .timeout = 10)
 {
 	test_fc_multi_recv(1, false);
 }
+
+Test(msg, zero_byte_send_recv_iov)
+{
+	int ret;
+	struct fi_cq_tagged_entry cqe;
+
+	ret = fi_recvv(cxit_ep, NULL, NULL, 0, cxit_ep_fi_addr, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_recvv failed: %d", ret);
+
+	ret = fi_sendv(cxit_ep, NULL, NULL, 0, cxit_ep_fi_addr, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_sendv failed: %d", ret);
+
+	do {
+		ret = fi_cq_read(cxit_rx_cq, &cqe, 1);
+	} while (ret == -FI_EAGAIN);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+
+	do {
+		ret = fi_cq_read(cxit_tx_cq, &cqe, 1);
+	} while (ret == -FI_EAGAIN);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+}
+
+Test(msg, zero_byte_send_recv_msg)
+{
+	int ret;
+	struct fi_cq_tagged_entry cqe;
+	struct fi_msg rmsg = {};
+	struct fi_msg smsg = {};
+
+	rmsg.addr = cxit_ep_fi_addr;
+
+	ret = fi_recvmsg(cxit_ep, &rmsg, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_recvmsg failed: %d", ret);
+
+	smsg.addr = cxit_ep_fi_addr;
+
+	ret = fi_sendmsg(cxit_ep, &smsg, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_sendmsg failed: %d", ret);
+
+	do {
+		ret = fi_cq_read(cxit_rx_cq, &cqe, 1);
+	} while (ret == -FI_EAGAIN);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+
+	do {
+		ret = fi_cq_read(cxit_tx_cq, &cqe, 1);
+	} while (ret == -FI_EAGAIN);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+}
