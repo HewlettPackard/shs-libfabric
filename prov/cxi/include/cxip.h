@@ -2361,7 +2361,7 @@ struct cxip_coll_reduction {
 struct cxip_coll_mc {
 	struct fid_mc mc_fid;
 	struct cxip_ep_obj *ep_obj;		// Associated endpoint
-	struct cxip_av_set *av_set;		// associated AV set
+	struct cxip_av_set *av_set_obj;		// associated AV set
 	struct cxip_zbcoll_obj *zb;		// zb object for zbcol
 	struct cxip_coll_pte *coll_pte;		// collective PTE
 	struct timespec timeout;		// state machine timeout

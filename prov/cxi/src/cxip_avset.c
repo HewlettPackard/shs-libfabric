@@ -180,45 +180,45 @@ int cxip_av_set_diff(struct fid_av_set *dst, const struct fid_av_set *src)
 int cxip_av_set_insert(struct fid_av_set *set, fi_addr_t addr)
 {
 	/* Must append to end */
-	struct cxip_av_set *av_set;
+	struct cxip_av_set *av_set_obj;
 	int i;
 
-	av_set = container_of(set, struct cxip_av_set, av_set_fid);
+	av_set_obj = container_of(set, struct cxip_av_set, av_set_fid);
 
-	if (av_set->mc_obj)
+	if (av_set_obj->mc_obj)
 		return -FI_EPERM;
 
 	/* Do not insert duplicates */
-	for (i = 0; i < av_set->fi_addr_cnt; i++) {
-		if (av_set->fi_addr_ary[i] == addr)
+	for (i = 0; i < av_set_obj->fi_addr_cnt; i++) {
+		if (av_set_obj->fi_addr_ary[i] == addr)
 			return -FI_EINVAL;
 	}
 	/* Append new value */
-	av_set->fi_addr_ary[av_set->fi_addr_cnt++] = addr;
+	av_set_obj->fi_addr_ary[av_set_obj->fi_addr_cnt++] = addr;
 	return FI_SUCCESS;
 }
 
 int cxip_av_set_remove(struct fid_av_set *set, fi_addr_t addr)
 {
 	/* Must preserve ordering */
-	struct cxip_av_set *av_set;
+	struct cxip_av_set *av_set_obj;
 	int i;
 
-	av_set = container_of(set, struct cxip_av_set, av_set_fid);
+	av_set_obj = container_of(set, struct cxip_av_set, av_set_fid);
 
-	if (av_set->mc_obj)
+	if (av_set_obj->mc_obj)
 		return -FI_EPERM;
 
-	for (i = 0; i < av_set->fi_addr_cnt; i++) {
-		if (av_set->fi_addr_ary[i] == addr)
+	for (i = 0; i < av_set_obj->fi_addr_cnt; i++) {
+		if (av_set_obj->fi_addr_ary[i] == addr)
 			break;
 	}
-	if (i == av_set->fi_addr_cnt)
+	if (i == av_set_obj->fi_addr_cnt)
 		return -FI_EINVAL;
 
-	for (i++; i < av_set->fi_addr_cnt; i++)
-		av_set->fi_addr_ary[i-1] = av_set->fi_addr_ary[i];
-	av_set->fi_addr_cnt--;
+	for (i++; i < av_set_obj->fi_addr_cnt; i++)
+		av_set_obj->fi_addr_ary[i-1] = av_set_obj->fi_addr_ary[i];
+	av_set_obj->fi_addr_cnt--;
 	return FI_SUCCESS;
 }
 
