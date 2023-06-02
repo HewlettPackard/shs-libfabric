@@ -59,7 +59,7 @@ else
     ROCR_RPMS="hsa-rocr-devel"
 fi
 
-if [[ ${TARGET_OS} == sle15_sp4* ]]; then
+if [[ ${TARGET_OS} == sle15_sp4* || ${TARGET_OS} == sle15_sp5* ]]; then
     with_ze=1
     ZE_RPMS="level-zero-devel"
 else
@@ -113,13 +113,18 @@ elif command -v zypper > /dev/null; then
                     ;;
         csm_1_6_*)      CUDA_RPMS="nvhpc-2023"
                     ;;
+        cos_2_6_*)      CUDA_RPMS="nvhpc-2023"
+                    ;;
+        sle15_sp5_*)    CUDA_RPMS="nvhpc-2023"
+                    ;;
         *)              CUDA_RPMS="nvhpc-2023"
                     ;;
     esac
 
 
     if [[ ${OBS_TARGET_OS} == cos* ]]; then
-        GDRCOPY_RPMS="gdrcopy-devel"
+        GDRCOPY_RPMS="gdrcopy"
+        GDRCOPY_DEVEL="gdrcopy-devel"
 
         case ${COS_BRANCH} in
             release/*)
@@ -160,6 +165,15 @@ elif command -v zypper > /dev/null; then
 
     zypper refresh
     zypper --non-interactive --no-gpg-checks install $RPMS $GDRCOPY_RPMS $CUDA_RPMS $ROCR_RPMS $ZE_RPMS
+
+    # Force installation of the gdrcopy-devel version that matches the gdrcopy
+    # that was installed. Workaround for DST-11466
+    if [ -n "${GDRCOPY_DEVEL}" ]; then
+        GDRCOPY_VERSION=$(rpm -q gdrcopy --queryformat '%{VERSION}-%{RELEASE}')
+        zypper --non-interactive --no-gpg-checks install \
+            ${GDRCOPY_DEVEL}-${GDRCOPY_VERSION}
+    fi
+
 else
     "Unsupported package manager or package manager not found -- installing nothing"
 fi

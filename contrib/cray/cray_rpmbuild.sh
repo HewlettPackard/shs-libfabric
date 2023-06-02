@@ -25,7 +25,7 @@ else
     GDRCOPY_CONFIG=""
 fi
 
-if [[ ${TARGET_OS} == sle15_sp4* ]]; then
+if [[ ${TARGET_OS} == sle15_sp4* || ${TARGET_OS} == sle15_sp5*  ]]; then
     ZE_CONFIG="-c --with-ze=/usr -c --enable-ze-dlopen"
 else
     ZE_CONFIG=""
