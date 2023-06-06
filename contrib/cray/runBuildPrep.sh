@@ -59,7 +59,8 @@ else
     ROCR_RPMS="hsa-rocr-devel"
 fi
 
-if [[ ${TARGET_OS} == sle15_sp4* || ${TARGET_OS} == sle15_sp5* ]]; then
+if [[ ( ${TARGET_OS} == sle15_sp4* || ${TARGET_OS} == sle15_sp5* ) \
+        && ${TARGET_ARCH} == x86_64 ]]; then
     with_ze=1
     ZE_RPMS="level-zero-devel"
 else
@@ -79,7 +80,7 @@ if command -v yum > /dev/null; then
         with_rocm=1
         with_cuda=1
         yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/centos8/5.2.3/main
-        yum-config-manager --add-repo=${ARTI_URL}/radeon-amdgpu-remote/22.20.3/${OS_TYPE}/${OS_VERSION}/main/x86_64/
+        yum-config-manager --add-repo=${ARTI_URL}/radeon-amdgpu-remote/22.20.3/${OS_TYPE}/${OS_VERSION}/main/${TARGET_ARCH}/
         yum-config-manager --add-repo=${ARTI_URL}/mirror-nvidia/
         yum-config-manager --add-repo=${ARTI_URL}/pe-internal-rpm-stable-local/nvidia-hpc-sdk/rhel8/
         RPMS+=" rocm-dev hip-devel nvhpc-2022"
@@ -88,7 +89,10 @@ if command -v yum > /dev/null; then
     yum install -y $RPMS
 elif command -v zypper > /dev/null; then
     with_cuda=1
-    with_rocm=1
+
+    if [[ ${TARGET_ARCH} == x86_64 ]]; then
+        with_rocm=1
+    fi
 
     case "${OBS_TARGET_OS}" in
         cos_2_2_*)      CUDA_RPMS="nvhpc-2021"
@@ -146,29 +150,42 @@ elif command -v zypper > /dev/null; then
          ${ARTI_URL}/${PRODUCT}-${ARTI_LOCATION}/${ARTI_BRANCH}/${OBS_TARGET_OS}/ \
          ${PRODUCT}-${ARTI_LOCATION}
 
-    zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
-        --priority 20 --name=cuda \
-        ${ARTI_URL}/cos-internal-third-party-generic-local/nvidia_hpc_sdk/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
-        cuda
+    if [ $with_cuda -eq 1 ]; then
+        zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+            --priority 20 --name=cuda \
+            ${ARTI_URL}/cos-internal-third-party-generic-local/nvidia_hpc_sdk/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
+            cuda
 
-    zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
-        --priority 20 --name=rocm \
-        ${ARTI_URL}/cos-internal-third-party-generic-local/rocm/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
-        rocm
+        RPMS+=" ${CUDA_RPMS} "
+    fi
+
+    if [ $with_rocm -eq 1 ]; then
+        zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+            --priority 20 --name=rocm \
+            ${ARTI_URL}/cos-internal-third-party-generic-local/rocm/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
+            rocm
+
+        RPMS+=" ${ROCR_RPMS} "
+    fi
 
     if [[ $with_ze -eq 1 ]]; then
         zypper --verbose --non-interactive  addrepo --no-gpgcheck --check \
-	--priority 20 --name=ze \
-	${ARTI_URL}/cos-internal-third-party-generic-local/intel_gpu/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
-	ze
+            --priority 20 --name=ze \
+            ${ARTI_URL}/cos-internal-third-party-generic-local/intel_gpu/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
+            ze
+
+        RPMS+=" ${ZE_RPMS} "
     fi
 
     zypper refresh
-    zypper --non-interactive --no-gpg-checks install $RPMS $GDRCOPY_RPMS $CUDA_RPMS $ROCR_RPMS $ZE_RPMS
+
+    zypper --non-interactive --no-gpg-checks install $RPMS
 
     # Force installation of the gdrcopy-devel version that matches the gdrcopy
     # that was installed. Workaround for DST-11466
     if [ -n "${GDRCOPY_DEVEL}" ]; then
+        zypper --non-interactive --no-gpg-checks install \
+            ${GDRCOPY_RPMS}
         GDRCOPY_VERSION=$(rpm -q gdrcopy --queryformat '%{VERSION}-%{RELEASE}')
         zypper --non-interactive --no-gpg-checks install \
             ${GDRCOPY_DEVEL}-${GDRCOPY_VERSION}
@@ -181,9 +198,9 @@ fi
 set -x
 
 if [[ $with_cuda -eq 1 ]]; then
-    nvhpc_sdk_versions=($(ls -1 /opt/nvidia/hpc_sdk/Linux_x86_64/ | sort -rn))
+    nvhpc_sdk_versions=($(ls -1 /opt/nvidia/hpc_sdk/Linux_${TARGET_ARCH}/ | sort -rn))
     nvhpc_sdk_version=${nvhpc_sdk_versions[0]}
-    nvhpc_cuda_path=/opt/nvidia/hpc_sdk/Linux_x86_64/$nvhpc_sdk_version/cuda
+    nvhpc_cuda_path=/opt/nvidia/hpc_sdk/Linux_${TARGET_ARCH}/$nvhpc_sdk_version/cuda
     if [[ $nvhpc_sdk_version == "" ]]; then
         echo "CUDA required but not found."
         exit 1
