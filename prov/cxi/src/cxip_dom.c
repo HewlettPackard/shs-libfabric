@@ -1213,7 +1213,7 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 
 	ret = ofi_domain_init(&fab->util_fabric.fabric_fid, info,
 			      &cxi_domain->util_domain, context,
-			      OFI_DOMAIN_SPINLOCK);
+			      OFI_LOCK_SPINLOCK);
 	if (ret)
 		goto free_dom;
 

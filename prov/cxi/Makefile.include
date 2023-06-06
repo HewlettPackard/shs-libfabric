@@ -52,7 +52,7 @@ _cxi_libs = \
 	-lcurl -ljson-c -lm
 
 # Stand-alone srun tests for hardware testing environment
-noinst_PROGRAMS = prov/cxi/test/multinode/test_frmwk
+noinst_PROGRAMS += prov/cxi/test/multinode/test_frmwk
 prov_cxi_test_multinode_test_frmwk_SOURCES = \
 	prov/cxi/test/multinode/multinode_frmwk.h \
 	prov/cxi/test/multinode/multinode_frmwk.c \

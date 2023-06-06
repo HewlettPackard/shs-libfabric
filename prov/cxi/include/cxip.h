@@ -158,7 +158,7 @@
 #define CXIP_MINOR_VERSION		1
 #define CXIP_PROV_VERSION		FI_VERSION(CXIP_MAJOR_VERSION, \
 						   CXIP_MINOR_VERSION)
-#define CXIP_FI_VERSION			FI_VERSION(1, 15)
+#define CXIP_FI_VERSION			FI_VERSION(1, 18)
 #define CXIP_WIRE_PROTO_VERSION		1
 
 #define	CXIP_COLL_MAX_CONCUR		8
@@ -2875,7 +2875,9 @@ static inline
 struct cxip_ctrl_req *cxip_domain_ctrl_id_at(struct cxip_domain *dom,
 					     int buffer_id)
 {
-	return ofi_idx_at(&dom->req_ids, buffer_id);
+	if (ofi_idx_is_valid(&dom->req_ids, buffer_id))
+		return ofi_idx_at(&dom->req_ids, buffer_id);
+	return NULL;
 }
 
 static inline uint32_t cxip_mac_to_nic(struct ether_addr *mac)

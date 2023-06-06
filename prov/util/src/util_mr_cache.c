@@ -339,6 +339,23 @@ free:
 	return ret;
 }
 
+static bool util_mr_entry_valid(struct ofi_mem_monitor *monitor,
+				struct ofi_mr_entry *entry)
+{
+	bool valid;
+
+	entry->use_cnt++;
+
+	pthread_mutex_unlock(&mm_lock);
+	valid = monitor->valid(monitor, (const void *)entry->info.iov.iov_base,
+			       entry);
+	pthread_mutex_lock(&mm_lock);
+
+	entry->use_cnt--;
+
+	return valid;
+}
+
 int ofi_mr_cache_search(struct ofi_mr_cache *cache, const struct ofi_mr_info *info,
 			struct ofi_mr_entry **entry)
 {
@@ -371,7 +388,7 @@ int ofi_mr_cache_search(struct ofi_mr_cache *cache, const struct ofi_mr_info *in
 
 		if (*entry &&
 		    ofi_iov_within(&info->iov, &(*entry)->info.iov) &&
-		    ((*entry)->info.iface == attr->iface) &&
+		    ((*entry)->info.iface == info->iface) &&
 		    util_mr_entry_valid(monitor, *entry))
 			goto hit;
 
@@ -382,7 +399,7 @@ int ofi_mr_cache_search(struct ofi_mr_cache *cache, const struct ofi_mr_info *in
 		}
 		pthread_mutex_unlock(&mm_lock);
 
-		ret = util_mr_cache_create(cache, info, entry);
+		ret = util_mr_cache_create(cache, (struct ofi_mr_info *)info, entry);
 		if (ret && ret != -FI_EAGAIN) {
 			if (ofi_mr_cache_flush(cache, true))
 				ret = -FI_EAGAIN;

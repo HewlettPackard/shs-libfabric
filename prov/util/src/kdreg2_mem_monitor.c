@@ -86,15 +86,15 @@ static void kdreg2_monitor_unsubscribe(struct ofi_mem_monitor *monitor,
 }
 
 static bool kdreg2_monitor_valid(struct ofi_mem_monitor *monitor,
-				 const void *addr, size_t len,
-				 union ofi_mr_hmem_info *hmem_info)
+				 const struct ofi_mr_info *info,
+				 struct ofi_mr_entry *entry)
 {
 	struct ofi_kdreg2 *kdreg2 = container_of(monitor,
 						 struct ofi_kdreg2,
 						 monitor);
 
 	return !kdreg2_mapping_changed(kdreg2->status_data,
-				       &hmem_info->kdreg2.monitoring_params);
+				       &entry->hmem_info.kdreg2.monitoring_params);
 }
 
 static void kdreg2_evictor_cleanup(void *arg)
@@ -323,9 +323,9 @@ static void kdreg2_monitor_unsubscribe(struct ofi_mem_monitor *monitor,
 {
 }
 
-static bool kdreg2_monitor_valid(struct ofi_mem_monitor *monitor,
-				 const void *addr, size_t len,
-				 union ofi_mr_hmem_info *hmem_info)
+static bool kdreg2_monitor_valid(struct ofi_mem_monitor *notifier,
+				 const struct ofi_mr_info *info,
+				 struct ofi_mr_entry *entry)
 {
 	return false;
 }

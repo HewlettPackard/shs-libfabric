@@ -39,6 +39,7 @@
 #include "ofi_hmem.h"
 #include "ofi.h"
 #include "ofi_iov.h"
+#include "ofi_mr.h"
 
 bool ofi_hmem_disable_p2p = false;
 
@@ -132,7 +133,7 @@ struct ofi_hmem_ops hmem_ops[] = {
 		.get_handle = ofi_hmem_no_get_handle,
 		.open_handle = ofi_hmem_no_open_handle,
 		.close_handle = ofi_hmem_no_close_handle,
-		.host_register = ofi_hmem_register_noop,
+		.host_register = ofi_hmem_host_register_noop,
 		.host_unregister = ofi_hmem_host_unregister_noop,
 		.get_base_addr = ofi_hmem_system_base_addr,
 		.is_ipc_enabled = ofi_hmem_no_is_ipc_enabled,
@@ -206,11 +207,11 @@ struct ofi_hmem_ops hmem_ops[] = {
 		.async_copy_to_hmem = ofi_no_async_memcpy,
 		.async_copy_from_hmem = ofi_no_async_memcpy,
 		.async_copy_query = ofi_no_async_copy_query,
-		.is_addr_valid = ze_is_addr_valid,
+		.is_addr_valid = ze_hmem_is_addr_valid,
 		.get_handle = ze_hmem_get_handle,
 		.open_handle = ze_hmem_open_handle,
 		.close_handle = ze_hmem_close_handle,
-		.host_register = ofi_hmem_register_noop,
+		.host_register = ofi_hmem_host_register_noop,
 		.host_unregister = ofi_hmem_host_unregister_noop,
 		.get_base_addr = ze_hmem_get_base_addr,
 		.is_ipc_enabled = ze_hmem_p2p_enabled,
@@ -351,31 +352,17 @@ ofi_async_copy_hmem_iov_buf(enum fi_hmem_iface hmem_iface, uint64_t device,
 	return done;
 }
 
-static inline int ofi_copy_to_hmem(enum fi_hmem_iface iface, uint64_t device,
-                                   uint64_t handle, void *dest, const void *src,
-				   size_t size)
-{
-        return hmem_ops[iface].copy_to_hmem(device, handle, dest, src, size);
-}
-
-static inline int ofi_copy_from_hmem(enum fi_hmem_iface iface, uint64_t device,
-                                     uint64_t handle, void *dest,
-				     const void *src, size_t size)
-{
-        return hmem_ops[iface].copy_from_hmem(device, handle, dest, src, size);
-}
-
 static ssize_t ofi_copy_hmem_iov_buf(enum fi_hmem_iface hmem_iface,
 				     uint64_t device, uint64_t handle,
-                                     const struct iovec *hmem_iov,
-                                     size_t hmem_iov_count,
-                                     uint64_t hmem_iov_offset, void *buf,
-                                     size_t size, int dir)
+				     const struct iovec *hmem_iov,
+				     size_t hmem_iov_count,
+				     uint64_t hmem_iov_offset, void *buf,
+				     size_t size, int dir)
 {
-        uint64_t done = 0, len;
-        char *hmem_buf;
-        size_t i;
-        int ret;
+	uint64_t done = 0, len;
+	char *hmem_buf;
+	size_t i;
+	int ret;
 
 	for (i = 0; i < hmem_iov_count && size; i++) {
 		len = ofi_iov_bytes_to_copy(&hmem_iov[i], &size,
@@ -467,7 +454,6 @@ ssize_t ofi_copy_to_mr_iov(struct ofi_mr **mr, const struct iovec *iov,
 			       (void *) src, size, OFI_COPY_BUF_TO_IOV);
 }
 
-
 ssize_t ofi_async_copy_from_hmem_iov(void *dest, size_t size,
 			       enum fi_hmem_iface hmem_iface, uint64_t device,
 			       const struct iovec *hmem_iov,
@@ -503,9 +489,9 @@ ssize_t ofi_copy_from_hmem_iov(void *dest, size_t size,
 			       const struct iovec *hmem_iov,
 			       size_t hmem_iov_count, uint64_t hmem_iov_offset)
 {
-        return ofi_copy_hmem_iov_buf(hmem_iface, device, NO_DEV_REG_HANDLE,
+	return ofi_copy_hmem_iov_buf(hmem_iface, device, NO_DEV_REG_HANDLE,
 				     hmem_iov, hmem_iov_count, hmem_iov_offset,
-                                     dest, size, OFI_COPY_IOV_TO_BUF);
+				     dest, size, OFI_COPY_IOV_TO_BUF);
 }
 
 ssize_t ofi_copy_to_hmem_iov(enum fi_hmem_iface hmem_iface, uint64_t device,
@@ -513,9 +499,9 @@ ssize_t ofi_copy_to_hmem_iov(enum fi_hmem_iface hmem_iface, uint64_t device,
 			     size_t hmem_iov_count, uint64_t hmem_iov_offset,
 			     const void *src, size_t size)
 {
-        return ofi_copy_hmem_iov_buf(hmem_iface, device, NO_DEV_REG_HANDLE,
+	return ofi_copy_hmem_iov_buf(hmem_iface, device, NO_DEV_REG_HANDLE,
 				     hmem_iov, hmem_iov_count, hmem_iov_offset,
-                                     (void *) src, size, OFI_COPY_BUF_TO_IOV);
+				     (void *) src, size, OFI_COPY_BUF_TO_IOV);
 }
 
 ssize_t ofi_copy_from_hmem_iov_reg(void *dest, size_t size,
@@ -525,9 +511,9 @@ ssize_t ofi_copy_from_hmem_iov_reg(void *dest, size_t size,
 				   size_t hmem_iov_count,
 				   uint64_t hmem_iov_offset)
 {
-        return ofi_copy_hmem_iov_buf(hmem_iface, device, handle,
+	return ofi_copy_hmem_iov_buf(hmem_iface, device, handle,
 				     hmem_iov, hmem_iov_count, hmem_iov_offset,
-                                     dest, size, OFI_COPY_IOV_TO_BUF);
+				     dest, size, OFI_COPY_IOV_TO_BUF);
 }
 
 ssize_t ofi_copy_to_hmem_iov_reg(enum fi_hmem_iface hmem_iface, uint64_t device,
@@ -536,9 +522,9 @@ ssize_t ofi_copy_to_hmem_iov_reg(enum fi_hmem_iface hmem_iface, uint64_t device,
 				 uint64_t hmem_iov_offset, const void *src,
 				 size_t size)
 {
-        return ofi_copy_hmem_iov_buf(hmem_iface, device, handle,
+	return ofi_copy_hmem_iov_buf(hmem_iface, device, handle,
 				     hmem_iov, hmem_iov_count, hmem_iov_offset,
-                                     (void *) src, size, OFI_COPY_BUF_TO_IOV);
+				     (void *) src, size, OFI_COPY_BUF_TO_IOV);
 }
 
 int ofi_hmem_get_handle(enum fi_hmem_iface iface, void *base_addr,
@@ -567,7 +553,7 @@ int ofi_hmem_get_base_addr(enum fi_hmem_iface iface, const void *addr,
 
 bool ofi_hmem_is_initialized(enum fi_hmem_iface iface)
 {
-        return hmem_ops[iface].initialized;
+	return hmem_ops[iface].initialized;
 }
 
 void ofi_hmem_set_iface_filter(const char* iface_filter_str, bool* filter)
@@ -653,103 +639,103 @@ void ofi_hmem_init(void)
 		}
 	}
 
-        fi_param_define(NULL, "hmem_disable_p2p", FI_PARAM_BOOL,
-                        "Disable peer to peer support between device memory and"
-                        " network devices. (default: no).");
+	fi_param_define(NULL, "hmem_disable_p2p", FI_PARAM_BOOL,
+			"Disable peer to peer support between device memory and"
+			" network devices. (default: no).");
 
-        if (!fi_param_get_bool(NULL, "hmem_disable_p2p", &disable_p2p)) {
-                if (disable_p2p == 1)
-                        ofi_hmem_disable_p2p = true;
-        }
+	if (!fi_param_get_bool(NULL, "hmem_disable_p2p", &disable_p2p)) {
+		if (disable_p2p == 1)
+			ofi_hmem_disable_p2p = true;
+	}
 }
 
 void ofi_hmem_cleanup(void)
 {
-        enum fi_hmem_iface iface;
+	enum fi_hmem_iface iface;
 
-        for (iface = 0; iface < ARRAY_SIZE(hmem_ops); iface++) {
-                if (ofi_hmem_is_initialized(iface))
-                        hmem_ops[iface].cleanup();
-        }
+	for (iface = 0; iface < ARRAY_SIZE(hmem_ops); iface++) {
+		if (ofi_hmem_is_initialized(iface))
+			hmem_ops[iface].cleanup();
+	}
 }
 
 enum fi_hmem_iface ofi_get_hmem_iface(const void *addr, uint64_t *device,
-                                      uint64_t *flags)
+				      uint64_t *flags)
 {
-        int iface;
+	int iface;
 
-        /* Since a is_addr_valid function is not implemented for FI_HMEM_SYSTEM,
-         * HMEM iface is skipped. In addition, if no other HMEM ifaces claim the
-         * address as valid, it is assumed the address is FI_HMEM_SYSTEM.
-         */
-        for (iface = ARRAY_SIZE(hmem_ops) - 1; iface > FI_HMEM_SYSTEM;
-             iface--) {
+	/* Since a is_addr_valid function is not implemented for FI_HMEM_SYSTEM,
+	 * HMEM iface is skipped. In addition, if no other HMEM ifaces claim the
+	 * address as valid, it is assumed the address is FI_HMEM_SYSTEM.
+	 */
+	for (iface = ARRAY_SIZE(hmem_ops) - 1; iface > FI_HMEM_SYSTEM;
+	     iface--) {
 		if (ofi_hmem_is_initialized(iface) &&
 		    hmem_ops[iface].is_addr_valid(addr, device, flags))
-				return iface;
-        }
+			return iface;
+	}
 
-        return FI_HMEM_SYSTEM;
+	return FI_HMEM_SYSTEM;
 }
 
 int ofi_hmem_host_register(void *addr, size_t size)
 {
-        int iface, ret;
+	int iface, ret;
 
-        for (iface = 0; iface < ARRAY_SIZE(hmem_ops); iface++) {
-                if (!ofi_hmem_is_initialized(iface))
-                        continue;
+	for (iface = 0; iface < ARRAY_SIZE(hmem_ops); iface++) {
+		if (!ofi_hmem_is_initialized(iface))
+			continue;
 
 		ret = hmem_ops[iface].host_register(addr, size);
 		if (ret != FI_SUCCESS)
 			goto err;
 	}
 
-        return FI_SUCCESS;
+	return FI_SUCCESS;
 
 err:
-        FI_WARN(&core_prov, FI_LOG_CORE,
-                "Failed to register host memory with hmem iface %s: %s\n",
-                fi_tostr(&iface, FI_TYPE_HMEM_IFACE),
-                fi_strerror(-ret));
+	FI_WARN(&core_prov, FI_LOG_CORE,
+		"Failed to register host memory with hmem iface %s: %s\n",
+		fi_tostr(&iface, FI_TYPE_HMEM_IFACE),
+		fi_strerror(-ret));
 
-        for (iface--; iface >= 0; iface--) {
-                if (!ofi_hmem_is_initialized(iface))
-                        continue;
+	for (iface--; iface >= 0; iface--) {
+		if (!ofi_hmem_is_initialized(iface))
+			continue;
 
 		hmem_ops[iface].host_unregister(addr);
 	}
 
-        return ret;
+	return ret;
 }
 
 int ofi_hmem_host_unregister(void *addr)
 {
-        int iface, ret;
+	int iface, ret;
 
-        for (iface = 0; iface < ARRAY_SIZE(hmem_ops); iface++) {
-                if (!ofi_hmem_is_initialized(iface))
-                        continue;
+	for (iface = 0; iface < ARRAY_SIZE(hmem_ops); iface++) {
+		if (!ofi_hmem_is_initialized(iface))
+			continue;
 
 		ret = hmem_ops[iface].host_unregister(addr);
 		if (ret != FI_SUCCESS)
 			goto err;
 	}
 
-        return FI_SUCCESS;
+	return FI_SUCCESS;
 
 err:
-        FI_WARN(&core_prov, FI_LOG_CORE,
-                "Failed to unregister host memory with hmem iface %s: %s\n",
-                fi_tostr(&iface, FI_TYPE_HMEM_IFACE),
-                fi_strerror(-ret));
+	FI_WARN(&core_prov, FI_LOG_CORE,
+		"Failed to unregister host memory with hmem iface %s: %s\n",
+		fi_tostr(&iface, FI_TYPE_HMEM_IFACE),
+		fi_strerror(-ret));
 
-        return ret;
+	return ret;
 }
 
 bool ofi_hmem_is_ipc_enabled(enum fi_hmem_iface iface)
 {
-        return hmem_ops[iface].is_ipc_enabled();
+	return hmem_ops[iface].is_ipc_enabled();
 }
 
 size_t ofi_hmem_get_ipc_handle_size(enum fi_hmem_iface iface)

@@ -57,11 +57,10 @@ static const ze_device_mem_alloc_desc_t device_desc = {
 	.flags		= 0,
 	.ordinal	= 0,
 };
-static const ze_device_mem_alloc_desc_t host_desc = {
+static const ze_host_mem_alloc_desc_t host_desc = {
 	.stype		= ZE_STRUCTURE_TYPE_HOST_MEM_ALLOC_DESC,
 	.pNext		= NULL,
 	.flags		= 0,
-	.ordinal	= 0,
 };
 static const ze_command_queue_desc_t cq_desc = {
 	.stype		= ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC,
@@ -79,7 +78,7 @@ static const ze_command_list_desc_t cl_desc = {
 	.flags				= 0,
 };
 
-static int ze_init(void)
+static void ze_init(void)
 {
 	ze_result_t ze_ret;
 	ze_context_desc_t ze_context_desc = {};
@@ -203,15 +202,10 @@ static void ze_message_runner(void *ze_send_buf, void *ze_recv_buf,
 
 Test(ze, messaging_devMemory)
 {
-	int ret;
 	ze_result_t ze_ret;
 	void *ze_send_buf;
 	void *ze_recv_buf;
-	char *send_buf;
-	char *recv_buf;
 	size_t buf_size = 1048576;
-	struct fi_cq_tagged_entry cqe;
-	int i;
 
 	ze_init();
 
@@ -241,15 +235,10 @@ Test(ze, messaging_devMemory)
 
 Test(ze, messaging_hostMemory)
 {
-	int ret;
 	ze_result_t ze_ret;
 	void *ze_send_buf;
 	void *ze_recv_buf;
-	char *send_buf;
-	char *recv_buf;
 	size_t buf_size = 1048576;
-	struct fi_cq_tagged_entry cqe;
-	int i;
 
 	ze_init();
 

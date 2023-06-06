@@ -1836,13 +1836,13 @@ Test(ep_locking, domain)
 	cq = container_of(cxit_tx_cq, struct cxip_cq, util_cq.cq_fid);
 	cr_assert_eq(cq->ep_list_lock.lock_type, OFI_LOCK_NONE,
 		     "TX CQ EP list lock");
-	cr_assert_eq(cq->util_cq.cq_lock.lock_type, OFI_LOCK_NONE,
+	cr_assert_eq(cq->util_cq.cq_lock.lock_type, OFI_LOCK_NOOP,
 		     "TX CQ entry lock");
 
 	cq = container_of(cxit_rx_cq, struct cxip_cq, util_cq.cq_fid);
 	cr_assert_eq(cq->ep_list_lock.lock_type, OFI_LOCK_NONE,
 		     "RX CQ EP list lock");
-	cr_assert_eq(cq->util_cq.cq_lock.lock_type, OFI_LOCK_NONE,
+	cr_assert_eq(cq->util_cq.cq_lock.lock_type, OFI_LOCK_NOOP,
 		     "RX CQ entry lock");
 
 	cxit_teardown_rma();
@@ -1874,13 +1874,13 @@ Test(ep_locking, completion)
 	cq = container_of(cxit_tx_cq, struct cxip_cq, util_cq.cq_fid);
 	cr_assert_eq(cq->ep_list_lock.lock_type, OFI_LOCK_NONE,
 		     "TX CQ EP list lock");
-	cr_assert_eq(cq->util_cq.cq_lock.lock_type, OFI_LOCK_NONE,
+	cr_assert_eq(cq->util_cq.cq_lock.lock_type, OFI_LOCK_NOOP,
 		     "TX CQ entry lock");
 
 	cq = container_of(cxit_rx_cq, struct cxip_cq, util_cq.cq_fid);
 	cr_assert_eq(cq->ep_list_lock.lock_type, OFI_LOCK_NONE,
 		     "RX CQ EP list lock");
-	cr_assert_eq(cq->util_cq.cq_lock.lock_type, OFI_LOCK_NONE,
+	cr_assert_eq(cq->util_cq.cq_lock.lock_type, OFI_LOCK_NOOP,
 		     "RX CQ entry lock");
 
 	cxit_teardown_rma();

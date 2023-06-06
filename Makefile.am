@@ -101,7 +101,6 @@ common_srcs =				\
 	prov/coll/src/coll_fabric.c	\
 	prov/coll/src/coll_init.c	\
 	prov/coll/src/coll.h		\
-	prov/util/src/util_coll.c       \
 	prov/util/src/kdreg2_mem_monitor.c
 
 if MACOS

@@ -61,6 +61,7 @@ static int cxip_do_map(struct ofi_mr_cache *cache, struct ofi_mr_entry *entry)
 			}
 
 			ret = ze_hmem_get_handle(entry->info.iov.iov_base,
+						 entry->info.iov.iov_len,
 						 &ze_handle);
 			if (ret) {
 				CXIP_WARN("ze_hmem_get_handle failed: %d:%s\n",
@@ -342,16 +343,16 @@ void cxip_iomm_fini(struct cxip_domain *dom)
 		ofi_mr_cache_cleanup(&dom->iomm);
 }
 
-static int cxip_map_cache(struct cxip_domain *dom, struct fi_mr_attr *attr,
+static int cxip_map_cache(struct cxip_domain *dom, struct ofi_mr_info *info,
 			  struct cxip_md **md)
 {
 	struct ofi_mr_entry *entry;
 	int ret;
 
-	ret = ofi_mr_cache_search(&dom->iomm, attr, &entry);
+	ret = ofi_mr_cache_search(&dom->iomm, info, &entry);
 	if (ret) {
 		CXIP_WARN("Failed to acquire mapping (%p, %lu): %d\n",
-			  attr->mr_iov->iov_base, attr->mr_iov->iov_len, ret);
+ 			  info->iov.iov_base, info->iov.iov_len, ret);
 		return ret;
 	}
 
@@ -409,6 +410,7 @@ static int cxip_map_nocache(struct cxip_domain *dom, struct fi_mr_attr *attr,
 			}
 
 			ret = ze_hmem_get_handle(attr->mr_iov->iov_base,
+						 attr->mr_iov->iov_len,
 						 &ze_handle);
 			if (ret) {
 				CXIP_WARN("ze_hmem_get_handle failed: %d:%s\n",
@@ -520,6 +522,7 @@ int cxip_map(struct cxip_domain *dom, const void *buf, unsigned long len,
 		.iov_count = 1,
 		.mr_iov = &iov,
 	};
+	struct ofi_mr_info mr_info = {};
 	uint64_t hmem_flags;
 	struct ofi_mr_entry *entry;
 	bool cache = !(flags & OFI_MR_NOCACHE);
@@ -557,7 +560,10 @@ int cxip_map(struct cxip_domain *dom, const void *buf, unsigned long len,
 					     attr.iface, &iov.iov_base,
 					     &iov.iov_len);
 
-		return cxip_map_cache(dom, &attr, md);
+		mr_info.iface = attr.iface;
+		mr_info.iov = iov;
+
+		return cxip_map_cache(dom, &mr_info, md);
 	}
 
 	return cxip_map_nocache(dom, &attr, md);

@@ -397,7 +397,7 @@ struct ofi_mr_cache {
 	struct ofi_rbmap		tree;
 	struct dlist_entry		lru_list;
 	struct dlist_entry		dead_region_list;
-	pthread_mutex_t			lock;
+	pthread_mutex_t 		lock;
 
 	size_t				cached_cnt;
 	size_t				cached_size;
