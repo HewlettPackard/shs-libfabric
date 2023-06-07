@@ -468,7 +468,7 @@ void cxip_rxc_struct_init(struct cxip_rxc *rxc, const struct fi_rx_attr *attr,
 	dlist_init(&rxc->sw_pending_ux_list);
 
 	rxc->max_eager_size = cxip_env.rdzv_threshold + cxip_env.rdzv_get_min;
-	rxc->drop_count = -1;
+	rxc->drop_count = rxc->ep_obj->asic_ver < CASSINI_2_0 ? -1 : 0;
 
 	/* TODO make configurable */
 	rxc->min_multi_recv = CXIP_EP_MIN_MULTI_RECV;

@@ -2128,7 +2128,6 @@ int cxip_recv_reenable(struct cxip_rxc *rxc)
 {
 	struct cxi_pte_status pte_status = {};
 	int ret __attribute__((unused));
-	uint32_t enable_drop_count;
 
 	if (rxc->drop_count == -1) {
 		RXC_WARN(rxc, "Waiting for pending FC_NOTIFY messages\n");
@@ -2138,29 +2137,17 @@ int cxip_recv_reenable(struct cxip_rxc *rxc)
 	ret = cxil_pte_status(rxc->rx_pte->pte, &pte_status);
 	assert(!ret);
 
-	/* Software maintains an off-by-one drop count to simplify
-	 * version differences.
-	 */
-	enable_drop_count = rxc->drop_count;
-	if (rxc->ep_obj->asic_ver < CASSINI_2_0) {
+	if (rxc->drop_count != pte_status.drop_count) {
 		RXC_DBG(rxc, "Processed %d/%d drops\n",
-			enable_drop_count + 1, pte_status.drop_count + 1);
-
-	} else {
-		/* Adjust for software off-by-one */
-		enable_drop_count++;
-		RXC_DBG(rxc, "Processed %d/%d drops\n",
-			enable_drop_count, pte_status.drop_count);
+			rxc->drop_count, pte_status.drop_count);
+		return -FI_EAGAIN;
 	}
 
-	if (enable_drop_count != pte_status.drop_count)
-		return -FI_EAGAIN;
-
-	RXC_WARN(rxc, "Re-enabling PTE drop_count %d\n",
-		 enable_drop_count);
+	RXC_WARN(rxc, "Re-enabling PTE, drop_count %d\n",
+		 rxc->drop_count);
 
 	do {
-		ret = cxip_rxc_msg_enable(rxc, enable_drop_count);
+		ret = cxip_rxc_msg_enable(rxc, rxc->drop_count);
 		if (ret == -FI_EAGAIN &&
 		    rxc->new_state == RXC_ENABLED_SOFTWARE) {
 			RXC_WARN(rxc,
@@ -2272,8 +2259,8 @@ int cxip_fc_process_drops(struct cxip_ep_obj *ep_obj, uint8_t rxc_id,
 
 	dlist_insert_tail(&fc_drops->rxc_entry, &rxc->fc_drops);
 
-	RXC_DBG(rxc, "Processed drops: %d NIC: %#x TXC: %d\n",
-		drops, nic_addr, txc_id);
+	RXC_DBG(rxc, "Processed drops: %d NIC: %#x PID: %d TXC: %d\n",
+		drops, nic_addr, pid, txc_id);
 
 	rxc->drop_count += drops;
 
@@ -2388,7 +2375,7 @@ static void cxip_fc_progress_ctrl(struct cxip_rxc *rxc)
 	/* Successful transition from disabled occurred, reset
 	 * drop count.
 	 */
-	rxc->drop_count = -1;
+	rxc->drop_count = rxc->ep_obj->asic_ver < CASSINI_2_0 ? -1 : 0;
 
 	while ((ret = cxip_recv_resume(rxc)) == -FI_EAGAIN)
 		cxip_ep_tx_ctrl_progress_locked(rxc->ep_obj);
@@ -2926,7 +2913,8 @@ void cxip_recv_pte_cb(struct cxip_pte *pte, const union c_event *event)
 			 * from an hardware enabled PTE state.
 			 */
 			RXC_WARN(rxc, "SW initiated flow control\n");
-			rxc->drop_count++;
+			if (rxc->ep_obj->asic_ver < CASSINI_2_0)
+				rxc->drop_count++;
 
 			/* If running in hybrid mode, resume operation as a
 			 * software managed EP to reduce LE resource load.

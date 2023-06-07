@@ -1227,15 +1227,15 @@ int cxip_alloc_endpoint(struct cxip_domain *cxip_dom, struct fi_info *hints,
 	dlist_init(&ep_obj->mr_list);
 	ep_obj->ep_attr.tx_ctx_cnt = 1;
 	ep_obj->ep_attr.rx_ctx_cnt = 1;
+	txc->ep_obj = ep_obj;
+	rxc->ep_obj = ep_obj;
 
 	cxip_txc_struct_init(txc, &ep_obj->tx_attr, context);
 	cxip_rxc_struct_init(rxc, &ep_obj->rx_attr, context);
 
-	txc->ep_obj = ep_obj;
 	txc->domain = cxip_dom;
 	txc->hrp_war_req = txc->ep_obj->asic_ver < CASSINI_2_0;
 
-	rxc->ep_obj = ep_obj;
 	rxc->domain = cxip_dom;
 	rxc->min_multi_recv = CXIP_EP_MIN_MULTI_RECV;
 	ofi_atomic_inc32(&cxip_dom->ref);
