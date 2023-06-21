@@ -34,7 +34,7 @@ int main(int argc, char **argv)
 	size_t size = 0;
 	int i, j, ret;
 
-	frmwk_init();
+	frmwk_init(false);
 	printf("[%d|%d] initialized\n", frmwk_rank, frmwk_numranks);
 
 	ret = frmwk_gather_nics();
@@ -63,10 +63,12 @@ int main(int argc, char **argv)
 			fiaddr[i], av->table[i].nic);
 	}
 
-	cxit_trace_enable(true);
+	cxip_trace_rank = frmwk_rank;
+	cxip_trace_numranks = frmwk_numranks;
+	cxip_trace_enable(true);
 	CXIP_TRACE("Trace message test %d\n", 0);
 	CXIP_TRACE("Trace message test %d\n", 1);
-	cxit_trace_enable(false);
+	cxip_trace_enable(false);
 	CXIP_TRACE("This message should not appear\n");
 
 	frmwk_free_libfabric();

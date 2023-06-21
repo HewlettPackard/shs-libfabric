@@ -30,9 +30,9 @@
 #define _MM_GET_FLUSH_ZERO_MODE() ({0;})
 #endif
 
-/* see cxit_trace_enable() in each test framework */
 #define	TRACE		CXIP_NOTRACE
 #define	TRACE_JOIN	CXIP_NOTRACE
+#define	TRACE_DEBUG	CXIP_NOTRACE
 
 // TODO regularize usage of these
 #define CXIP_DBG(...) _CXIP_DBG(FI_LOG_EP_CTRL, __VA_ARGS__)

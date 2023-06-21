@@ -15,7 +15,6 @@
 #include "cxip_test_common.h"
 
 /* If not compiled with DEBUG=1, this is a no-op */
-/* see cxit_trace_enable() in each test framework */
 #define	TRACE CXIP_NOTRACE
 
 TestSuite(ctrl, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
@@ -217,7 +216,7 @@ Test(ctrl, zb_config)
 			   0L, NULL);
 	cr_assert(ret == num_addrs);
 	ret = cxip_zbcoll_alloc(ep_obj, num_addrs, fiaddrs, ZB_NOSIM, &zb);
-	cr_assert(ret == -FI_EINVAL, "real treeN: ret=%s\n", fi_strerror(-ret));
+	cr_assert(ret == -FI_ECONNREFUSED, "real treeN: ret=%s\n", fi_strerror(-ret));
 	cxip_zbcoll_free(zb);
 
 	free(fiaddrs);
@@ -459,6 +458,7 @@ Test(ctrl, zb_getgroup)
 	zb = calloc(num_zb, sizeof(struct cxip_zbcoll_obj *));
 	cr_assert(zb, "zb out of memory\n");
 
+	TRACE("%s entry\n", __func__);
 	for (i = 0; i < num_zb; i++) {
 		/* Verify multiple allocations */
 		ret = cxip_zbcoll_alloc(ep_obj, num_addrs, NULL,

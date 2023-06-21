@@ -26,7 +26,7 @@
  *   - write cntr
  *   - remote cntr
  *
- * frmwk_populate_av() uses a file-based Allgather operation to collect local
+ * frmwk_populate_av() uses a sockets-based Allgather operation to collect local
  * HSN addresses and distribute them over the entire set of nodes, and then
  * creates and binds the fi_av object for the endpoint. This 'populate' function
  * has been separated out from initialization, to allow the framework to use
@@ -67,7 +67,6 @@
 #include "multinode_frmwk.h"
 
 /* If not compiled with DEBUG=1, this is a no-op */
-/* see cxit_trace_enable() in each test framework */
 #define	TRACE CXIP_TRACE
 
 #define RETURN_ERROR(ret, txt) \
@@ -83,10 +82,8 @@ int frmwk_numranks;		/* PMI_SIZE */
 int frmwk_rank;			/* PMI_RANK */
 int frmwk_nics_per_rank;	/* PMI_NUM_HSNS (defaults to 1) */
 const char *frmwk_unique;	/* PMI_SHARED_SECRET */
-const char *frmwk_home;		/* PMI_HOME or HOME */
 const char *frmwk_nodename;	/* SLURMD_NODENAME */
 const char frmwk_node0[32];	/* SLURMD_NODELIST (first name) */
-int frmwk_seq;			/* sequence number */
 union nicaddr *frmwk_nics;	/* array of NIC addresses plus rank and hsn */
 
 int _frmwk_init;
@@ -232,80 +229,13 @@ struct mycontext {
 	int tx_prov_err;
 };
 
-/**
- * @brief Trace function.
- *
- * See the description in prov/cxi/test/cxip_test_common.c.
- *
- * This trace function is rank-aware. Enabling opens a file associated with the
- * rank, and disabling closes it. All rank trace output is delivered to the
- * file. Files are global across the network, allowing trace information to be
- * dynamically monitored.
- */
-
-static FILE *frmwk_trace_fid;
-int cxit_trace_offset;
-
-void cxit_trace_flush(void)
-{
-	if (frmwk_trace_fid) {
-		fflush(frmwk_trace_fid);
-		fsync(fileno(frmwk_trace_fid));
-	}
-}
-
-static int cxip_trace_attr frmwk_trace(const char *fmt, ...)
-{
-	va_list args;
-	char *str;
-	int len;
-
-	va_start(args, fmt);
-	len = vasprintf(&str, fmt, args);
-	va_end(args);
-	if (len >= 0) {
-		len = fprintf(frmwk_trace_fid, "[%2d|%2d] %s",
-			      frmwk_rank, frmwk_numranks, str);
-		cxit_trace_flush();
-		free(str);
-	}
-	return len;
-}
-
-bool cxit_trace_enable(bool enable)
-{
-	static bool is_enabled = false;
-	bool was_enabled = is_enabled;
-	char fnam[256];
-
-	is_enabled = !!frmwk_trace_fid;
-	if (enable && !is_enabled) {
-		sprintf(fnam, "./trace%d", frmwk_rank + cxit_trace_offset);
-		frmwk_trace_fid = fopen(fnam, "w");
-		if (!frmwk_trace_fid) {
-			fprintf(stderr, "open(%s) failed: %s\n",
-				fnam, strerror(errno));
-		} else {
-			cxip_trace_fn = frmwk_trace;
-		}
-	} else if (!enable) {
-		if (frmwk_trace_fid) {
-			fflush(frmwk_trace_fid);
-			fclose(frmwk_trace_fid);
-			frmwk_trace_fid = NULL;
-		}
-		cxip_trace_fn = NULL;
-	}
-	return was_enabled;
-}
-
 /* display message on stdout from rank 0 */
 int frmwk_log0(const char *fmt, ...)
 {
 	va_list args;
 	int len;
 
-	if (frmwk_rank != 0)
+	if (_frmwk_init && frmwk_rank != 0)
 		return 0;
 
 	va_start(args, fmt);
@@ -883,7 +813,7 @@ static int getenv_int(const char *name)
 }
 
 /* Initialize the framework */
-void frmwk_init(void)
+void frmwk_init(bool quiet)
 {
 	char *s, *d;
 	int ret = -1;
@@ -891,7 +821,7 @@ void frmwk_init(void)
 	/* Values are provided by the WLM */
 	s = getenv("SLURM_NODELIST");
 	d = (char *)frmwk_node0;
-	while (*s && *s != '-' && *s != ',') {
+	while (s && *s && *s != '-' && *s != ',') {
 		if (*s == '[')
 			s++;
 		else
@@ -903,20 +833,12 @@ void frmwk_init(void)
 	frmwk_rank = getenv_int("PMI_RANK");
 	frmwk_unique = getenv("PMI_SHARED_SECRET");
 	if (frmwk_numranks < 1 || frmwk_rank < 0 || !frmwk_unique) {
-		fprintf(stderr, "PMI_SIZE=%d invalid\n", frmwk_numranks);
-		fprintf(stderr, "PMI_RANK=%d invalid\n", frmwk_rank);
-		fprintf(stderr, "PMI_SHARED_SECRET=%s invalid\n", frmwk_unique);
+		if (quiet)
+			goto fail;
+		fprintf(stderr, "invalid PMI_SIZE=%d\n", frmwk_numranks);
+		fprintf(stderr, "invalid PMI_RANK=%d\n", frmwk_rank);
+		fprintf(stderr, "invalid PMI_SHARED_SECRET=%s\n", frmwk_unique);
 		fprintf(stderr, "Must be run under compatible WLM\n");
-		goto fail;
-	}
-
-	/* Give preference to PMI_HOME, fall back to HOME */
-	frmwk_home = getenv("PMI_HOME");
-	if (!frmwk_home)
-		frmwk_home = getenv("HOME");
-	if (!frmwk_home) {
-		fprintf(stderr, "Neither PMI_HOME nor HOME set\n");
-		fprintf(stderr, "Shared file system required\n");
 		goto fail;
 	}
 
@@ -941,7 +863,6 @@ void frmwk_term(void)
 	free(frmwk_nics);
 	frmwk_nics = NULL;
 	frmwk_unique = NULL;
-	frmwk_home = NULL;
 	frmwk_nics_per_rank = 0;
 	frmwk_numranks = 0;
 	frmwk_rank = 0;

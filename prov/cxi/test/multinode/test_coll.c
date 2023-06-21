@@ -27,7 +27,6 @@
 #include "multinode_frmwk.h"
 
 /* If not compiled with DEBUG=1, this is a no-op */
-/* see cxit_trace_enable() in each test framework */
 #define	TRACE CXIP_TRACE
 
 /* convert delays to nsecs */
@@ -399,7 +398,7 @@ int main(int argc, char **argv)
 	}
 
 	/* Collect env variable information from WLM */
-	frmwk_init();
+	frmwk_init(false);
 	if (frmwk_check_env(4))
 		return -1;
 
@@ -408,9 +407,8 @@ int main(int argc, char **argv)
 	if (frmwk_errmsg(ret, "frmwk_init_libfabric()\n"))
 		return ret;
 
-	cxit_trace_enable(trace_enabled);
-	TRACE("==== tracing enabled offset %d\n",
-	      frmwk_rank + cxit_trace_offset);
+	cxip_trace_enable(trace_enabled);
+	TRACE("==== tracing enabled offset %d\n", frmwk_rank);
 
 	/* frmwk_init_libfabric provides the basics for us as cxit_* objects */
 	cxip_ep = container_of(cxit_ep, struct cxip_ep, ep.fid);

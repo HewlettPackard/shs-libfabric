@@ -27,8 +27,8 @@
 #include "multinode_frmwk.h"
 
 /* If not compiled with DEBUG=1, this is a no-op */
-/* see cxit_trace_enable() in each test framework */
-#define	TRACE CXIP_TRACE
+/* see cxip_trace_enable() in each test framework */
+#define	TRACE CXIP_NOTRACE
 
 /* convert delays to nsecs */
 #define	nUSEC(n)	(n * 1000L)
@@ -89,7 +89,7 @@ static void _idle_wait(struct cxip_ep_obj *ep_obj, int msec)
 			continue;
 		TRACE("ns=%ld dsc=%d err=%d ack=%d rcv=%d\n",
 			nsecs, dsc, err, ack, rcv);
-		cxit_trace_flush();
+		cxip_trace_flush();
 		dsc0 = dsc;
 		err0 = err;
 		ack0 = ack;
@@ -129,7 +129,7 @@ static int _send_wait(struct cxip_zbcoll_obj *zb, int sndcnt, int rcvcnt)
 		TRACE("STATE FAILURE\n");
 		return 1;
 	}
-	cxit_trace_flush();
+	cxip_trace_flush();
 	return 0;
 }
 
@@ -265,7 +265,7 @@ int _getgroup(struct cxip_ep_obj *ep_obj,
 	}
 	if (!*zbp) {
 		ret = cxip_zbcoll_alloc(ep_obj, size, fiaddrs, ZB_NOSIM, zbp);
-		if (ret == -FI_EADDRNOTAVAIL) {
+		if (ret == -FI_ECONNREFUSED) {
 			TRACE("=== COMPLETED SKIP\n");
 			return FI_SUCCESS;
 		}
@@ -310,7 +310,7 @@ int _check_getgroup_errs(struct cxip_zbcoll_obj *zb, int exp_grpid)
 	return (frmwk_errmsg(!zb, "zb == NULL") ||
 		frmwk_errmsg(zb->error, "zb->error == %d\n", zb->error) ||
 		frmwk_errmsg(zb->grpid != exp_grpid, "zb->grpid=%d exp=%d\n",
-	    	           zb->grpid, exp_grpid));
+			     zb->grpid, exp_grpid));
 }
 
 /* rotate array[size] by rot positions */
@@ -850,7 +850,7 @@ int usage(int ret)
 {
 	int i;
 
-	frmwk_log0("Usage: test_zbcoll [-hvV] [-s seed] [-T rank_offset]\n"
+	frmwk_log0("Usage: test_zbcoll [-hvV] [-s seed]\n"
 		"                    [-N nruns] [-M sublen] [-R rotate]\n"
 		"                    [-D usec_delay] [-B bad_NIC]\n"
 		"                    [-t testno[,testno...]]\n"
@@ -859,7 +859,6 @@ int usage(int ret)
 		"  -v provides verbose output\n"
 		"  -V provides per-node tracing\n"
 		"  -s specifies a random seed for randomized tests\n"
-		"  -T specifies a TRACE() file offset (added to rank)\n"
 		"  -t specifies tests e.g. (1,2,3) or (1-3) or (1-3,11-12)"
 		"\n");
 	for (i = 0; testnames[i]; i++)
@@ -912,7 +911,7 @@ int main(int argc, char **argv)
 	testmask = -1;	// run all tests
 	badnic = -1;	// do not use an address override
 
-	while ((opt = getopt(argc, argv, "hvVt:s:N:M:R:D:B:T:")) != -1) {
+	while ((opt = getopt(argc, argv, "hvVt:s:N:M:R:D:B:")) != -1) {
 		char *str, *s, *p;
 		int i, j;
 
@@ -951,11 +950,11 @@ int main(int argc, char **argv)
 		case 'D':
 			usec = atoi(optarg);
 			break;
+		case 'T':
+			frmwk_rank = atoi(optarg);
+			break;
 		case 'B':
 			badnic = strtol(optarg, NULL, 16);
-			break;
-		case 'T':
-			cxit_trace_offset = atoi(optarg);
 			break;
 		case 'V':
 			trace_enabled = true;
@@ -970,7 +969,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	frmwk_init();
+	frmwk_init(false);
 	if (frmwk_check_env(4))
 		return -1;
 
@@ -978,9 +977,10 @@ int main(int argc, char **argv)
 	if (frmwk_errmsg(ret, "frmwk_init_libfabric()\n"))
 		return ret;
 
-	cxit_trace_enable(trace_enabled);
-	TRACE("==== tracing enabled offset %d\n",
-		frmwk_rank + cxit_trace_offset);
+	cxip_trace_rank = frmwk_rank;
+	cxip_trace_numranks = frmwk_numranks;
+	cxip_trace_enable(trace_enabled);
+	TRACE("==== tracing enabled offset %d\n", frmwk_rank);
 
 	srand(seed);
 	if (naddrs < 0)
@@ -1259,7 +1259,7 @@ int main(int argc, char **argv)
 		double time;
 
 		TRACE("======= %s\n", testname);
-		trace_enabled = cxit_trace_enable(false);
+		trace_enabled = cxip_trace_enable(false);
 		zb1 = NULL;
 		ret = cxip_zbcoll_alloc(ep_obj, size, fiaddrs, ZB_NOSIM, &zb1);
 		clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -1276,7 +1276,7 @@ int main(int argc, char **argv)
 		time = _measure_nsecs(&t0);
 		time /= 1.0*count;
 		time /= 1000.0;
-		cxit_trace_enable(trace_enabled);
+		cxip_trace_enable(trace_enabled);
 		cxip_zbcoll_free(zb1);
 		errcnt += !!ret;
 		_idle_wait(ep_obj, 100);
@@ -1291,7 +1291,7 @@ int main(int argc, char **argv)
 		double time;
 
 		TRACE("======= %s\n", testname);
-		trace_enabled = cxit_trace_enable(false);
+		trace_enabled = cxip_trace_enable(false);
 		zb1 = NULL;
 		ret = _getgroup(ep_obj, size, fiaddrs, &zb1);
 		clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -1303,7 +1303,7 @@ int main(int argc, char **argv)
 		time = _measure_nsecs(&t0);
 		time /= 1.0*count;
 		time /= 1000.0;
-		cxit_trace_enable(trace_enabled);
+		cxip_trace_enable(trace_enabled);
 		cxip_zbcoll_free(zb1);
 		errcnt += !!ret;
 		_idle_wait(ep_obj, 100);
@@ -1319,7 +1319,7 @@ int main(int argc, char **argv)
 		double time;
 
 		TRACE("======= %s\n", testname);
-		trace_enabled = cxit_trace_enable(false);
+		trace_enabled = cxip_trace_enable(false);
 		zb1 = NULL;
 		ret = _getgroup(ep_obj, size, fiaddrs, &zb1);
 		clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -1331,7 +1331,7 @@ int main(int argc, char **argv)
 		time = _measure_nsecs(&t0);
 		time /= 1.0*count;
 		time /= 1000.0;
-		cxit_trace_enable(trace_enabled);
+		cxip_trace_enable(trace_enabled);
 		cxip_zbcoll_free(zb1);
 		errcnt += !!ret;
 		_idle_wait(ep_obj, 100);
@@ -1347,7 +1347,7 @@ int main(int argc, char **argv)
 		double time;
 
 		TRACE("======= %s\n", testname);
-		trace_enabled = cxit_trace_enable(false);
+		trace_enabled = cxip_trace_enable(false);
 		zb1 = NULL;
 		ret = _getgroup(ep_obj, size, fiaddrs, &zb1);
 		clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -1359,7 +1359,7 @@ int main(int argc, char **argv)
 		time = _measure_nsecs(&t0);
 		time /= 1.0*count;
 		time /= 1000.0;
-		cxit_trace_enable(trace_enabled);
+		cxip_trace_enable(trace_enabled);
 		cxip_zbcoll_free(zb1);
 		errcnt += !!ret;
 		_idle_wait(ep_obj, 100);
@@ -1396,7 +1396,7 @@ int main(int argc, char **argv)
 						 1, 0, frmwk_rank);
 			//ret = _getgroup(ep_obj, size, fiaddrs, &zb1);
 			TRACE("listening forever....\n");
-			cxit_trace_flush();
+			cxip_trace_flush();
 			_idle_wait(ep_obj, -1);
 			frmwk_log0("%4s %s\n", ret ? "FAIL" : "ok", testname);
 		} else {

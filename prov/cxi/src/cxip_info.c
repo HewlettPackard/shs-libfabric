@@ -214,11 +214,6 @@ struct util_prov cxip_util_prov = {
 	.flags = 0,
 };
 
-/*
- * Test platform tracing function, if NULL, disabled.
- */
-cxip_trace_t cxip_trace_attr cxip_trace_fn;
-
 int s_page_size;
 
 /* Get _SC_PAGESIZE */

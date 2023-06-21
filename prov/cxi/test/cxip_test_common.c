@@ -67,16 +67,16 @@ static void cxit_set_page_size(void)
  * Quick summary:
  *   - build with DEBUG=1
  *   - add '#define TRACE CXIP_TRACE' in code files you want to trace
- *   - call cxit_trace_enable() to enable/disable tracing
+ *   - call cxip_trace_enable() to enable/disable tracing
  *
  * Function pointer cxip_trace_fn is instantiated in cxip_info.c, is declared
  * extern in cxip.h, and is initialized to NULL, which prevents any output.
  *
- * Every test framework is required to support a cxit_trace_enable() function,
+ * Every test framework is required to support a cxip_trace_enable() function,
  * which sets (or clears) the function pointer, thus enabling (or disabling) the
  * tracing function for that test framework.
  *
- * Every test framework is also required to support a cxit_trace_flush()
+ * Every test framework is also required to support a cxip_trace_flush()
  * function, used to flush any cached output produced by the trace function.
  *
  * This is normally embedded within a code module with the following:
@@ -98,39 +98,6 @@ static void cxit_set_page_size(void)
  * The implementation in this framework (cxip_test_common) is for use with
  * NETSIM criterion testing, and produces output via printf() to stdout.
  */
-
-/* simple printf() implementation, can be extended */
-static int cxip_trace_attr cxit_trace(const char *fmt, ...)
-{
-	va_list args;
-	int len;
-
-	va_start(args, fmt);
-	len = vprintf(fmt, args);
-	va_end(args);
-	return len;
-}
-
-/* enable/disable trace function, return previous state */
-bool cxit_trace_enable(bool enable)
-{
-	static bool is_enabled = false;
-	bool was_enabled = is_enabled;
-
-	if (enable && !is_enabled) {
-		cxip_trace_fn = cxit_trace;
-		is_enabled = true;
-	} else if (!enable && is_enabled) {
-		cxip_trace_fn = NULL;
-		is_enabled = false;
-	}
-	return was_enabled;
-}
-
-void cxit_trace_flush(void)
-{
-	fflush(stdout);
-}
 
 int cxit_dom_read_cntr(unsigned int cntr, uint64_t *value,
 		       struct timespec *ts, bool sync)
@@ -827,6 +794,8 @@ void cxit_setup_rma(void)
 	int ret;
 	struct cxip_addr fake_addr = {.nic = 0xad, .pid = 0xbc};
 
+	cxip_trace_append = true;
+	cxip_trace_enable(true);
 	cxit_setup_enabled_ep();
 
 	/* Insert local address into AV to prepare to send to self */

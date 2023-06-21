@@ -69,7 +69,7 @@ int frmwk_barrier(void);
 int frmwk_gather_nics(void);
 int frmwk_nic_addr(int rank, int hsn);
 
-void frmwk_init(void);
+void frmwk_init(bool quiet);
 void frmwk_term(void);
 int frmwk_init_libfabric(void);
 void frmwk_free_libfabric(void);
@@ -79,7 +79,3 @@ int frmwk_errmsg(int ret, const char *fmt, ...)
 	__attribute__((format(__printf__, 2, 3)));
 int frmwk_log0(const char *fmt, ...)
 	__attribute__((format(__printf__, 1, 2)));
-
-extern bool cxit_trace_enable(bool enable);
-extern void cxit_trace_flush(void);
-extern int cxit_trace_offset;

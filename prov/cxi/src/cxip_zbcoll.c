@@ -34,7 +34,6 @@
 #define CXIP_INFO(...) _CXIP_INFO(FI_LOG_EP_CTRL, __VA_ARGS__)
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_EP_CTRL, __VA_ARGS__)
 
-/* see cxit_trace_enable() in each test framework */
 #define	TRACE CXIP_NOTRACE
 
 /* see data packing structures below */
@@ -497,7 +496,7 @@ static int _zbcoll_config(struct cxip_zbcoll_obj *zb, int num_addrs,
 			if (ret) {
 				CXIP_WARN("Lookup on fiaddr=%ld failed\n",
 					  fiaddrs[i]);
-				return -FI_EINVAL;
+				return -FI_ECONNREFUSED;
 			}
 			if (zb->simrank < 0 &&
 			    CXIP_ADDR_EQUAL(zb->caddrs[i],
@@ -506,7 +505,7 @@ static int _zbcoll_config(struct cxip_zbcoll_obj *zb, int num_addrs,
 		}
 		if (zb->simrank < 0) {
 			CXIP_WARN("Endpoint addr not in addrs[]\n");
-			return -FI_EINVAL;
+			return -FI_ECONNREFUSED;
 		}
 		zb->simcount = 1;
 	}

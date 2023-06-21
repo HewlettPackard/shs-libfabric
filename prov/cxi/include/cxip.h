@@ -2893,19 +2893,40 @@ static inline bool is_netsim(struct cxip_ep_obj *ep_obj)
 		CXI_PLATFORM_NETSIM);
 }
 
-/* Install different trace functions from application context */
+/* debugging TRACE functions */
 #define	cxip_trace_attr	__attribute__((format(__printf__, 1, 2)))
 typedef int (*cxip_trace_t)(const char *fmt, ...);
 extern cxip_trace_t cxip_trace_attr cxip_trace_fn;
 
+typedef void (*cxip_trace_flush_t)(void);
+cxip_trace_flush_t cxip_trace_flush_fn;
+
+typedef void (*cxip_trace_close_t)(void);
+cxip_trace_close_t cxip_trace_close_fn;
+
+typedef bool (*cxip_trace_enable_t)(bool enable);
+cxip_trace_enable_t cxip_trace_enable_fn;
+
+bool cxip_trace_enabled;	// true if tracing is enabled
+bool cxip_trace_append;		// append open for trace file
+int cxip_trace_rank;		// tracing rank
+int cxip_trace_numranks;	// tracing number of ranks
+FILE *cxip_trace_fid;		// trace output file descriptor
+
+int cxip_trace_attr cxip_trace(const char *fmt, ...);
+void cxip_trace_flush(void);
+void cxip_trace_close(void);
+bool cxip_trace_enable(bool enable);
+
+#define	CXIP_NOTRACE(fmt, ...) do {} while (0)
 #if ENABLE_DEBUG
 #define CXIP_TRACE(fmt, ...) \
-	do {if (cxip_trace_fn) cxip_trace_fn(fmt, ##__VA_ARGS__);} while (0)
+	do {if (cxip_trace_enabled) cxip_trace_fn(fmt, ##__VA_ARGS__);} while (0)
 #else
-#define	CXIP_TRACE(fmt, ...) do {} while(0)
+#define	CXIP_TRACE CXIP_NOTRACE
 #endif
-#define	CXIP_NOTRACE(fmt, ...) do {} while(0)
 
+/* fabric logging implementation functions */
 #define _CXIP_DBG(subsys, fmt,  ...) \
 	FI_DBG(&cxip_prov, subsys, "%s: " fmt "", cxip_env.hostname, \
 	       ##__VA_ARGS__)
