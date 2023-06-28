@@ -39,6 +39,7 @@ esac
 echo "$0: --> ARTI_LOCATION: '${ARTI_LOCATION}'"
 echo "$0: --> ARTI_BRANCH: '${ARTI_BRANCH}'"
 echo "$0: --> COS_BRANCH: '${COS_BRANCH}'"
+echo "$0: --> VERBS_BUILD: '${VERBS_BUILD:-false}'"
 
 # Override per OS
 with_rocm=0
@@ -46,6 +47,10 @@ with_cuda=0
 with_ze=0
 
 RPMS="cray-libcxi-devel kdreg2-devel"
+if [ -z "${VERBS_BUILD}" ]
+then
+    RPMS+=" rdma-core rdma-core-devel "
+fi
 
 if [[ ${TARGET_OS} == "centos_8" ]]; then
     TARGET_OS="centos_8_ncn"

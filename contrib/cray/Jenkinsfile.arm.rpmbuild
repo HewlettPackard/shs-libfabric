@@ -6,8 +6,8 @@
 // the "Add RPM Metadata" stage will fail.
 rpmBuild(
     product: "internal",
-    buildPrepScript: "contrib/cray/runBuildPrep.sh",
-    rpmBuildCmd: "contrib/cray/cray_rpmbuild.sh",
+    buildPrepScript: "contrib/cray/cxi_runBuildPrep.sh",
+    rpmBuildCmd: "contrib/cray/cxi_rpmbuild.sh",
     specfile: "libfabric.spec.in",
     build_arch: "aarch64",
     obs_target_os: obsTargetOs_arm(),

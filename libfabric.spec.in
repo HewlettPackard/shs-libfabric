@@ -127,6 +127,9 @@ rm -rf %{buildroot}
 %{_mandir}/man3/*
 %{_mandir}/man7/*
 
+%exclude %{_libdir}/libfabric/lib*-fi.so
+%exclude %{_libdir}/libfabric/lib*-fi.la
+
 %changelog
 * Fri Jun 26 2015 Open Fabrics Interfaces Working Group <ofiwg@lists.openfabrics.org> 1.1.0rc1
 - Release 1.1.0rc1
