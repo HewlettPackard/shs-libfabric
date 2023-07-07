@@ -40,7 +40,7 @@
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_EP_CTRL, __VA_ARGS__)
 
 /* must all be 0 in production code */
-#define __chk_pkts	1
+#define __chk_pkts	0
 #define __trc_pkts	0
 #define __trc_data	0
 
@@ -611,7 +611,7 @@ static int _gen_tx_dfa(struct cxip_coll_reduction *reduction,
  * Issue a restricted Put to the destination address.
  * If md is NULL, this performs an IDC Put, otherwise it issues a DMA Put.
  *
- * Exported for unit testing.
+ * Exported for unit testing. NETSIM cxitest requires mc->rx_discard == false.
  *
  * This will return -FI_EAGAIN on transient errors.
  */
@@ -727,10 +727,39 @@ err:
 
 /****************************************************************************
  * RECV operation (of restricted Put to a local PTE)
+ *
+ * Collectives use a dedicated EP and PTE for each MC object.
+ *
+ * Packet space is allocated and linked to the PTE with a request. When a
+ * packet is received, CXI hardware puts the request pointer and incoming
+ * packet offset into a hardware-managed CXI event queue. When the CXI evtq
+ * is progressed, completed hardware events are harvested, and the request
+ * pointer (along with completion data) is inserted into an OFI CQ for the
+ * endpont. Reading any OFI CQ bound to that endpoint will harvest all CXI
+ * (hardware) evtqs bound to that endpoint, but will return only events
+ * associated with the specified CQ, IF there are multiple CQs.
+ *
+ * Collectives services two CXI (hardware) evtqs for each MC object.
+ *
+ * The tx_evtq is only used to detect hardware buffer overflow, which
+ * reflects -FI_EAGAIN back to the client.
+ *
+ * The rx_evtq manages PTE events for the collective endpoint. Buffer link
+ * and unlink events are consumed silently: buffer exhaustion is checked on
+ * every packet receipt, and will automatically recycle exhausted buffers.
+ * PUT events are filtered for correct format and passed into the collective
+ * state machine for processing. All other received packets are discarded.
+ *
+ * cxip_cq_req_complete() is used internally for PTE events, and externally
+ * to report collective operation completions. The internal events are useful
+ * for certain bench test models, where we need to count the packets received
+ * as well as the collective completion. In production, we want to disable
+ * the internal events. This is done independently for each MC object with
+ * the mc->rx_discard flag.
  */
 
-/* Report success/error results of an RX event through RX CQ / counters, and
- * roll over the buffers if appropriate.
+/* Report success/error results of an RX event through CQ/counters, and roll
+ * over the buffers if appropriate.
  *
  * NOTE: req may be invalid after this call.
  *
@@ -838,7 +867,7 @@ static void _coll_rx_progress(struct cxip_req *req,
 		return;
 	}
 
-	/* If swap doesn't look like reduction packet, swap back */
+	/* If swap doesn't look like reduction packet, swap back and discard */
 	pkt = (struct red_pkt *)req->buf;
 	_swappkt(pkt);
 	if (pkt->hdr.cookie.magic != MAGIC)
@@ -850,6 +879,7 @@ static void _coll_rx_progress(struct cxip_req *req,
 
 	/* This is a reduction packet */
 	req->coll.isred = true;
+	req->discard = mc_obj->rx_discard;
 	reduction = &mc_obj->reduction[pkt->hdr.cookie.red_id];
 
 #if ENABLE_DEBUG
@@ -1367,7 +1397,7 @@ void _dump_coll_data(const char *tag, const struct cxip_coll_data *coll_data)
 	TRACE("  red_max = %d\n", coll_data->red_max);
 	TRACE("  data:\n");
 	for (i = 0; i < 4; i++)
-		TRACE(" %016lx", coll_data->intval.ival[i]);
+		TRACE(" %016lx\n", coll_data->intval.ival[i]);
 	TRACE("\n");
 	TRACE("===================\n");
 #endif
@@ -1444,11 +1474,10 @@ static void _reduce(struct cxip_coll_data *accum,
 		return;
 	}
 
-	/* copy new error to accumulator */
+	/* copy new error (if any) to accumulator */
 	SET_RED_RC(accum->red_rc, coll_data->red_rc);
 
-	/* Pre-reduction never counts the contributions, and cannot overflow.
-	 * Real reduction (send or receive) must count contributions.
+	/* Real reduction (send or receive) must count contributions.
 	 * red_max is zero until after injection from this node.
 	 */
 	if (!pre_reduce) {
@@ -1947,7 +1976,7 @@ bool _is_red_timed_out(struct cxip_coll_reduction *reduction)
 	return true;
 }
 
-/* Root node state machine.
+/* Root node state machine progress.
  * !pkt means this is progressing from injection call (e.g. fi_reduce())
  *  pkt means this is progressing from event callback (leaf packet)
  */
@@ -1969,7 +1998,6 @@ static void _progress_root(struct cxip_coll_reduction *reduction,
 		INCMOD(mc_obj->seqno, CXIP_COLL_MAX_SEQNO);
 		ofi_atomic_inc32(&mc_obj->tmout_cnt);
 
-		_tsset(reduction);
 		ret = cxip_coll_send_red_pkt(reduction, NULL,
 					     !mc_obj->arm_disable, true);
 		if (ret) {
@@ -1978,6 +2006,7 @@ static void _progress_root(struct cxip_coll_reduction *reduction,
 			reduction->completed = true;
 			goto post_complete;
 		}
+		_tsset(reduction);
 		return;
 	}
 
@@ -2035,7 +2064,7 @@ post_complete:
 	}
 }
 
-/* Leaf node state machine.
+/* Leaf node state machine progress.
  * !pkt means this is progressing from injection call (e.g. fi_reduce())
  *  pkt means this is progressing from event callback (receipt of packet)
  */
@@ -2131,11 +2160,10 @@ void cxip_capture_red_id(int *red_id_buf)
 /* Generic collective pre-reduction into cxip_coll_data structure */
 static void
 _cxip_coll_prereduce(int cxi_opcode, const void *op_send_data,
-		     void *op_rslt_data, size_t sendcnt, uint64_t flags)
+		     void *accum, size_t sendcnt, uint64_t flags)
 {
-	struct cxip_coll_data *accum = op_rslt_data;
-	struct cxip_coll_data coll_data;
 	const struct cxip_coll_data *coll_data_ptr;
+	struct cxip_coll_data coll_data;
 
 	/* Convert user data to local coll_data structure */
 	if (flags & FI_CXI_PRE_REDUCED) {
@@ -2145,7 +2173,7 @@ _cxip_coll_prereduce(int cxi_opcode, const void *op_send_data,
 				sendcnt);
 		coll_data_ptr = &coll_data;
 	}
-	_dump_coll_data("coll_data initialized", coll_data_ptr);
+	_dump_coll_data("coll_data initialized pre", coll_data_ptr);
 
 	/* pre-reduce data into accumulator */
 	_reduce(accum, coll_data_ptr, true);
@@ -2208,12 +2236,11 @@ _cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 	else
 		_init_coll_data(&coll_data, cxi_opcode, op_send_data, bytcnt);
 
-	_dump_coll_data("coll_data initialized", &coll_data);
-
 	/* reduce data into accumulator */
 	coll_data.red_cnt = 1;
 	coll_data.red_max = mc_obj->av_set_obj->fi_addr_cnt;
 	_reduce(&reduction->accum, &coll_data, false);
+	_dump_coll_data("coll_data initialized inj", &coll_data);
 
 	/* Progress the collective */
 	_progress_coll(reduction, NULL);
@@ -2345,7 +2372,7 @@ ssize_t cxip_reduce(struct fid_ep *ep, const void *buf, size_t count,
 	if (bytcnt < 0)
 		return (ssize_t)bytcnt;
 
-	/* FI_MORE requires target buffer, succeeds immediately */
+	/* FI_MORE requires result buffer, succeeds immediately */
 	if (flags & FI_MORE) {
 		if (!result) {
 			CXIP_WARN("result required with FI_MORE\n");
@@ -2367,7 +2394,7 @@ ssize_t cxip_reduce(struct fid_ep *ep, const void *buf, size_t count,
 	}
 
 	return _cxip_coll_inject(mc_obj, cxi_opcode, buf, result, bytcnt,
-				flags, context);
+				 flags, context);
 }
 
 ssize_t cxip_allreduce(struct fid_ep *ep, const void *buf, size_t count,
@@ -2402,7 +2429,7 @@ ssize_t cxip_allreduce(struct fid_ep *ep, const void *buf, size_t count,
 		return ret;
 
 	return _cxip_coll_inject(mc_obj, cxi_opcode, buf, result, bytcnt,
-				flags, context);
+				 flags, context);
 }
 
 /****************************************************************************
@@ -2430,6 +2457,7 @@ struct cxip_join_state {
 	void *context;			// user context for concurrent joins
 	uint64_t join_flags;		// user-supplied libfabric join flags
 	union pack_mcast bcast_data;	// packed multicast data
+	bool rx_discard;		// set if RX events should be discarded
 	bool is_mcast;			// set if using Rosetta multicast tree
 	bool create_mcast;		// set to create Rosetta multicast tree
 	bool creating_mcast;		// set once CURL has been initiated
@@ -2550,6 +2578,7 @@ static int _initialize_mc(void *ptr)
 	mc_obj->mynode_fiaddr = jstate->mynode_fiaddr;
 	mc_obj->max_red_id = CXIP_COLL_MAX_CONCUR;
 	mc_obj->arm_disable = false;
+	mc_obj->rx_discard = jstate->rx_discard;
 	mc_obj->timeout.tv_sec = 1;
 	mc_obj->timeout.tv_nsec = 0;
 	mc_obj->tc = CXI_TC_BEST_EFFORT;
@@ -2563,6 +2592,7 @@ static int _initialize_mc(void *ptr)
 		reduction->in_use = false;
 		reduction->completed = false;
 	}
+	TRACE_DEBUG("Initializing mc_obj=%p counters\n", mc_obj);
 	ofi_spin_init(&mc_obj->lock);
 	ofi_atomic_initialize32(&mc_obj->send_cnt, 0);
 	ofi_atomic_initialize32(&mc_obj->recv_cnt, 0);
@@ -3231,6 +3261,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	av_set_obj = container_of(coll_av_set, struct cxip_av_set, av_set_fid);
 	jstate = NULL;
 	zb = NULL;
+	*mc = NULL;
 
 	ep_obj = cxip_ep->ep_obj;
 
@@ -3239,8 +3270,6 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	TRACE_JOIN("join overlap = %d\n", ret);
 	if (av_set_obj->comm_key.keytype != COMM_KEY_RANK && ret > 1) {
 		TRACE_JOIN("operation blocked on zb getgroup\n");
-		ofi_atomic_dec32(&ep_obj->coll_ref);
-		cxip_coll_progress_join(ep_obj);
 		ret = -FI_EAGAIN;
 		goto fail;
 	}
@@ -3284,6 +3313,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		jstate->bcast_data.valid = false;
 		jstate->is_mcast = true;
 		jstate->create_mcast = (jstate->mynode_idx == 0);
+		jstate->rx_discard = true;
 		link_zb = false;
 		break;
 	case COMM_KEY_MULTICAST:
@@ -3306,6 +3336,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		jstate->bcast_data.valid = true;
 		jstate->is_mcast = true;
 		jstate->create_mcast = false;
+		jstate->rx_discard = true;
 		link_zb = false;
 		break;
 	case COMM_KEY_UNICAST:
@@ -3327,6 +3358,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		jstate->bcast_data.valid = true;
 		jstate->is_mcast = false;
 		jstate->create_mcast = false;
+		jstate->rx_discard = true;
 		link_zb = false;
 		break;
 	case COMM_KEY_RANK:
@@ -3341,11 +3373,19 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		jstate->bcast_data.valid = true;
 		jstate->is_mcast = false;
 		jstate->create_mcast = false;
+		jstate->rx_discard = false;
 		link_zb = true;
 		break;
 	default:
 		CXIP_INFO("unexpected comm_key keytype: %d\n",
 			  av_set_obj->comm_key.keytype);
+		goto fail;
+	}
+
+	/* Reject if a rank tries to join a group it doesn't belong to */
+	ret = jstate->mynode_idx;
+	if (ret < 0) {
+		TRACE_JOIN("May not participate\n");
 		goto fail;
 	}
 
@@ -3404,6 +3444,7 @@ fail:
 	TRACE_JOIN("cxip_join_collective, ret=%d\n", ret);
 	cxip_zbcoll_free(zb);
 	free(jstate);
+	ofi_atomic_dec32(&ep_obj->coll_ref);
 
 	return ret;
 }
@@ -3441,7 +3482,6 @@ void cxip_coll_reset_mc_ctrs(struct fid_mc *mc)
  * Manage the static coll structure in the EP. Because of its specialized
  * nature, it made sense to manage it here, rather than in the EP module.
  */
-
 struct fi_ops_collective cxip_collective_ops = {
 	.size = sizeof(struct fi_ops_collective),
 	.barrier = cxip_barrier,

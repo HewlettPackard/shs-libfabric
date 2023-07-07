@@ -2318,8 +2318,8 @@ struct cxip_coll_pte {
 };
 
 /* REQUIRED:
- * sizeof(struct cxip_accumulator) >= sizeof(struct cxip_coll_data)
- * struct cxip_accumulator exported in fi_cxi_ext.h
+ * sizeof(struct cxip_coll_accumulator) >= sizeof(struct cxip_coll_data)
+ * (opaque) struct cxip_coll_accumulator exported in fi_cxi_ext.h
  */
 struct cxip_coll_data {
 	union {
@@ -2375,6 +2375,7 @@ struct cxip_coll_mc {
 	int seqno;				// rolling seqno for packets
 	bool arm_disable;			// arm-disable for testing
 	bool is_joined;				// true if joined
+	bool rx_discard;			// true to discard RX events
 	enum cxi_traffic_class tc;		// traffic class
 	enum cxi_traffic_class_type tc_type;	// traffic class type
 	ofi_atomic32_t send_cnt;		// for diagnostics

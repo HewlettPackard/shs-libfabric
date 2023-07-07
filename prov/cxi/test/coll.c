@@ -86,7 +86,7 @@ Test(coll_init, noop)
 
 	cr_assert(sizeof(struct cxip_coll_accumulator) >=
 		  sizeof(struct cxip_coll_data),
-		  "sizeof(cxip_accumulator=%ld <"
+		  "sizeof(cxip_coll_accumulator=%ld <"
 		  "sizeof(cxip_coll_data=%ld",
 		  sizeof(struct cxip_coll_accumulator),
 		  sizeof(struct cxip_coll_data));
