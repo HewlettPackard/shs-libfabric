@@ -1042,6 +1042,7 @@ static void cxip_env_init(void)
 			if (param_str && atoi(param_str) == 1)
 				cxip_env.ze_hmem_supported = 1;
 		}
+		param_str = NULL;
 	}
 
 	fi_param_define(&cxip_prov, "rdzv_proto", FI_PARAM_STRING,
