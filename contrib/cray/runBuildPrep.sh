@@ -37,8 +37,8 @@ case "${OBS_TARGET_OS}" in
     csm_1_2_0_*)    COS_BRANCH='release/cos-2.3' ;;
     cos_2_4_*)      COS_BRANCH='release/cos-2.4' ;;
     csm_1_3_*)      COS_BRANCH='release/cos-2.4' ;;
+    sle15_sp4_*)    COS_BRANCH='release/cos-2.4' ;;
     cos_2_5_*)      COS_BRANCH='release/cos-2.5' ;;
-    csm_1_6_*)      COS_BRANCH='release/cos-2.5' ;;
     *)              COS_BRANCH='dev/master' ;;
 esac
 
@@ -147,13 +147,13 @@ elif command -v zypper > /dev/null; then
                     ;;
         cos_2_5_*)      CUDA_RPMS="nvhpc-2023"
                     ;;
-        csm_1_6_*)      CUDA_RPMS="nvhpc-2023"
+        csm_1_5_*)      CUDA_RPMS="nvhpc"
                     ;;
-        cos_2_6_*)      CUDA_RPMS="nvhpc-2023"
+        cos_2_6_*)      CUDA_RPMS="nvhpc"
                     ;;
-        sle15_sp5_*)    CUDA_RPMS="nvhpc-2023"
+        sle15_sp5_*)    CUDA_RPMS="nvhpc"
                     ;;
-        *)              CUDA_RPMS="nvhpc-2023"
+        *)              CUDA_RPMS="nvhpc"
                     ;;
     esac
 
