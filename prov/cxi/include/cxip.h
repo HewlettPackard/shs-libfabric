@@ -164,8 +164,8 @@
 #define	CXIP_COLL_MAX_CONCUR		8
 #define	CXIP_COLL_MIN_RX_BUFS		8
 #define	CXIP_COLL_MIN_RX_SIZE		4096
-#define	CXIP_COLL_MIN_FREE		64
-#define	CXIP_COLL_MAX_TX_SIZE		32
+#define	CXIP_COLL_MIN_MULTI_RECV	64
+#define	CXIP_COLL_MAX_DATA_SIZE		32
 #define	CXIP_COLL_MAX_SEQNO		(1 << 10)
 
 #define CXIP_REQ_BUF_HEADER_MAX_SIZE (sizeof(struct c_port_fab_hdr) + \
@@ -2314,6 +2314,7 @@ struct cxip_coll_pte {
 	struct dlist_entry buf_list;		// PTE receive buffers
 	ofi_atomic32_t buf_cnt;			// count of linked buffers
 	ofi_atomic32_t buf_swap_cnt;		// for diagnostics
+	int buf_low_water;			// for diagnostics
 	bool enabled;				// enabled
 };
 
@@ -2333,7 +2334,6 @@ struct cxip_coll_data {
 	cxip_coll_op_t red_op;			// reduction opcode
 	cxip_coll_rc_t red_rc;			// reduction return code
 	int red_cnt;				// reduction contrib count
-	int red_max;				// reduction max contrib count
 	bool initialized;
 };
 

@@ -347,6 +347,7 @@ struct cxip_coll_unicast_key {
 struct cxip_coll_rank_key {
 	uint32_t hwroot_idx;		// index of hwroot in av_set list
 	uint32_t rank;			// rank of this object
+	bool rx_discard;		// clear to report RX events
 };
 
 struct cxip_comm_key {

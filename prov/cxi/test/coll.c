@@ -159,13 +159,15 @@ TestSuite(coll_join, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
 	  .disabled = false, .timeout = CXIT_DEFAULT_TIMEOUT);
 
 /* expand AV and create av_sets for collectives */
-static void _create_av_set(int count, int rank, struct fid_av_set **av_set_fid)
+static void _create_av_set(int count, int rank, bool rx_discard,
+			   struct fid_av_set **av_set_fid)
 {
 	struct cxip_ep *ep;
 	struct cxip_comm_key comm_key = {
 		.keytype = COMM_KEY_RANK,
 		.rank.rank = rank,
 		.rank.hwroot_idx = 0,
+		.rank.rx_discard = rx_discard
 	};
 	struct fi_av_set_attr attr = {
 		.count = 0,
@@ -202,7 +204,7 @@ static void _create_av_set(int count, int rank, struct fid_av_set **av_set_fid)
 	}
 }
 
-void _create_netsim_collective(int count, int exp)
+void _create_netsim_collective(int count, bool discard, int exp)
 {
 	int i, ret;
 
@@ -217,7 +219,7 @@ void _create_netsim_collective(int count, int exp)
 	for (i = 0; i < cxit_coll_mc_list.count; i++) {
 		TRACE("%s: ==== create %d\n", __func__, i);
 		TRACE("create av_set rank %d\n", i);
-		_create_av_set(cxit_coll_mc_list.count, i,
+		_create_av_set(cxit_coll_mc_list.count, i, discard,
 			       &cxit_coll_mc_list.av_set_fid[i]);
 		TRACE("join collective\n");
 		ret = cxip_join_collective(cxit_ep, FI_ADDR_NOTAVAIL,
@@ -335,7 +337,7 @@ Test(coll_join, join1)
 {
 	TRACE("=========================\n");
 	TRACE("join1\n");
-	_create_netsim_collective(1, FI_SUCCESS);
+	_create_netsim_collective(1, true, FI_SUCCESS);
 	_wait_for_join(1, FI_SUCCESS, 0);
 	_destroy_netsim_collective();
 }
@@ -346,7 +348,7 @@ Test(coll_join, join2)
 {
 	TRACE("=========================\n");
 	TRACE("join2\n");
-	_create_netsim_collective(2, FI_SUCCESS);
+	_create_netsim_collective(2, true, FI_SUCCESS);
 	_wait_for_join(2, FI_SUCCESS, 0);
 	_destroy_netsim_collective();
 }
@@ -357,7 +359,7 @@ Test(coll_join, join3)
 {
 	TRACE("=========================\n");
 	TRACE("join3\n");
-	_create_netsim_collective(3, FI_SUCCESS);
+	_create_netsim_collective(3, true, FI_SUCCESS);
 	_wait_for_join(3, FI_SUCCESS, 0);
 	_destroy_netsim_collective();
 }
@@ -368,7 +370,7 @@ Test(coll_join, join32)
 {
 	TRACE("=========================\n");
 	TRACE("join32\n");
-	_create_netsim_collective(32, FI_SUCCESS);
+	_create_netsim_collective(32, true, FI_SUCCESS);
 	_wait_for_join(32, FI_SUCCESS, 0);
 	_destroy_netsim_collective();
 }
@@ -384,7 +386,7 @@ Test(coll_join, retry_getgroup) {
 	TRACE("join retry getgroup\n");
 	for (node = 0; node < 5; node++) {
 		cxip_trap_set(node, CXIP_TRAP_GETGRP, -FI_EAGAIN);
-		_create_netsim_collective(5, FI_SUCCESS);
+		_create_netsim_collective(5, true, FI_SUCCESS);
 		_wait_for_join(5, FI_SUCCESS, 0);
 		_destroy_netsim_collective();
 		cxip_trap_close();
@@ -398,7 +400,7 @@ Test(coll_join, retry_broadcast) {
 	TRACE("join retry broadcast\n");
 	for (node = 0; node < 5; node++) {
 		cxip_trap_set(node, CXIP_TRAP_BCAST, -FI_EAGAIN);
-		_create_netsim_collective(5, FI_SUCCESS);
+		_create_netsim_collective(5, true, FI_SUCCESS);
 		_wait_for_join(5, FI_SUCCESS, 0);
 		_destroy_netsim_collective();
 		cxip_trap_close();
@@ -412,7 +414,7 @@ Test(coll_join, retry_reduce) {
 	TRACE("join retry reduce\n");
 	for (node = 0; node < 5; node++) {
 		cxip_trap_set(node, CXIP_TRAP_REDUCE, -FI_EAGAIN);
-		_create_netsim_collective(5, FI_SUCCESS);
+		_create_netsim_collective(5, true, FI_SUCCESS);
 		_wait_for_join(5, FI_SUCCESS, 0);
 		_destroy_netsim_collective();
 		cxip_trap_close();
@@ -426,7 +428,7 @@ Test(coll_join, fail_ptlte) {
 	TRACE("join fail mixed errors\n");
 	for (node = 0; node < 5; node++) {
 		cxip_trap_set(node, CXIP_TRAP_INITPTE, -FI_EFAULT);
-		_create_netsim_collective(5, FI_SUCCESS);
+		_create_netsim_collective(5, true, FI_SUCCESS);
 		_wait_for_join(5, -FI_EAVAIL, C_RC_PTLTE_NOT_FOUND);
 		_destroy_netsim_collective();
 		cxip_trap_close();
@@ -587,7 +589,7 @@ Test(coll_put, put_bad_rank)
 	struct fakebuf buf;
 	int ret;
 
-	_create_netsim_collective(2, FI_SUCCESS);
+	_create_netsim_collective(2, false, FI_SUCCESS);
 	_wait_for_join(2, FI_SUCCESS, 0);
 
 	mc_obj = container_of(cxit_coll_mc_list.mc_fid[0],
@@ -604,7 +606,7 @@ Test(coll_put, put_bad_rank)
  */
 Test(coll_put, put_one)
 {
-	_create_netsim_collective(1, FI_SUCCESS);
+	_create_netsim_collective(1, false, FI_SUCCESS);
 	_wait_for_join(1, FI_SUCCESS, 0);
 	_put_data(1, 0, 0);
 	_destroy_netsim_collective();
@@ -615,7 +617,7 @@ Test(coll_put, put_one)
  */
 Test(coll_put, put_ranks)
 {
-	_create_netsim_collective(2, FI_SUCCESS);
+	_create_netsim_collective(2, false, FI_SUCCESS);
 	_wait_for_join(2, FI_SUCCESS, 0);
 	TRACE("call _put_data()\n");
 	_put_data(1, 0, 0);
@@ -629,7 +631,7 @@ Test(coll_put, put_ranks)
  */
 Test(coll_put, put_many)
 {
-	_create_netsim_collective(1, FI_SUCCESS);
+	_create_netsim_collective(1, false, FI_SUCCESS);
 	_wait_for_join(1, FI_SUCCESS, 0);
 	_put_data(4000, 0, 0);
 	_destroy_netsim_collective();
@@ -670,7 +672,7 @@ void _put_red_pkt(int count)
 	uint64_t dataval;
 	int i, ret;
 
-	_create_netsim_collective(1, FI_SUCCESS);
+	_create_netsim_collective(1, false, FI_SUCCESS);
 	_wait_for_join(1, FI_SUCCESS, 0);
 
 	mc_obj = container_of(cxit_coll_mc_list.mc_fid[0],
@@ -735,7 +737,7 @@ Test(coll_put, put_red_pkt_distrib)
 	struct fi_cq_data_entry entry;
 	int i, cnt, ret;
 
-	_create_netsim_collective(5, FI_SUCCESS);
+	_create_netsim_collective(5, false, FI_SUCCESS);
 	_wait_for_join(5, FI_SUCCESS, 0);
 
 	for (i = 0; i < 5; i++) {
@@ -1134,7 +1136,7 @@ void _allreduce(int start_node, int bad_node, int concur)
 
 void _reduce_test_set(int concur)
 {
-	_create_netsim_collective(31, FI_SUCCESS);
+	_create_netsim_collective(31, true, FI_SUCCESS);
 	_wait_for_join(31, FI_SUCCESS, 0);
 	/* success with each of the nodes starting */
 	_allreduce(0, -1, concur);
@@ -1187,7 +1189,7 @@ Test(coll_reduce, concurN)
 void setup_coll(void)
 {
 	cxit_setup_rma();
-	_create_netsim_collective(REDUCE_NODES, FI_SUCCESS);
+	_create_netsim_collective(REDUCE_NODES, true, FI_SUCCESS);
 	_wait_for_join(REDUCE_NODES, FI_SUCCESS, 0);
 }
 
@@ -2332,6 +2334,7 @@ Test(coll_reduce_ops, prereduce)
 
 	accum1 = calloc(nodes, sizeof(*accum1));
 	memset(&check, 0, sizeof(check));
+	ret = -1;
 	for (i = 0; i < nodes; i++) {
 		/* reset accum2 for next node */
 		memset(&accum2, 0, sizeof(accum2));

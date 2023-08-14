@@ -514,7 +514,7 @@ int _get_cxi_data_bytcnt(cxip_coll_op_t cxi_opcode,
 		return -FI_EOPNOTSUPP;
 	}
 	size *= count;
-	if (size > CXIP_COLL_MAX_TX_SIZE)
+	if (size > CXIP_COLL_MAX_DATA_SIZE)
 		return -FI_EINVAL;
 	return size;
 }
@@ -611,7 +611,7 @@ static int _gen_tx_dfa(struct cxip_coll_reduction *reduction,
  * Issue a restricted Put to the destination address.
  * If md is NULL, this performs an IDC Put, otherwise it issues a DMA Put.
  *
- * Exported for unit testing. NETSIM cxitest requires mc->rx_discard == false.
+ * Exported for unit testing.
  *
  * This will return -FI_EAGAIN on transient errors.
  */
@@ -835,9 +835,16 @@ static void _coll_rx_req_report(struct cxip_req *req)
 	    req->coll.coll_pte->ep_obj->coll.min_multi_recv) {
 		struct cxip_coll_pte *coll_pte = req->coll.coll_pte;
 		struct cxip_coll_buf *buf = req->coll.coll_buf;
+		int cnt;
 
 		/* Will be re-incremented when LINK is received */
-		ofi_atomic_dec32(&coll_pte->buf_cnt);
+		cnt = ofi_atomic_dec32(&coll_pte->buf_cnt);
+		if (req->coll.coll_pte->buf_low_water > cnt)
+			req->coll.coll_pte->buf_low_water = cnt;
+		if (cnt <= 0) {
+			CXIP_WARN("COLL buffers exhausted\n");
+			// TODO set flag to shut this down
+		}
 		ofi_atomic_inc32(&coll_pte->buf_swap_cnt);
 
 		/* Re-use this buffer in the hardware */
@@ -956,20 +963,20 @@ static int _hw_coll_recv(struct cxip_coll_pte *coll_pte, struct cxip_req *req)
 
 	/* C_LE_MANAGE_LOCAL makes Cassini ignore initiator remote_offset in all
 	 * Puts, and causes automatic UNLINK when buffer capacity drops below
-	 * CXIP_COLL_MIN_FREE.
+	 * CXIP_COLL_MIN_MULTI_RECV.
 	 *
 	 * C_LE_EVENT_UNLINK_DISABLE prevents generation of UNLINK events. We
 	 * detect UNLINK by counting packets, and presume automatic UNLINK drops
-	 * below CXIP_COLL_MIN_FREE.
+	 * below CXIP_COLL_MIN_MULTI_RECV.
 	 *
 	 * C_LE_EVENT_UNLINK_DISABLE prevents UNLINK events from being
 	 * generated. Hardware performs UNLINK automatically when buffer
-	 * capacity is below CXIP_COLL_MIN_FREE.
+	 * capacity is below CXIP_COLL_MIN_MULTI_RECV.
 	 *
 	 * C_LE_OP_PUT indicates this is an input buffer that responses to PUT.
 	 *
 	 * C_LE_NO_TRUNCATE is not used, because all packets are a fixed size,
-	 * and CXIP_COLL_MIN_FREE is sufficient to guarantee space for one new
+	 * and CXIP_COLL_MIN_MULTI_RECV is sufficient to guarantee space for one new
 	 * reduction packet.
 	 */
 	le_flags = C_LE_EVENT_UNLINK_DISABLE | C_LE_OP_PUT | C_LE_MANAGE_LOCAL;
@@ -984,7 +991,7 @@ static int _hw_coll_recv(struct cxip_coll_pte *coll_pte, struct cxip_req *req)
 			      C_PTL_LIST_PRIORITY,
 			      req->req_id,
 			      0, 0, 0,
-			      coll_pte->ep_obj->rxc.min_multi_recv,
+			      req->coll.coll_pte->ep_obj->coll.min_multi_recv,
 			      le_flags, coll_pte->ep_obj->coll.rx_cntr,
 			      coll_pte->ep_obj->coll.rx_cmdq,
 			      true);
@@ -1168,6 +1175,7 @@ static int _coll_add_buffers(struct cxip_coll_pte *coll_pte, size_t size,
 		sched_yield();
 		cxip_evtq_progress(coll_pte->ep_obj->coll.rx_evtq);
 	} while (ofi_atomic_get32(&coll_pte->buf_cnt) < count);
+	coll_pte->buf_low_water = (int)count;
 
 	return FI_SUCCESS;
 del_msg:
@@ -1394,7 +1402,6 @@ void _dump_coll_data(const char *tag, const struct cxip_coll_data *coll_data)
 	TRACE("  red_op  = %d\n", coll_data->red_op);
 	TRACE("  rec_rc  = %d\n", coll_data->red_rc);
 	TRACE("  red_cnt = %d\n", coll_data->red_cnt);
-	TRACE("  red_max = %d\n", coll_data->red_max);
 	TRACE("  data:\n");
 	for (i = 0; i < 4; i++)
 		TRACE(" %016lx\n", coll_data->intval.ival[i]);
@@ -1415,6 +1422,7 @@ static void _init_coll_data(struct cxip_coll_data *coll_data, int opcode,
 	if (user_data)
 		memcpy(coll_data->databuf, user_data, bytcnt);
 	coll_data->red_rc = 0;
+	coll_data->red_cnt = 1;
 	coll_data->red_op = opcode;
 	switch (coll_data->red_op) {
 	case COLL_OPCODE_FLT_MIN:
@@ -1478,17 +1486,9 @@ static void _reduce(struct cxip_coll_data *accum,
 	SET_RED_RC(accum->red_rc, coll_data->red_rc);
 
 	/* Real reduction (send or receive) must count contributions.
-	 * red_max is zero until after injection from this node.
 	 */
-	if (!pre_reduce) {
+	if (!pre_reduce)
 		accum->red_cnt += coll_data->red_cnt;
-		if (!accum->red_max)
-			accum->red_max = coll_data->red_max;
-		if (accum->red_cnt > accum->red_max) {
-			SET_RED_RC(accum->red_rc, CXIP_COLL_RC_CONTR_OVERFLOW);
-			return;
-		}
-	}
 
 	/* ops must always match, else don't apply data */
 	if (accum->red_op != coll_data->red_op) {
@@ -1801,14 +1801,14 @@ int cxip_coll_send_red_pkt(struct cxip_coll_reduction *reduction,
 			pkt->hdr.repsum_m = coll_data->repsum.M;
 			pkt->hdr.repsum_ovflid = coll_data->repsum.overflow_id;
 		}
-		memcpy(pkt->data, &coll_data->databuf, CXIP_COLL_MAX_TX_SIZE);
+		memcpy(pkt->data, &coll_data->databuf, CXIP_COLL_MAX_DATA_SIZE);
 	} else {
 		pkt->hdr.redcnt = 0;
 		pkt->hdr.op = 0;
 		pkt->hdr.red_rc = 0;
 		pkt->hdr.repsum_m = 0;
 		pkt->hdr.repsum_ovflid = 0;
-		memset(pkt->data, 0, CXIP_COLL_MAX_TX_SIZE);
+		memset(pkt->data, 0, CXIP_COLL_MAX_DATA_SIZE);
 	}
 	_dump_red_pkt(pkt, "send");
 	_swappkt(pkt);
@@ -1832,11 +1832,8 @@ static void _post_coll_complete(struct cxip_coll_reduction *reduction)
 
 	/* Indicates collective completion by writing to the endpoint TX CQ */
 	req = reduction->op_inject_req;
-	reduction->op_inject_req = NULL;
-	if (!req) {
-		TRACE("red_id=%2d NO REQ\n", reduction->red_id);
+	if (!req)
 		return;
-	}
 
 	if (reduction->accum.red_rc == CXIP_COLL_RC_SUCCESS) {
 		ret = cxip_cq_req_complete(req);
@@ -1845,8 +1842,6 @@ static void _post_coll_complete(struct cxip_coll_reduction *reduction)
 			_cxip_rc_to_cxi_rc[reduction->accum.red_rc],
 			reduction->accum.red_rc, NULL, 0);
 	}
-	cxip_evtq_req_free(req);
-
 	if (ret) {
 		/* Is this possible? The only error is -FI_ENOMEM. It looks like
 		 * send is blocked with -FI_EAGAIN until we are guaranteed EQ
@@ -1855,6 +1850,18 @@ static void _post_coll_complete(struct cxip_coll_reduction *reduction)
 		CXIP_WARN("Attempt to post completion failed %s\n",
 			   fi_strerror(-ret));
 	}
+
+	/* req structure no longer needed */
+	cxip_evtq_req_free(req);
+
+	/* restore reduction object to usable state */
+	reduction->accum.initialized = false;
+	reduction->in_use = false;
+	reduction->completed = false;
+	reduction->pktsent = false;
+	reduction->accum.initialized = false;
+	reduction->accum.red_rc = CXIP_COLL_RC_SUCCESS;
+	reduction->op_inject_req = NULL;
 }
 
 /* unpack reduction data from a reduction packet */
@@ -2000,36 +2007,37 @@ static void _progress_root(struct cxip_coll_reduction *reduction,
 
 		ret = cxip_coll_send_red_pkt(reduction, NULL,
 					     !mc_obj->arm_disable, true);
+		_tsset(reduction);
 		if (ret) {
 			SET_RED_RC(reduction->accum.red_rc,
 				   CXIP_COLL_RC_TX_FAILURE);
 			reduction->completed = true;
 			goto post_complete;
 		}
-		_tsset(reduction);
 		return;
 	}
 
-	/* If injection, nothing more to do */
-	if (!pkt)
-		return;
+	/* Process received packet */
+	if (pkt) {
+		/* Root has received a leaf packet */
+		_dump_red_pkt(pkt, "Rrcv");
 
-	/* Leaf packet receipt, process */
-	_dump_red_pkt(pkt, "Rrcv");
+		/* Drop out-of-date packets */
+		if (pkt->hdr.resno != reduction->seqno) {
+			TRACE_DEBUG("bad seqno, exp=%d saw=%d\n",
+				reduction->seqno, pkt->hdr.resno);
+			ofi_atomic_inc32(&mc_obj->seq_err_cnt);
+			return;
+		}
 
-	/* Drop out-of-date packets */
-	if (pkt->hdr.resno != reduction->seqno) {
-		ofi_atomic_inc32(&mc_obj->seq_err_cnt);
-		return;
+		/* capture and reduce packet information */
+		_unpack_red_data(&coll_data, pkt);
+		_reduce(&reduction->accum, &coll_data, false);
+		_dump_coll_data("after leaf contrib to root", &reduction->accum);
 	}
-
-	/* capture and reduce packet information */
-	_unpack_red_data(&coll_data, pkt);
-	_reduce(&reduction->accum, &coll_data, false);
-	_dump_coll_data("after leaf contrib to root", &reduction->accum);
 
 	/* check for reduction complete */
-	if (reduction->accum.red_cnt == reduction->accum.red_max) {
+	if (reduction->accum.red_cnt == mc_obj->av_set_obj->fi_addr_cnt) {
 		/* copy reduction result to user result buffer */
 		if (reduction->op_rslt_data && reduction->op_data_bytcnt) {
 			memcpy(reduction->op_rslt_data,
@@ -2037,14 +2045,14 @@ static void _progress_root(struct cxip_coll_reduction *reduction,
 			       reduction->op_data_bytcnt);
 		}
 
-		/* send reduction result to leaves, arming the next pass */
+		/* send reduction result to leaves, arm new seqno */
 		reduction->seqno = mc_obj->seqno;
 		INCMOD(mc_obj->seqno, CXIP_COLL_MAX_SEQNO);
 		reduction->completed = true;
 
-		_tsset(reduction);
 		ret = cxip_coll_send_red_pkt(reduction, &reduction->accum,
 					     !mc_obj->arm_disable, false);
+		_tsset(reduction);
 		if (ret)
 			SET_RED_RC(reduction->accum.red_rc,
 				   CXIP_COLL_RC_TX_FAILURE);
@@ -2056,7 +2064,6 @@ post_complete:
 	while (reduction->in_use && reduction->completed) {
 		/* Reduction completed on root */
 		_post_coll_complete(reduction);
-		reduction->in_use = false;
 
 		/* Advance to the next reduction */
 		INCMOD(mc_obj->tail_red_id, mc_obj->max_red_id);
@@ -2082,7 +2089,6 @@ static void _progress_leaf(struct cxip_coll_reduction *reduction,
 	/* if reduction packet, reset timer, seqno, honor retry */
 	if (pkt) {
 		_dump_red_pkt(pkt, "Lrcv");
-
 		_tsset(reduction);
 		reduction->seqno = pkt->hdr.seqno;
 		reduction->resno = pkt->hdr.seqno;
@@ -2094,6 +2100,10 @@ static void _progress_leaf(struct cxip_coll_reduction *reduction,
 	if (!reduction->pktsent) {
 		/* Avoid first-use incast, retry guaranteed */
 		if (_is_red_first_time(reduction))
+			return;
+
+		/* Don't send if nothing to send yet */
+		if (!reduction->accum.initialized)
 			return;
 
 		/* Send leaf data */
@@ -2124,16 +2134,14 @@ static void _progress_leaf(struct cxip_coll_reduction *reduction,
 			&coll_data.databuf,
 			reduction->op_data_bytcnt);
 	}
-
-post_complete:
 	/* Reduction completed on leaf */
 	reduction->completed = true;
 
+post_complete:
 	/* Post completions in injection order */
 	reduction = &mc_obj->reduction[mc_obj->tail_red_id];
 	while (reduction->in_use && reduction->completed) {
 		_post_coll_complete(reduction);
-		reduction->in_use = false;
 		INCMOD(mc_obj->tail_red_id, mc_obj->max_red_id);
 		reduction = &mc_obj->reduction[mc_obj->tail_red_id];
 	}
@@ -2183,6 +2191,17 @@ _cxip_coll_prereduce(int cxi_opcode, const void *op_send_data,
  *
  * Reduction ID is normally hidden. Can be exposed by calling _capture_red_id()
  * just before calling a reduction operation.
+ *
+ * - Acquires next available reduction structure in MC, or returns -FI_EAGAIN.
+ * - Acquires evtq request, or return -FI_EAGAIN.
+ * - Marks reduction structure in-use.
+ * - Advances next available reduction pointer.
+ * - Initializes:
+ *   - result data pointer
+ *   - source data (pre-reduced or raw)
+ *   - data byte count
+ * - Reduces user data into reduction accumulator (may already contain data)
+ * - Progresses reduction (no packet supplied)
  */
 static ssize_t
 _cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
@@ -2221,9 +2240,6 @@ _cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 	reduction->in_use = true;
 
 	/* Set up the reduction structure */
-	reduction->pktsent = false;
-	reduction->completed = false;
-	reduction->accum.initialized = false;
 	reduction->op_rslt_data = op_rslt_data;
 	reduction->op_data_bytcnt = bytcnt;
 	reduction->op_context = context;
@@ -2237,8 +2253,6 @@ _cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 		_init_coll_data(&coll_data, cxi_opcode, op_send_data, bytcnt);
 
 	/* reduce data into accumulator */
-	coll_data.red_cnt = 1;
-	coll_data.red_max = mc_obj->av_set_obj->fi_addr_cnt;
 	_reduce(&reduction->accum, &coll_data, false);
 	_dump_coll_data("coll_data initialized inj", &coll_data);
 
@@ -3373,7 +3387,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		jstate->bcast_data.valid = true;
 		jstate->is_mcast = false;
 		jstate->create_mcast = false;
-		jstate->rx_discard = false;
+		jstate->rx_discard = av_set_obj->comm_key.rank.rx_discard;
 		link_zb = true;
 		break;
 	default:
@@ -3528,7 +3542,7 @@ void cxip_coll_init(struct cxip_ep_obj *ep_obj)
 	ep_obj->coll.tx_cntr = NULL;
 	ep_obj->coll.rx_evtq = NULL;
 	ep_obj->coll.tx_evtq = NULL;
-	ep_obj->coll.min_multi_recv = CXIP_COLL_MIN_FREE;
+	ep_obj->coll.min_multi_recv = CXIP_COLL_MIN_MULTI_RECV;
 	ep_obj->coll.buffer_count = CXIP_COLL_MIN_RX_BUFS;
 	ep_obj->coll.buffer_size = CXIP_COLL_MIN_RX_SIZE;
 

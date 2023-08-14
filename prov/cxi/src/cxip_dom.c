@@ -1106,18 +1106,39 @@ static int cxip_query_collective(struct fid_domain *domain,
 	ext_op = (int)attr->op;
 	switch (coll) {
 	case FI_BARRIER:
-		if (ext_op != FI_NOOP)
-			return -FI_EOPNOTSUPP;
+		/* ignore attr->op: barrier takes no operator */
+		/* ignore attr->datatype: barrier takes no data */
 		attr->datatype_attr.count = 0;
 		attr->datatype_attr.size = 0;
 		break;
 	case FI_BROADCAST:
-		if (ext_op != FI_ATOMIC_WRITE)
+		/* ignore attr->op: barrier takes no operator */
+		switch (attr->datatype) {
+		case FI_INT8:
+		case FI_UINT8:
+			attr->datatype_attr.count = 32;
+			attr->datatype_attr.size = 1;
+			break;
+		case FI_INT16:
+		case FI_UINT16:
+			attr->datatype_attr.count = 16;
+			attr->datatype_attr.size = 2;
+			break;
+		case FI_INT32:
+		case FI_UINT32:
+		case FI_FLOAT:
+			attr->datatype_attr.count = 8;
+			attr->datatype_attr.size = 4;
+			break;
+		case FI_INT64:
+		case FI_UINT64:
+		case FI_DOUBLE:
+			attr->datatype_attr.count = 4;
+			attr->datatype_attr.size = 8;
+			break;
+		default:
 			return -FI_EOPNOTSUPP;
-		if (attr->datatype != FI_UINT8)
-			return -FI_EOPNOTSUPP;
-		attr->datatype_attr.count = 32;
-		attr->datatype_attr.size = 1;
+		}
 		break;
 	case FI_REDUCE:
 	case FI_ALLREDUCE:
