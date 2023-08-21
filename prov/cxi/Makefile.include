@@ -77,6 +77,16 @@ prov_cxi_test_multinode_test_coll_CPPFLAGS = \
 prov_cxi_test_multinode_test_coll_LDFLAGS = -static
 prov_cxi_test_multinode_test_coll_LDADD = $(linkback) $(PTHREAD_LIBS)
 
+noinst_PROGRAMS += prov/cxi/test/multinode/test_barrier
+prov_cxi_test_multinode_test_barrier_SOURCES = \
+	prov/cxi/test/multinode/multinode_frmwk.h \
+	prov/cxi/test/multinode/multinode_frmwk.c \
+	prov/cxi/test/multinode/test_barrier.c
+prov_cxi_test_multinode_test_barrier_CPPFLAGS = \
+	$(AM_CPPFLAGS) $(cxi_CPPFLAGS) $(PTHREAD_FLAGS)
+prov_cxi_test_multinode_test_barrier_LDFLAGS = -static
+prov_cxi_test_multinode_test_barrier_LDADD = $(linkback) $(PTHREAD_LIBS)
+
 if HAVE_CRITERION
 
 # curltest is not expected to exist outside devel env

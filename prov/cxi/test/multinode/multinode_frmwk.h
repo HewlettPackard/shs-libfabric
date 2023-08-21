@@ -79,3 +79,5 @@ int frmwk_errmsg(int ret, const char *fmt, ...)
 	__attribute__((format(__printf__, 2, 3)));
 int frmwk_log0(const char *fmt, ...)
 	__attribute__((format(__printf__, 1, 2)));
+int frmwk_log(const char *fmt, ...)
+	__attribute__((format(__printf__, 1, 2)));

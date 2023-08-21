@@ -233,13 +233,28 @@ struct mycontext {
 int frmwk_log0(const char *fmt, ...)
 {
 	va_list args;
-	int len;
+	int len = 0;
 
 	if (_frmwk_init && frmwk_rank != 0)
 		return 0;
 
 	va_start(args, fmt);
 	len = vfprintf(stdout, fmt, args);
+	va_end(args);
+	fflush(stdout);
+	return len;
+}
+
+/* display message with rank designation */
+int frmwk_log(const char *fmt, ...)
+{
+	va_list args;
+	int len = 0;
+
+	if (_frmwk_init)
+		len += fprintf(stdout, "[%2d] ", frmwk_rank);
+	va_start(args, fmt);
+	len += vfprintf(stdout, fmt, args);
 	va_end(args);
 	fflush(stdout);
 	return len;
