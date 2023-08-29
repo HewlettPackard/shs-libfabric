@@ -1007,8 +1007,8 @@ int main(int argc, char **argv)
 	frmwk_log0("libfabric populated\n");
 
 	gethostname(hostname, sizeof(hostname));
-	TRACE("%s NIC=%04x PID=%d VNI=%d\n", hostname, ep_obj->src_addr.nic,
-	    ep_obj->ptable->dom->pid, ep_obj->ptable->dom->vni);
+	TRACE("%s NIC=%04x PID=%d\n", hostname, ep_obj->src_addr.nic,
+	    ep_obj->ptable->pid);
 
 	if (_istest(testmask, 0)) {
 		TRACE("======= %s\n", testname);

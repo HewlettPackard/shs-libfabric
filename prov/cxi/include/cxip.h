@@ -676,14 +676,20 @@ struct cxip_lni {
  */
 struct cxip_portals_table {
 	struct cxip_lni *lni;
-	struct cxil_domain *dom;
+	uint32_t pid;
+	struct cxil_domain **doms;
+	size_t doms_count;
 };
 
-int cxip_portals_table_alloc(struct cxip_lni *lni, uint32_t vni, uint32_t pid,
+int cxip_portals_table_alloc(struct cxip_lni *lni, uint16_t *vni,
+			     size_t vni_count, uint32_t pid,
 			     struct cxip_portals_table **ptable);
 void cxip_portals_table_free(struct cxip_portals_table *ptable);
 
-#define MAX_PTE_MAP_COUNT 2
+struct cxip_pte_map_entry {
+        struct dlist_entry entry;
+        struct cxil_pte_map *map;
+};
 
 /*
  * CXI Portal Table Entry (PtlTE) wrapper
@@ -695,8 +701,7 @@ struct cxip_pte {
 	struct cxip_portals_table *ptable;
 	struct cxil_pte *pte;
 	enum c_ptlte_state state;
-	struct cxil_pte_map *pte_map[MAX_PTE_MAP_COUNT];
-	unsigned int pte_map_count;
+	struct dlist_entry map_list;
 
 	void (*state_change_cb)(struct cxip_pte *pte,
 				const union c_event *event);

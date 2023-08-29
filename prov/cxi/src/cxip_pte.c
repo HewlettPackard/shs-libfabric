@@ -152,27 +152,63 @@ int cxip_pte_unlink(struct cxip_pte *pte, enum c_ptl_list list,
 	return FI_SUCCESS;
 }
 
+static void cxip_pte_unmap_list(struct dlist_entry *map_list)
+{
+	struct cxip_pte_map_entry *entry;
+	int ret;
+
+	while ((entry =
+	       dlist_first_entry_or_null(map_list, struct cxip_pte_map_entry,
+					 entry))) {
+		dlist_remove(&entry->entry);
+
+		ret = cxil_unmap_pte(entry->map);
+		if (ret)
+			CXIP_WARN("Failed to unmap PTE: %d\n", ret);
+
+		free(entry);
+	}
+}
+
 /*
  * cxip_pte_map() - Map a PtlTE to a specific PID index. A single PtlTE can be
  * mapped into MAX_PTE_MAP_COUNT different PID indices.
  */
 int cxip_pte_map(struct cxip_pte *pte, uint64_t pid_idx, bool is_multicast)
 {
+	DEFINE_LIST(map_list);
+	struct cxip_pte_map_entry *entry;
 	int ret;
+	int i;
 
-	if (pte->pte_map_count >= MAX_PTE_MAP_COUNT)
-		return -FI_ENOSPC;
+	for (i = 0; i < pte->ptable->doms_count; i++) {
 
-	ret = cxil_map_pte(pte->pte, pte->ptable->dom, pid_idx, is_multicast,
-			   &pte->pte_map[pte->pte_map_count]);
-	if (ret) {
-		CXIP_WARN("Failed to map PTE: %d\n", ret);
-		return -FI_EADDRINUSE;
+		entry = calloc(1, sizeof(*entry));
+		if (!entry) {
+			CXIP_WARN("Failed to allocated map entry memory");
+			goto err_unmap;
+		}
+
+		ret = cxil_map_pte(pte->pte, pte->ptable->doms[i], pid_idx,
+				   is_multicast, &entry->map);
+		if (ret) {
+			CXIP_WARN("Failed to map PTE: %d\n", ret);
+			free(entry);
+			ret = -FI_EADDRINUSE;
+			goto err_unmap;
+		}
+
+		dlist_insert_tail(&entry->entry, &map_list);
 	}
 
-	pte->pte_map_count++;
+	dlist_splice_tail(&pte->map_list, &map_list);
 
 	return FI_SUCCESS;
+
+err_unmap:
+	cxip_pte_unmap_list(&map_list);
+
+	return ret;
 }
 
 /*
@@ -211,6 +247,7 @@ int cxip_pte_alloc_nomap(struct cxip_portals_table *ptable, struct cxi_eq *evtq,
 	new_pte->state_change_cb = state_change_cb;
 	new_pte->ctx = ctx;
 	new_pte->state = C_PTLTE_DISABLED;
+	dlist_init(&new_pte->map_list);
 
 	*pte = new_pte;
 
@@ -257,17 +294,14 @@ free_pte:
 void cxip_pte_free(struct cxip_pte *pte)
 {
 	int ret;
-	int i;
 
 	ofi_spin_lock(&pte->ptable->lni->iface->lock);
 	dlist_remove(&pte->pte_entry);
 	ofi_spin_unlock(&pte->ptable->lni->iface->lock);
 
-	for (i = pte->pte_map_count; i > 0; i--) {
-		ret = cxil_unmap_pte(pte->pte_map[i - 1]);
-		if (ret)
-			CXIP_WARN("Failed to unmap PTE: %d\n", ret);
-	}
+	cxip_pte_unmap_list(&pte->map_list);
+
+	assert(dlist_empty(&pte->map_list));
 
 	ret = cxil_destroy_pte(pte->pte);
 	if (ret)

@@ -465,14 +465,14 @@ static int cxip_ep_enable(struct fid_ep *fid_ep)
 
 	/* src_addr.pid may be C_PID_ANY at this point. */
 	ret = cxip_portals_table_alloc(ep_obj->domain->lni,
-				       ep_obj->auth_key.vni,
+				       &ep_obj->auth_key.vni, 1,
 				       ep_obj->src_addr.pid,
 				       &ep_obj->ptable);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Failed to allocate portabs table: %d\n", ret);
 		goto unlock;
 	}
-	ep_obj->src_addr.pid = ep_obj->ptable->dom->pid;
+	ep_obj->src_addr.pid = ep_obj->ptable->pid;
 
 	ret = cxip_ep_ctrl_init(ep_obj);
 	if (ret != FI_SUCCESS) {
