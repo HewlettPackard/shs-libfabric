@@ -2565,7 +2565,7 @@ static int _acquire_pte(struct cxip_ep_obj *ep_obj, int pid_idx,
 	ofi_atomic_initialize32(&coll_pte->recv_cnt, 0);
 
 	/* bind PTE to domain */
-	ret = cxip_pte_alloc(ep_obj->if_dom, ep_obj->coll.rx_evtq->eq,
+	ret = cxip_pte_alloc(ep_obj->ptable, ep_obj->coll.rx_evtq->eq,
 			     pid_idx, is_mcast, &pt_opts, _coll_pte_cb,
 			     coll_pte, &coll_pte->pte);
 	if (ret)

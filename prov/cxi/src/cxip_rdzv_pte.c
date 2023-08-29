@@ -264,7 +264,7 @@ static int cxip_rdzv_base_pte_alloc(struct cxip_txc *txc,
 		pt_opts.use_logical = 1;
 
 	/* Reserve the Rendezvous Send PTE */
-	ret = cxip_pte_alloc_nomap(txc->ep_obj->if_dom, txc->tx_evtq.eq,
+	ret = cxip_pte_alloc_nomap(txc->ep_obj->ptable, txc->tx_evtq.eq,
 				   &pt_opts, cxip_rdzv_pte_cb, txc,
 				   &base_pte->pte);
 	if (ret != FI_SUCCESS) {

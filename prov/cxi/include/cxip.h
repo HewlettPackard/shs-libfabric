@@ -671,17 +671,17 @@ struct cxip_lni {
 	ofi_spin_t lock;
 };
 
-/*
- * CXI Device Domain wrapper
- *
- * A CXI domain is conceptually equivalent to a Portals table. The provider
- * assigns a unique domain to each OFI Endpoint. A domain is addressed using
- * the tuple { NIC, VNI, PID }.
+/* A portals table define a network endpoint address. The endpoint address is
+ * a {NIC + PID} and this can be configured against multiple VNIs
  */
-struct cxip_if_domain {
+struct cxip_portals_table {
 	struct cxip_lni *lni;
 	struct cxil_domain *dom;
 };
+
+int cxip_portals_table_alloc(struct cxip_lni *lni, uint32_t vni, uint32_t pid,
+			     struct cxip_portals_table **ptable);
+void cxip_portals_table_free(struct cxip_portals_table *ptable);
 
 #define MAX_PTE_MAP_COUNT 2
 
@@ -692,7 +692,7 @@ struct cxip_if_domain {
  */
 struct cxip_pte {
 	struct dlist_entry pte_entry;
-	struct cxip_if_domain *if_dom;
+	struct cxip_portals_table *ptable;
 	struct cxil_pte *pte;
 	enum c_ptlte_state state;
 	struct cxil_pte_map *pte_map[MAX_PTE_MAP_COUNT];
@@ -2094,7 +2094,7 @@ struct cxip_ep_obj {
 	size_t txq_size;
 	size_t tgq_size;
 	ofi_atomic32_t ref;
-	struct cxip_if_domain *if_dom;
+	struct cxip_portals_table *ptable;
 };
 
 /*
@@ -2564,9 +2564,6 @@ enum cxi_traffic_class cxip_ofi_to_cxi_tc(uint32_t ofi_tclass);
 int cxip_txq_cp_set(struct cxip_cmdq *cmdq, uint16_t vni,
 		    enum cxi_traffic_class tc,
 		    enum cxi_traffic_class_type tc_type);
-int cxip_alloc_if_domain(struct cxip_lni *lni, uint32_t vni, uint32_t pid,
-			 struct cxip_if_domain **if_dom);
-void cxip_free_if_domain(struct cxip_if_domain *if_dom);
 void cxip_if_init(void);
 void cxip_if_fini(void);
 
@@ -2585,12 +2582,12 @@ int cxip_pte_append(struct cxip_pte *pte, uint64_t iova, size_t len,
 int cxip_pte_unlink(struct cxip_pte *pte, enum c_ptl_list list,
 		    int buffer_id, struct cxip_cmdq *cmdq);
 int cxip_pte_map(struct cxip_pte *pte, uint64_t pid_idx, bool is_multicast);
-int cxip_pte_alloc_nomap(struct cxip_if_domain *if_dom, struct cxi_eq *evtq,
+int cxip_pte_alloc_nomap(struct cxip_portals_table *ptable, struct cxi_eq *evtq,
 			 struct cxi_pt_alloc_opts *opts,
 			 void (*state_change_cb)(struct cxip_pte *pte,
 						 const union c_event *event),
 			 void *ctx, struct cxip_pte **pte);
-int cxip_pte_alloc(struct cxip_if_domain *if_dom, struct cxi_eq *evtq,
+int cxip_pte_alloc(struct cxip_portals_table *ptable, struct cxi_eq *evtq,
 		   uint64_t pid_idx, bool is_multicast,
 		   struct cxi_pt_alloc_opts *opts,
 		   void (*state_change_cb)(struct cxip_pte *pte,

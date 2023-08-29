@@ -145,7 +145,7 @@ static int rxc_msg_init(struct cxip_rxc *rxc)
 		pt_opts.use_logical = 1;
 	}
 
-	ret = cxip_pte_alloc(rxc->ep_obj->if_dom,
+	ret = cxip_pte_alloc(rxc->ep_obj->ptable,
 			     rxc->rx_evtq.eq, CXIP_PTL_IDX_RXQ, false,
 			     &pt_opts, cxip_recv_pte_cb, rxc, &rxc->rx_pte);
 	if (ret != FI_SUCCESS) {

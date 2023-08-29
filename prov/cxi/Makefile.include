@@ -37,7 +37,8 @@ _cxi_files = \
 	prov/cxi/src/cxip_telemetry.c \
 	prov/cxi/src/cxip_ptelist_buf.c \
 	prov/cxi/src/cxip_evtq.c \
-	prov/cxi/src/cxip_nic.c
+	prov/cxi/src/cxip_nic.c \
+	prov/cxi/src/cxip_portals_table.c
 
 _cxi_headers = \
 	prov/cxi/include/cxip.h \

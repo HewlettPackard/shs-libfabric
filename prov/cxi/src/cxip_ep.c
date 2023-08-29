@@ -464,20 +464,20 @@ static int cxip_ep_enable(struct fid_ep *fid_ep)
 	assert(ep_obj->domain->enabled);
 
 	/* src_addr.pid may be C_PID_ANY at this point. */
-	ret = cxip_alloc_if_domain(ep_obj->domain->lni,
-				   ep_obj->auth_key.vni,
-				   ep_obj->src_addr.pid,
-				   &ep_obj->if_dom);
+	ret = cxip_portals_table_alloc(ep_obj->domain->lni,
+				       ep_obj->auth_key.vni,
+				       ep_obj->src_addr.pid,
+				       &ep_obj->ptable);
 	if (ret != FI_SUCCESS) {
-		CXIP_WARN("Failed to allocate IF Domain: %d\n", ret);
-		goto free_if_domain;
+		CXIP_WARN("Failed to allocate portabs table: %d\n", ret);
+		goto unlock;
 	}
-	ep_obj->src_addr.pid = ep_obj->if_dom->dom->pid;
+	ep_obj->src_addr.pid = ep_obj->ptable->dom->pid;
 
 	ret = cxip_ep_ctrl_init(ep_obj);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("cxip_ep_ctrl_init returned: %d\n", ret);
-		goto free_if_domain;
+		goto free_portals_table;
 	}
 
 	ret = cxip_zbcoll_init(ep_obj);
@@ -543,9 +543,9 @@ static int cxip_ep_enable(struct fid_ep *fid_ep)
 free_ep_ctrl:
 	cxip_ep_ctrl_fini(ep_obj);
 
-free_if_domain:
-	cxip_free_if_domain(ep_obj->if_dom);
-	ep_obj->if_dom = NULL;
+free_portals_table:
+	cxip_portals_table_free(ep_obj->ptable);
+	ep_obj->ptable = NULL;
 unlock:
 	ofi_genlock_unlock(&ep_obj->lock);
 
@@ -561,8 +561,8 @@ static void cxip_ep_disable(struct cxip_ep_obj *ep_obj)
 		cxip_coll_disable(ep_obj);
 		cxip_zbcoll_fini(ep_obj);
 		cxip_ep_ctrl_fini(ep_obj);
-		cxip_free_if_domain(ep_obj->if_dom);
-		ep_obj->if_dom = NULL;
+		cxip_portals_table_free(ep_obj->ptable);
+		ep_obj->ptable = NULL;
 		ep_obj->enabled = false;
 	}
 }

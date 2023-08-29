@@ -411,61 +411,6 @@ int cxip_txq_cp_set(struct cxip_cmdq *cmdq, uint16_t vni,
 	return ret;
 }
 
-/*
- * cxip_alloc_if_domain() - Allocate an IF Domain
- */
-int cxip_alloc_if_domain(struct cxip_lni *lni, uint32_t vni, uint32_t pid,
-			 struct cxip_if_domain **if_dom)
-{
-	struct cxip_if_domain *dom;
-	int ret;
-
-	dom = malloc(sizeof(*dom));
-	if (!dom) {
-		CXIP_WARN("Failed to allocate IF domain\n");
-		return -FI_ENOMEM;
-	}
-
-	ret = cxil_alloc_domain(lni->lni, vni, pid, &dom->dom);
-	if (ret) {
-		CXIP_WARN("Failed to allocate CXI Domain, ret: %d\n", ret);
-		ret = -FI_ENOSPC;
-		goto free_dom;
-	}
-
-	dom->lni = lni;
-
-	CXIP_DBG("Allocated IF Domain, %s VNI: %u PID: %u\n",
-		 lni->iface->info->device_name, vni, dom->dom->pid);
-
-	*if_dom = dom;
-
-	return FI_SUCCESS;
-
-free_dom:
-	free(dom);
-
-	return ret;
-}
-
-/*
- * cxip_free_if_domain() - Free an IF Domain.
- */
-void cxip_free_if_domain(struct cxip_if_domain *if_dom)
-{
-	int ret;
-
-	CXIP_DBG("Freeing IF Domain, %s VNI: %u PID: %u\n",
-		 if_dom->lni->iface->info->device_name, if_dom->dom->vni,
-		 if_dom->dom->pid);
-
-	ret = cxil_destroy_domain(if_dom->dom);
-	if (ret)
-		CXIP_WARN("Failed to destroy domain: %d\n", ret);
-
-	free(if_dom);
-}
-
 /* Caller musthold ep_obj->lock. */
 int cxip_pte_set_state(struct cxip_pte *pte, struct cxip_cmdq *cmdq,
 		       enum c_ptlte_state new_state, uint32_t drop_count)
@@ -594,7 +539,7 @@ int cxip_pte_map(struct cxip_pte *pte, uint64_t pid_idx, bool is_multicast)
 	if (pte->pte_map_count >= MAX_PTE_MAP_COUNT)
 		return -FI_ENOSPC;
 
-	ret = cxil_map_pte(pte->pte, pte->if_dom->dom, pid_idx, is_multicast,
+	ret = cxil_map_pte(pte->pte, pte->ptable->dom, pid_idx, is_multicast,
 			   &pte->pte_map[pte->pte_map_count]);
 	if (ret) {
 		CXIP_WARN("Failed to map PTE: %d\n", ret);
@@ -610,7 +555,7 @@ int cxip_pte_map(struct cxip_pte *pte, uint64_t pid_idx, bool is_multicast)
  * cxip_pte_alloc_nomap() - Allocate a PtlTE without performing any mapping
  * during allocation.
  */
-int cxip_pte_alloc_nomap(struct cxip_if_domain *if_dom, struct cxi_eq *evtq,
+int cxip_pte_alloc_nomap(struct cxip_portals_table *ptable, struct cxi_eq *evtq,
 			 struct cxi_pt_alloc_opts *opts,
 			 void (*state_change_cb)(struct cxip_pte *pte,
 						 const union c_event *event),
@@ -626,7 +571,7 @@ int cxip_pte_alloc_nomap(struct cxip_if_domain *if_dom, struct cxi_eq *evtq,
 	}
 
 	/* Allocate a PTE */
-	ret = cxil_alloc_pte(if_dom->lni->lni, evtq, opts,
+	ret = cxil_alloc_pte(ptable->lni->lni, evtq, opts,
 			     &new_pte->pte);
 	if (ret) {
 		CXIP_WARN("Failed to allocate PTE: %d\n", ret);
@@ -634,11 +579,11 @@ int cxip_pte_alloc_nomap(struct cxip_if_domain *if_dom, struct cxi_eq *evtq,
 		goto free_mem;
 	}
 
-	ofi_spin_lock(&if_dom->lni->iface->lock);
-	dlist_insert_tail(&new_pte->pte_entry, &if_dom->lni->iface->ptes);
-	ofi_spin_unlock(&if_dom->lni->iface->lock);
+	ofi_spin_lock(&ptable->lni->iface->lock);
+	dlist_insert_tail(&new_pte->pte_entry, &ptable->lni->iface->ptes);
+	ofi_spin_unlock(&ptable->lni->iface->lock);
 
-	new_pte->if_dom = if_dom;
+	new_pte->ptable = ptable;
 	new_pte->state_change_cb = state_change_cb;
 	new_pte->ctx = ctx;
 	new_pte->state = C_PTLTE_DISABLED;
@@ -656,7 +601,7 @@ free_mem:
 /*
  * cxip_pte_alloc() - Allocate and map a PTE for use.
  */
-int cxip_pte_alloc(struct cxip_if_domain *if_dom, struct cxi_eq *evtq,
+int cxip_pte_alloc(struct cxip_portals_table *ptable, struct cxi_eq *evtq,
 		   uint64_t pid_idx, bool is_multicast,
 		   struct cxi_pt_alloc_opts *opts,
 		   void (*state_change_cb)(struct cxip_pte *pte,
@@ -665,7 +610,7 @@ int cxip_pte_alloc(struct cxip_if_domain *if_dom, struct cxi_eq *evtq,
 {
 	int ret;
 
-	ret = cxip_pte_alloc_nomap(if_dom, evtq, opts, state_change_cb,
+	ret = cxip_pte_alloc_nomap(ptable, evtq, opts, state_change_cb,
 				   ctx, pte);
 	if (ret)
 		return ret;
@@ -690,9 +635,9 @@ void cxip_pte_free(struct cxip_pte *pte)
 	int ret;
 	int i;
 
-	ofi_spin_lock(&pte->if_dom->lni->iface->lock);
+	ofi_spin_lock(&pte->ptable->lni->iface->lock);
 	dlist_remove(&pte->pte_entry);
-	ofi_spin_unlock(&pte->if_dom->lni->iface->lock);
+	ofi_spin_unlock(&pte->ptable->lni->iface->lock);
 
 	for (i = pte->pte_map_count; i > 0; i--) {
 		ret = cxil_unmap_pte(pte->pte_map[i - 1]);
