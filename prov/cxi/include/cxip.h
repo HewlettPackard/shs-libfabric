@@ -715,7 +715,6 @@ struct cxip_cmdq {
 	struct cxip_lni *lni;
 };
 
-
 /* OFI Provider Structures */
 
 /*
