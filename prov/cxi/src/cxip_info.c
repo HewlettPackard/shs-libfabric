@@ -481,6 +481,7 @@ struct cxip_environment cxip_env = {
 	.oflow_buf_max_cached = CXIP_OFLOW_BUF_MAX_CACHED,
 	.safe_devmem_copy_threshold =  CXIP_SAFE_DEVMEM_COPY_THRESH,
 	.optimized_mrs = true,
+	.mr_match_events = false,
 	.llring_mode = CXIP_LLRING_IDLE,
 	.cq_policy = CXI_CQ_UPDATE_LOW_FREQ_EMPTY,
 	.default_vni = 10,
@@ -766,6 +767,11 @@ static void cxip_env_init(void)
 			"Enables optimized memory regions.");
 	fi_param_get_bool(&cxip_prov, "optimized_mrs",
 			  &cxip_env.optimized_mrs);
+
+	fi_param_define(&cxip_prov, "mr_match_events", FI_PARAM_BOOL,
+			"Enable MR match counting (default %lu).");
+	fi_param_get_bool(&cxip_prov, "mr_match_events",
+			  &cxip_env.mr_match_events);
 
 	fi_param_define(&cxip_prov, "llring_mode", FI_PARAM_STRING,
 			"Set low-latency command queue ring mode.");

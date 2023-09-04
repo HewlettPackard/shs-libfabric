@@ -1034,7 +1034,21 @@ The CXI provider checks for the following environment variables:
     accessible by the CPU with load/store operations.
 
 *FI_CXI_OPTIMIZED_MRS*
-:   Enables optimized memory regions.
+:   Enables optimized memory regions. See section *CXI Domain Extensions* on how
+    to enable/disable optimized MRs at the domain level instead of for the
+    global process/job.
+
+*FI_CXI_MR_MATCH_EVENTS*
+:   Enabling MR match events in a client/server environment can be used
+    to ensure that memory backing a memory region cannot be remotely
+    accessed after the MR has been closed, even if it that memory remains
+    mapped in the libfabric MR cache. Manual progress must be made at the
+    target to process the MR match event accounting and avoid event queue
+    overflow. There is a slight additional cost in the creation and
+    tear-down of MR. This option is disabled by default.
+
+    See section *CXI Domain Extensions* on how to enable MR match events at
+    the domain level instead of for the global process/job.
 
 *FI_CXI_LLRING_MODE*
 :   Set the policy for use of the low-latency command queue ring mechanism.
@@ -1243,7 +1257,7 @@ accessed using the fi_open_ops function.
 
 ## CXI Domain Extensions
 
-CXI domain extensions have been named *FI_CXI_DOM_OPS_4*. The flags parameter
+CXI domain extensions have been named *FI_CXI_DOM_OPS_6*. The flags parameter
 is ignored. The fi_open_ops function takes a `struct fi_cxi_dom_ops`. See an
 example of usage below:
 
@@ -1267,6 +1281,8 @@ struct fi_cxi_dom_ops {
 				    size_t count, fi_addr_t *src_addr,
 				    size_t *ux_count);
 	int (*get_dwq_depth)(struct fid *fid, size_t *depth);
+	int (*enable_mr_match_events)(struct fid *fid, bool enable);
+	int (*enable_optimized_mrs)(struct fid *fid, bool enable);
 };
 ```
 
@@ -1312,6 +1328,19 @@ is the number of triggered operation commands which can be queued to hardware.
 The depth is not per fi_domain but rather per service ID. Since a single service
 ID is intended to be shared between all processing using the same NIC in a job
 step, the triggered operations are shared across processes.
+
+*enable_mr_match_events* is used to enable/disable MR match event counting for
+a specific domain in a client/server environment. It will ensure that memory
+backing a MR cannot be accessed after invoking fi_close() on the MR, even if
+that memory remains in the libfabric MR cache. Manual progress must be made at
+the target even for single sided operations.
+
+*enable_optimized_mrs* is used to enable/disable the use of optimized MRs for
+a specific domain. This is useful if multiple domains are created within a single
+process and the use of optimized MRs is only desirable for a subset of domains.
+Domains default to the global setting *FI_CXI_OPTIMIZED_MRS* or enabled. If the
+domain is not configured for FI_MR_PROV_KEY MR mode, the call will fail
+with -FI_EINVAL, it is not supported for client generated keys.
 
 ## CXI Counter Extensions
 

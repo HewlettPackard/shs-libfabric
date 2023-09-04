@@ -973,12 +973,51 @@ static int cxip_domain_get_dwq_depth(struct fid *fid, size_t *depth)
 	return FI_SUCCESS;
 }
 
+static int cxip_domain_enable_mr_match_events(struct fid *fid, bool enable)
+{
+	struct cxip_domain *dom;
+
+	if (fid->fclass != FI_CLASS_DOMAIN) {
+		CXIP_WARN("Invalid FID: %p\n", fid);
+		return -FI_EINVAL;
+	}
+
+	dom = container_of(fid, struct cxip_domain,
+			   util_domain.domain_fid.fid);
+	dom->mr_match_events = enable;
+
+	return FI_SUCCESS;
+}
+
+static int cxip_domain_enable_optimized_mrs(struct fid *fid, bool enable)
+{
+	struct cxip_domain *dom;
+
+	if (fid->fclass != FI_CLASS_DOMAIN) {
+		CXIP_WARN("Invalid FID: %p\n", fid);
+		return -FI_EINVAL;
+	}
+
+	dom = container_of(fid, struct cxip_domain,
+			   util_domain.domain_fid.fid);
+	if (!dom->is_prov_key) {
+		CXIP_WARN("Requires FI_MR_PROV_KEY\n");
+		return -FI_EINVAL;
+	}
+
+	dom->optimized_mrs = enable;
+
+	return FI_SUCCESS;
+}
+
 static struct fi_cxi_dom_ops cxip_dom_ops_ext = {
 	.cntr_read = cxip_domain_cntr_read,
 	.topology = cxip_domain_topology,
 	.enable_hybrid_mr_desc = cxip_domain_enable_hybrid_mr_desc,
 	.ep_get_unexp_msgs = cxip_ep_get_unexp_msgs,
 	.get_dwq_depth = cxip_domain_get_dwq_depth,
+	.enable_mr_match_events = cxip_domain_enable_mr_match_events,
+	.enable_optimized_mrs = cxip_domain_enable_optimized_mrs,
 };
 
 static int cxip_dom_ops_open(struct fid *fid, const char *ops_name,
@@ -989,7 +1028,8 @@ static int cxip_dom_ops_open(struct fid *fid, const char *ops_name,
 	    !strcmp(ops_name, FI_CXI_DOM_OPS_2) ||
 	    !strcmp(ops_name, FI_CXI_DOM_OPS_3) ||
 	    !strcmp(ops_name, FI_CXI_DOM_OPS_4) ||
-	    !strcmp(ops_name, FI_CXI_DOM_OPS_5)) {
+	    !strcmp(ops_name, FI_CXI_DOM_OPS_5) ||
+	    !strcmp(ops_name, FI_CXI_DOM_OPS_6)) {
 		*ops = &cxip_dom_ops_ext;
 		return FI_SUCCESS;
 	}
@@ -1278,7 +1318,6 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 	cxi_domain->util_domain.domain_fid.ops = &cxip_dom_ops;
 	cxi_domain->util_domain.domain_fid.mr = &cxip_dom_mr_ops;
 
-
 	dlist_init(&cxi_domain->txc_list);
 	dlist_init(&cxi_domain->cntr_list);
 	dlist_init(&cxi_domain->cq_list);
@@ -1305,7 +1344,10 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 	if (cxi_domain->util_domain.mr_mode & FI_MR_PROV_KEY)
 		cxi_domain->is_prov_key = true;
 
+	cxi_domain->mr_match_events = cxip_env.mr_match_events;
+	cxi_domain->optimized_mrs = cxip_env.optimized_mrs;
 	*dom = &cxi_domain->util_domain.domain_fid;
+
 	return 0;
 
 cleanup_dom:

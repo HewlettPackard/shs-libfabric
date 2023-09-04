@@ -247,6 +247,7 @@ struct cxip_environment {
 	size_t default_cq_size;
 	size_t default_tx_size;
 	int optimized_mrs;
+	int mr_match_events;
 	int disable_eq_hugetlb;
 	int zbcoll_radix;
 
@@ -807,6 +808,17 @@ struct cxip_domain {
 
 	/* Provider generated RKEYs, else client */
 	bool is_prov_key;
+
+	/* Provider generated RKEYs optimized MR disablement/enablement */
+	bool optimized_mrs;
+
+	/* Enable MR match event counting enables a more robust
+	 * MR when using FI_MR_PROV_KEY. It disables hardware cached
+	 * MR keys and ensures memory backing a MR cannot be
+	 * remotely accessed even if that memory remains in the
+	 * libfabric MR cache.
+	 */
+	bool mr_match_events;
 
 	/* Domain wide MR resources.
 	 *   Req IDs are control buffer IDs to map MR or MR cache to an LE.
@@ -2105,6 +2117,24 @@ struct cxip_mr {
 	uint64_t flags;			// special flags
 	struct fi_mr_attr attr;		// attributes
 	struct cxip_cntr *cntr;		// if bound to cntr
+
+	/* Indicates if FI_RMA_EVENT was specified at creation and
+	 * will be used to enable fi_writedata() and fi_inject_writedata()
+	 * support for this MR (TODO).
+	 */
+	bool rma_events;
+
+	/* If requested then count MR events to determine if RMA are in
+	 * progress. At close if no RMA are in progress bypass the invalidate
+	 * of the PTLTE LE. This improves non-cached key close performance,
+	 * enabling their use so that after closing the MR the associated
+	 * memory cannot be remotely accessed, even if it remains in the
+	 * libfabric MR cache.
+	 */
+	bool count_events;
+	ofi_atomic32_t  match_events;
+	ofi_atomic32_t  access_events;
+
 	ofi_spin_t lock;
 
 	struct cxip_mr_util_ops *mr_util;
@@ -2648,7 +2678,8 @@ void cxip_ep_ctrl_progress(struct cxip_ep_obj *ep_obj);
 void cxip_ep_ctrl_progress_locked(struct cxip_ep_obj *ep_obj);
 void cxip_ep_tx_ctrl_progress(struct cxip_ep_obj *ep_obj);
 void cxip_ep_tx_ctrl_progress_locked(struct cxip_ep_obj *ep_obj);
-
+void cxip_ep_tgt_ctrl_progress(struct cxip_ep_obj *ep_obj);
+void cxip_ep_tgt_ctrl_progress_locked(struct cxip_ep_obj *ep_obj);
 int cxip_ep_ctrl_init(struct cxip_ep_obj *ep_obj);
 void cxip_ep_ctrl_fini(struct cxip_ep_obj *ep_obj);
 void cxip_ep_ctrl_del_wait(struct cxip_ep_obj *ep_obj);

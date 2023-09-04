@@ -33,6 +33,8 @@ int cxip_ctrl_msg_cb(struct cxip_ctrl_req *req, const union c_event *event)
 	int ret __attribute__((unused));
 
 	switch (event->hdr.event_type) {
+	case C_EVENT_MATCH:
+		break;
 	case C_EVENT_PUT:
 		assert(cxi_event_rc(event) == C_RC_OK);
 
@@ -236,6 +238,7 @@ static struct cxip_ctrl_req *cxip_ep_ctrl_event_req(struct cxip_ep_obj *ep_obj,
 						    const union c_event *event)
 {
 	struct cxip_ctrl_req *req;
+	int event_rc;
 
 	switch (event->hdr.event_type) {
 	case C_EVENT_ACK:
@@ -243,13 +246,46 @@ static struct cxip_ctrl_req *cxip_ep_ctrl_event_req(struct cxip_ep_obj *ep_obj,
 		break;
 	case C_EVENT_LINK:
 	case C_EVENT_UNLINK:
-	case C_EVENT_PUT:
+	case C_EVENT_MATCH:
 		req = cxip_domain_ctrl_id_at(ep_obj->domain,
 					     event->tgt_long.buffer_id);
 		if (!req)
 			CXIP_WARN("Invalid buffer_id: %d (%s)\n",
 				  event->tgt_long.buffer_id,
 				  cxi_event_to_str(event));
+		break;
+	case C_EVENT_PUT:
+	case C_EVENT_GET:
+	case C_EVENT_ATOMIC:
+	case C_EVENT_FETCH_ATOMIC:
+		event_rc = cxi_event_rc(event);
+
+		if (event_rc != C_RC_ENTRY_NOT_FOUND &&
+		    event_rc != C_RC_NO_SPACE &&
+		    event_rc != C_RC_MST_CANCELLED) {
+			req = cxip_domain_ctrl_id_at(ep_obj->domain,
+						     event->tgt_long.buffer_id);
+			if (!req)
+				CXIP_WARN("Invalid buffer_id: %d (%s)\n",
+					  event->tgt_long.buffer_id,
+					  cxi_event_to_str(event));
+			break;
+		}
+
+		req = NULL;
+
+		/* Silently drop any invalidated LE events. Since the control
+		 * PtlTE is used for non-optimized MRs, it is possible to
+		 * trigger a target error event if an invalid MR key or
+		 * out-of-bounds offset was specified. For such operations, it
+		 * is safe to just log the bad access attempt and drop the EQ
+		 * event, the error will be reported to the initiator.
+		 */
+		if (event_rc != C_RC_MST_CANCELLED)
+			CXIP_WARN("Unexpected %s event rc: %s\n",
+				  cxi_event_to_str(event),
+				  cxi_rc_to_str(event_rc));
+
 		break;
 	case C_EVENT_STATE_CHANGE:
 		cxip_pte_state_change(ep_obj->domain->iface, event);
@@ -263,30 +299,6 @@ static struct cxip_ctrl_req *cxip_ep_ctrl_event_req(struct cxip_ep_obj *ep_obj,
 			   event->cmd_fail.fail_command.cmd_type,
 			   event->cmd_fail.fail_command.cmd_size,
 			   event->cmd_fail.fail_command.opcode);
-
-	/* Since the control PtlTE is used for unoptimized MRs, it is possible
-	 * to trigger a target error message if the user uses an invalid MR key
-	 * or out-of-bounds offset. For such operations, it is safe to just drop
-	 * the EQ event and let error be reported to the initiator.
-	 */
-	case C_EVENT_ATOMIC:
-	case C_EVENT_FETCH_ATOMIC:
-		if (cxi_event_rc(event) != C_RC_ENTRY_NOT_FOUND &&
-		    cxi_event_rc(event) != C_RC_NO_SPACE)
-			CXIP_FATAL("Invalid %d event rc: %d\n",
-				   event->hdr.event_type, cxi_event_rc(event));
-		req = NULL;
-		break;
-
-	/* Get events can be generated when an invalid standard MR key is used
-	 */
-	case C_EVENT_GET:
-		CXIP_WARN("Unexpected %s event rc: %s\n",
-			  cxi_event_to_str(event),
-			  cxi_rc_to_str(cxi_event_rc(event)));
-		req = NULL;
-		break;
-
 	default:
 		CXIP_FATAL("Invalid event type: %d\n", event->hdr.event_type);
 	}
@@ -372,6 +384,23 @@ void cxip_ep_ctrl_progress_locked(struct cxip_ep_obj *ep_obj)
 {
 	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl_tgt_evtq, false, true);
 	cxip_ep_tx_ctrl_progress_locked(ep_obj);
+}
+
+/*
+ * cxip_ep_tgt_ctrl_progress() - Progress TGT operations using the control EQ.
+ */
+void cxip_ep_tgt_ctrl_progress(struct cxip_ep_obj *ep_obj)
+{
+	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl_tgt_evtq, false, false);
+}
+
+/*
+ * cxip_ep_tgt_ctrl_progress_locked() - Progress operations using the control
+ * EQ.
+ */
+void cxip_ep_tgt_ctrl_progress_locked(struct cxip_ep_obj *ep_obj)
+{
+	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl_tgt_evtq, false, true);
 }
 
 /*
@@ -582,7 +611,14 @@ int cxip_ep_ctrl_init(struct cxip_ep_obj *ep_obj)
 	const union c_event *event;
 	int ret;
 	size_t rx_eq_size = MIN(cxip_env.ctrl_rx_eq_max_size,
-				ofi_universe_size * 64);
+				ofi_universe_size * 64 +
+				ep_obj->domain->mr_match_events * 256 * 64);
+
+	/* When MR event counting has been requested turn on
+	 * delivery of match events.
+	 */
+	if (ep_obj->domain->mr_match_events)
+		pt_opts.en_event_match = 1;
 
 	/* If CQ(s) are using a wait object, then control event
 	 * queues need to unblock CQ poll as well. CQ will add the
@@ -625,7 +661,7 @@ int cxip_ep_ctrl_init(struct cxip_ep_obj *ep_obj)
 		goto free_tgt_evtq;
 	}
 
-	ret = cxip_ep_cmdq(ep_obj, false, FI_TC_UNSPEC,
+	ret = cxip_ep_cmdq(ep_obj, false, ep_obj->domain->tclass,
 			   ep_obj->ctrl_tgt_evtq, &ep_obj->ctrl_tgq);
 	if (ret != FI_SUCCESS) {
 		CXIP_WARN("Failed to allocate control TGQ, ret: %d\n", ret);

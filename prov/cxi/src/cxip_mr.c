@@ -72,6 +72,7 @@ static void cxip_ep_mr_remove(struct cxip_mr *mr)
 int cxip_mr_cb(struct cxip_ctrl_req *req, const union c_event *event)
 {
 	struct cxip_mr *mr = req->mr.mr;
+	int evt_rc = cxi_event_rc(event);
 
 	switch (event->hdr.event_type) {
 	case C_EVENT_LINK:
@@ -80,28 +81,45 @@ int cxip_mr_cb(struct cxip_ctrl_req *req, const union c_event *event)
 		else
 			assert(mr->mr_state == CXIP_MR_DISABLED);
 
-		if (cxi_event_rc(event) == C_RC_OK) {
+		if (evt_rc == C_RC_OK) {
 			mr->mr_state = CXIP_MR_LINKED;
 			CXIP_DBG("MR PTE linked: %p\n", mr);
 			break;
 		}
 
 		mr->mr_state = CXIP_MR_LINK_ERR;
-		CXIP_WARN("MR PTE link: %p failed %d\n",
-			  mr, cxi_event_rc(event));
+		CXIP_WARN("MR PTE link: %p failed %d\n", mr, evt_rc);
 		break;
 	case C_EVENT_UNLINK:
-		assert(cxi_event_rc(event) == C_RC_OK);
+		assert(evt_rc == C_RC_OK);
 
 		assert(mr->mr_state == CXIP_MR_LINKED);
 		mr->mr_state = CXIP_MR_UNLINKED;
 
 		CXIP_DBG("MR PTE unlinked: %p\n", mr);
 		break;
+	case C_EVENT_MATCH:
+		ofi_atomic_inc32(&mr->match_events);
+
+		if (evt_rc != C_RC_OK)
+			goto log_err;
+		break;
+	case C_EVENT_PUT:
+	case C_EVENT_GET:
+	case C_EVENT_ATOMIC:
+	case C_EVENT_FETCH_ATOMIC:
+		if (mr->count_events)
+			ofi_atomic_inc32(&mr->access_events);
+
+		if (evt_rc != C_RC_OK)
+			goto log_err;
+
+		/* TODO handle fi_writedata/fi_inject_writedata */
+		break;
 	default:
+log_err:
 		CXIP_WARN(CXIP_UNEXPECTED_EVENT,
-			  cxi_event_to_str(event),
-			  cxi_rc_to_str(cxi_event_rc(event)));
+			  cxi_event_to_str(event), cxi_rc_to_str(evt_rc));
 	}
 
 	return FI_SUCCESS;
@@ -113,7 +131,7 @@ static int cxip_mr_wait_append(struct cxip_ep_obj *ep_obj,
 	/* Wait for PTE LE append status update */
 	do {
 		sched_yield();
-		cxip_ep_ctrl_progress_locked(ep_obj);
+		cxip_ep_tgt_ctrl_progress_locked(ep_obj);
 	} while (mr->mr_state != CXIP_MR_LINKED &&
 		 mr->mr_state != CXIP_MR_LINK_ERR);
 
@@ -145,13 +163,19 @@ static int cxip_mr_enable_std(struct cxip_mr *mr)
 
 	mr->req.cb = cxip_mr_cb;
 
-	le_flags = C_LE_EVENT_SUCCESS_DISABLE | C_LE_UNRESTRICTED_BODY_RO;
+	le_flags = C_LE_UNRESTRICTED_BODY_RO;
 	if (mr->attr.access & FI_REMOTE_WRITE)
 		le_flags |= C_LE_OP_PUT;
 	if (mr->attr.access & FI_REMOTE_READ)
 		le_flags |= C_LE_OP_GET;
 	if (mr->cntr)
 		le_flags |= C_LE_EVENT_CT_COMM;
+
+	/* TODO: to support fi_writedata(), we will want to leave
+	 * success events enabled for mr->rma_events true too.
+	 */
+	if (!mr->count_events)
+		le_flags |= C_LE_EVENT_SUCCESS_DISABLE;
 
 	ret = cxip_pte_append(ep_obj->ctrl_pte,
 			      mr->len ? CXI_VA_TO_IOVA(mr->md->md, mr->buf) : 0,
@@ -192,14 +216,27 @@ static int cxip_mr_disable_std(struct cxip_mr *mr)
 
 	do {
 		sched_yield();
-		cxip_ep_ctrl_progress_locked(ep_obj);
+		cxip_ep_tgt_ctrl_progress_locked(ep_obj);
 	} while (mr->mr_state != CXIP_MR_UNLINKED);
 
-	ret = cxil_invalidate_pte_le(ep_obj->ctrl_pte->pte, mr->key,
-				     C_PTL_LIST_PRIORITY);
-	if (ret)
-		CXIP_WARN("MR invalidate failed: %d (mr: %p key 0x%016lX)\n",
-			  ret, mr, mr->key);
+	/* If MR event counts are recorded then we can check event counts
+	 * to determine if invalidate can be skipped.
+	 */
+	if (!mr->count_events || ofi_atomic_get32(&mr->match_events) !=
+	    ofi_atomic_get32(&mr->access_events)) {
+		/* TODO: Temporary debug helper for DAOS to track if
+		 * Match events detect a need to flush.
+		 */
+		if (mr->count_events)
+			CXIP_WARN("Match events required pte LE invalidate\n");
+
+		ret = cxil_invalidate_pte_le(ep_obj->ctrl_pte->pte, mr->key,
+					     C_PTL_LIST_PRIORITY);
+		if (ret)
+			CXIP_WARN("MR %p key 0x%016lX invalidate failed %d\n",
+				  mr, mr->key, ret);
+	}
+
 	mr->enabled = false;
 
 	CXIP_DBG("Standard MR disabled: %p (key: 0x%016lX)\n", mr, mr->key);
@@ -345,7 +382,7 @@ static int cxip_mr_disable_opt(struct cxip_mr *mr)
 
 	do {
 		sched_yield();
-		cxip_ep_ctrl_progress_locked(ep_obj);
+		cxip_ep_tgt_ctrl_progress_locked(ep_obj);
 	} while (mr->mr_state != CXIP_MR_UNLINKED);
 
 cleanup:
@@ -752,7 +789,7 @@ static int cxip_prov_init_mr_key(struct cxip_mr *mr, uint64_t req_key)
 	if (ret)
 		return ret;
 
-	key.opt = cxip_env.optimized_mrs &&
+	key.opt = mr->domain->optimized_mrs &&
 			mr->mr_id < CXIP_PTL_IDX_PROV_MR_OPT_CNT;
 	key.is_prov = 1;
 	key.key = mr->mr_id;
@@ -774,7 +811,7 @@ static int cxip_prov_cache_init_mr_key(struct cxip_mr *mr,
 	struct cxi_md *md = mr->md->md;
 
 	/* If optimized enabled it is preferred for caching */
-	key.opt = cxip_env.optimized_mrs;
+	key.opt = mr->domain->optimized_mrs;
 	key.cached = true;
 	key.is_prov = 1;
 	key.lac = mr->len ? md->lac : 0;
@@ -825,6 +862,7 @@ bool cxip_generic_is_valid_mr_key(uint64_t key)
 
 static bool cxip_mr_key_opt(uint64_t key)
 {
+	/* Client key optimized MR controlled globally only */
 	return cxip_env.optimized_mrs && key < CXIP_PTL_IDX_MR_OPT_CNT;
 }
 
@@ -834,7 +872,7 @@ static bool cxip_prov_mr_key_opt(uint64_t key)
 		.raw = key,
 	};
 
-	if (cxip_env.optimized_mrs && cxip_key.opt)
+	if (cxip_key.opt)
 		return true;
 
 	return false;
@@ -938,7 +976,7 @@ void cxip_ctrl_mr_cache_flush(struct cxip_ep_obj *ep_obj)
 
 		do {
 			sched_yield();
-			cxip_ep_ctrl_progress_locked(ep_obj);
+			cxip_ep_tgt_ctrl_progress_locked(ep_obj);
 		} while (mr_cache->ctrl_req->mr.mr->mr_state !=
 			 CXIP_MR_UNLINKED);
 
@@ -974,7 +1012,7 @@ void cxip_ctrl_mr_cache_flush(struct cxip_ep_obj *ep_obj)
 
 		do {
 			sched_yield();
-			cxip_ep_ctrl_progress_locked(ep_obj);
+			cxip_ep_tgt_ctrl_progress_locked(ep_obj);
 		} while (mr_cache->ctrl_req->mr.mr->mr_state !=
 			 CXIP_MR_UNLINKED);
 
@@ -1030,7 +1068,8 @@ int cxip_mr_enable(struct cxip_mr *mr)
 	 */
 	if (!mr->domain->is_prov_key)
 		mr->mr_util = &cxip_client_key_mr_util_ops;
-	else if (mr->md && mr->md->cached && !mr->cntr)
+	else if (mr->md && mr->md->cached && !mr->cntr &&
+		 !mr->count_events && !mr->rma_events)
 		mr->mr_util = &cxip_prov_key_cache_mr_util_ops;
 	else
 		mr->mr_util = &cxip_prov_key_mr_util_ops;
@@ -1174,6 +1213,12 @@ static int cxip_mr_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 			break;
 		}
 
+		if (mr->rma_events && !(ep->ep_obj->caps & FI_RMA_EVENT)) {
+			CXIP_WARN("MR requires FI_RMA_EVENT EP cap\n");
+			ret = -FI_EINVAL;
+			break;
+		}
+
 		mr->ep = ep;
 		ofi_atomic_inc32(&ep->ep_obj->ref);
 		break;
@@ -1256,6 +1301,11 @@ static int cxip_mr_init(struct cxip_mr *mr, struct cxip_domain *dom,
 	mr->domain = dom;
 	mr->flags = flags;
 	mr->attr = *attr;
+
+	mr->count_events = dom->mr_match_events;
+	ofi_atomic_initialize32(&mr->match_events, 0);
+	ofi_atomic_initialize32(&mr->access_events, 0);
+	mr->rma_events = flags & FI_RMA_EVENT;
 
 	/* Support length 1 IOV only for now */
 	mr->buf = mr->attr.mr_iov[0].iov_base;

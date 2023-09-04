@@ -537,7 +537,7 @@ static int cxip_amo_emit_idc(struct cxip_txc *txc,
 	/* Restricted AMOs must target optimized MRs without target events */
 	if (restricted && (txc->ep_obj->caps & FI_RMA_EVENT)) {
 		TXC_WARN(txc,
-			 "Restricted AMOs and FI_RMA_EVENT not supported\n");
+			 "Restricted AMOs with FI_RMA_EVENT not supported\n");
 		return -FI_EINVAL;
 	}
 

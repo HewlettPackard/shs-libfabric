@@ -184,8 +184,9 @@ static inline void *fi_cxi_get_cntr_reseterr_addr(void *cntr_mmio)
 #define FI_CXI_DOM_OPS_3 "dom_ops_v3"
 #define FI_CXI_DOM_OPS_4 "dom_ops_v4"
 #define FI_CXI_DOM_OPS_5 "dom_ops_v5"
+#define FI_CXI_DOM_OPS_6 "dom_ops_v6"
 
-/* v1 to v4 can use the same struct since they only appended a routine */
+/* v1 to v6 can use the same struct since they only appended a routine */
 struct fi_cxi_dom_ops {
 	int (*cntr_read)(struct fid *fid, unsigned int cntr, uint64_t *value,
 		      struct timespec *ts);
@@ -249,6 +250,31 @@ struct fi_cxi_dom_ops {
 	 * the same CXI service which usually maps to a job-step.
 	 */
 	int (*get_dwq_depth)(struct fid *fid, size_t *depth);
+
+	/* Enable/disable MR match event counting for the domain in a
+	 * client/server environment to ensure that memory backing a MR cannot
+	 * be accessed after invoking fi_close() on the MR, even if it that
+	 * memory remains in the libfabric MR cache. Manual progress must
+	 * be made at the target even for single sided operations.
+	 *
+	 * @fid: Domain FID class.
+	 * @enable: True to enable, false to disable.
+	 *
+	 * This function must be called for the domain FID before
+	 * any EP is created.
+	 */
+	int (*enable_mr_match_events)(struct fid *fid, bool enable);
+
+	/* Enable/disable the use of optimized MRs for a specific domain.
+	 * This is useful if multiple domains are created within a single
+	 * process and the use of optimized MRs is desirable for only a
+	 * subset of the domains. FI_MR_PROV_KEY MR mode must be configured
+	 * for the domain; otherwise -FI_EINVAL is returned otherwise.
+	 *
+	 * @fid: Domain FID class.
+	 * @enable: True to enable, false to disable.
+	 */
+	int (*enable_optimized_mrs)(struct fid *fid, bool enable);
 };
 
 /*
