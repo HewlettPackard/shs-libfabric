@@ -1415,11 +1415,12 @@ struct cxip_ep_zbcoll_obj {
 /*
  * Collectives context.
  *
- * Support structure.
+ * Extension to cxip_ep_obj for collectives.
  *
  * Initialized in cxip_coll_init() during EP creation.
  */
 struct cxip_ep_coll_obj {
+	struct cxip_coll_pte *coll_pte;	// PTE extensions
 	struct dlist_ts sched_list;	// scheduled actions
 	struct cxip_cmdq *rx_cmdq;	// shared with STD EP
 	struct cxip_cmdq *tx_cmdq;	// shared with STD EP

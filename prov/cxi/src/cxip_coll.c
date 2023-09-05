@@ -2568,15 +2568,44 @@ static int _initialize_mc(void *ptr)
 
 	TRACE_JOIN("%s entry\n", __func__);
 
-	ret = -FI_ENOMEM;
-	mc_obj = calloc(1, sizeof(*av_set_obj->mc_obj));
-	if (!mc_obj)
+	coll_pte = calloc(1, sizeof(*coll_pte));
+	if (!coll_pte) {
+		ret = -FI_ENOMEM;
+		goto fail;
+	}
+
+	/* initialize coll_pte */
+	coll_pte->ep_obj = ep_obj;
+	dlist_init(&coll_pte->buf_list);
+	ofi_atomic_initialize32(&coll_pte->buf_cnt, 0);
+	ofi_atomic_initialize32(&coll_pte->buf_swap_cnt, 0);
+
+	/* bind PTE to domain */
+	ret = cxip_pte_alloc(ep_obj->if_dom, ep_obj->coll.rx_evtq->eq,
+			     jstate->pid_idx, jstate->is_mcast, &pt_opts,
+			     _coll_pte_cb, coll_pte, &coll_pte->pte);
+	if (ret)
 		goto fail;
 
-	coll_pte = calloc(1, sizeof(*coll_pte));
-	if (!coll_pte)
+	/* enable the PTE */
+	ret = _coll_pte_enable(coll_pte, CXIP_PTE_IGNORE_DROPS);
+	if (ret)
 		goto fail;
-	mc_obj->coll_pte = coll_pte;
+
+	/* add buffers to the PTE */
+	ret = _coll_add_buffers(coll_pte,
+				ep_obj->coll.buffer_size,
+				ep_obj->coll.buffer_count);
+	if (ret)
+		goto fail;
+
+	ret = -FI_ENOMEM;
+	mc_obj = calloc(1, sizeof(*av_set_obj->mc_obj));
+	if (!mc_obj) {
+		ret = -FI_ENOMEM;
+		goto fail;
+	}
+	coll_pte->mc_obj = mc_obj;
 
 	/* link ep_obj to mc_obj (1 to many) */
 	mc_obj->ep_obj = ep_obj;
@@ -2585,13 +2614,6 @@ static int _initialize_mc(void *ptr)
 	/* link av_set_obj to mc_obj (one to one) */
 	av_set_obj->mc_obj = mc_obj;
 	mc_obj->av_set_obj = av_set_obj;
-
-	/* initialize coll_pte */
-	coll_pte->ep_obj = ep_obj;
-	coll_pte->mc_obj = mc_obj;
-	dlist_init(&coll_pte->buf_list);
-	ofi_atomic_initialize32(&coll_pte->buf_cnt, 0);
-	ofi_atomic_initialize32(&coll_pte->buf_swap_cnt, 0);
 
 	/* initialize mc_obj */
 	mc_obj->mc_fid.fid.fclass = FI_CLASS_MC;
@@ -2640,25 +2662,6 @@ static int _initialize_mc(void *ptr)
 		if (ret)
 			goto fail;
 	}
-
-	/* bind PTE to domain */
-	ret = cxip_pte_alloc(ep_obj->if_dom, ep_obj->coll.rx_evtq->eq,
-			     jstate->pid_idx, jstate->is_mcast, &pt_opts,
-			     _coll_pte_cb, coll_pte, &coll_pte->pte);
-	if (ret)
-		goto fail;
-
-	/* enable the PTE */
-	ret = _coll_pte_enable(coll_pte, CXIP_PTE_IGNORE_DROPS);
-	if (ret)
-		goto fail;
-
-	/* add buffers to the PTE */
-	ret = _coll_add_buffers(coll_pte,
-				ep_obj->coll.buffer_size,
-				ep_obj->coll.buffer_count);
-	if (ret)
-		goto fail;
 
 	/* define the traffic class */
 	// TODO revisit for LOW_LATENCY
