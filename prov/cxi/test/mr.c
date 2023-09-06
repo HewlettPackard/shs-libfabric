@@ -238,6 +238,501 @@ Test(mr, no_bind)
 	free(buf);
 }
 
+TestSuite(mr_event, .init = cxit_setup_rma_mr_events,
+	  .fini = cxit_teardown_rma, .timeout = CXIT_DEFAULT_TIMEOUT);
+
+Test(mr_event, counts)
+{
+	int ret;
+	struct fi_cq_tagged_entry cqe;
+	struct fid_mr *mr;
+	struct cxip_mr *cxip_mr;
+	uint8_t *src_buf;
+	uint8_t *tgt_buf;
+	int src_len = 8;
+	int tgt_len = 4096;
+	uint64_t key_val = 200;
+	uint64_t orig_cnt;
+	int matches;
+	int accesses;
+	uint64_t operand1;
+	uint64_t result1;
+	struct fi_msg_atomic msg = {};
+	struct fi_ioc ioc;
+	struct fi_ioc result_ioc;
+	struct fi_rma_ioc rma_ioc;
+
+	src_buf = malloc(src_len);
+	cr_assert_not_null(src_buf, "src_buf alloc failed");
+
+	tgt_buf = calloc(1, tgt_len);
+	cr_assert_not_null(tgt_buf, "tgt_buf alloc failed");
+
+	/* Create MR */
+	ret = fi_mr_reg(cxit_domain, tgt_buf, tgt_len,
+			FI_REMOTE_WRITE | FI_REMOTE_READ, 0,
+			key_val, 0, &mr, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	cxip_mr = container_of(mr, struct cxip_mr, mr_fid);
+
+	ret = fi_mr_bind(mr, &cxit_ep->fid, 0);
+	cr_assert(ret == FI_SUCCESS);
+
+	ret = fi_mr_bind(mr, &cxit_rem_cntr->fid, FI_REMOTE_WRITE);
+	cr_assert(ret == FI_SUCCESS);
+
+	ret = fi_mr_enable(mr);
+	cr_assert(ret == FI_SUCCESS);
+
+	if (cxit_fi->domain_attr->mr_mode & FI_MR_PROV_KEY)
+		key_val = fi_mr_key(mr);
+
+	/* Match counts do not apply to optimized MR */
+	if (cxip_generic_is_mr_key_opt(key_val))
+		goto done;
+
+	orig_cnt = fi_cntr_read(cxit_rem_cntr);
+
+	matches = ofi_atomic_get32(&cxip_mr->match_events);
+	accesses = ofi_atomic_get32(&cxip_mr->access_events);
+
+	ret = fi_write(cxit_ep, src_buf, src_len, NULL,
+		       cxit_ep_fi_addr, 0, key_val, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, 1, "fi_cq_read failed %d", ret);
+	validate_tx_event(&cqe, FI_RMA | FI_WRITE, NULL);
+
+	/* Validate remote counter was incremented correctly */
+	while (orig_cnt + 1 != fi_cntr_read(cxit_rem_cntr))
+		;
+
+	/* Validate match and access counts incremented */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) >= matches + 1,
+		  "Match count not updated for RMA\n");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) >= accesses + 1,
+		  "RMA access count not updated\n");
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) ==
+		  ofi_atomic_get32(&cxip_mr->access_events),
+		  "RMA matches do not equal accesses");
+
+	matches = ofi_atomic_get32(&cxip_mr->match_events);
+	accesses = ofi_atomic_get32(&cxip_mr->access_events);
+
+	ret = fi_atomic(cxit_ep, &operand1, 1, 0, cxit_ep_fi_addr, 0,
+			key_val, FI_UINT64, FI_SUM, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, 1, "fi_cq_read failed %d", ret);
+	validate_tx_event(&cqe, FI_ATOMIC | FI_WRITE, NULL);
+
+	/* Validate remote counter was incremented correctly */
+	while (orig_cnt + 2 != fi_cntr_read(cxit_rem_cntr))
+		;
+
+	/* Validate match and access counts incremented */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) >= matches + 1,
+		  "Match count not updated for atomic");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) >= accesses + 1,
+		  "Atomic access count not updated");
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) ==
+		  ofi_atomic_get32(&cxip_mr->access_events),
+		  "Atomic matches do not equal accesses");
+
+	matches = ofi_atomic_get32(&cxip_mr->match_events);
+	accesses = ofi_atomic_get32(&cxip_mr->access_events);
+
+	ret = fi_fetch_atomic(cxit_ep, &operand1, 1, NULL, &result1, NULL,
+			      cxit_ep_fi_addr, 0, key_val, FI_UINT64,
+			      FI_SUM, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, 1, "fi_cq_read failed %d", ret);
+	validate_tx_event(&cqe, FI_ATOMIC | FI_READ, NULL);
+
+	/* Validate remote counter was incremented correctly */
+	while (orig_cnt + 3 != fi_cntr_read(cxit_rem_cntr))
+		;
+
+	/* Validate match and access counts incremented */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) >= matches + 1,
+		  "Fetch atomic match count not updated for atomic");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) >= accesses + 1,
+		  "Fetch atomic access count not updated");
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) ==
+		  ofi_atomic_get32(&cxip_mr->access_events),
+		  "Fetch atomic matches do not equal accesses");
+
+	matches = ofi_atomic_get32(&cxip_mr->match_events);
+	accesses = ofi_atomic_get32(&cxip_mr->access_events);
+
+	ioc.addr = &operand1;
+	ioc.count = 1;
+	result_ioc.addr = &result1;
+	result_ioc.count = 1;
+	rma_ioc.addr = 0;
+	rma_ioc.count = 1;
+	rma_ioc.key = key_val;
+
+	msg.msg_iov = &ioc;
+	msg.iov_count = 1;
+	msg.rma_iov = &rma_ioc;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+	msg.datatype = FI_UINT64;
+	msg.op = FI_SUM;
+
+	/* Do a fetch with a flush */
+	ret = fi_fetch_atomicmsg(cxit_ep, &msg, &result_ioc, NULL, 1,
+				 FI_DELIVERY_COMPLETE);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, 1, "fi_cq_read failed %d", ret);
+	validate_tx_event(&cqe, FI_ATOMIC | FI_READ, NULL);
+
+	/* Validate remote counter was incremented correctly,
+	 * once for atomic and once for flush.
+	 */
+	while (orig_cnt + 5 != fi_cntr_read(cxit_rem_cntr))
+		;
+
+	/* Validate match and access counts incremented */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) >= matches + 1,
+		  "Fetch atomic/flush match count not updated for atomic");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) >= accesses + 1,
+		  "Fetch atomic/flush access count not updated");
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) ==
+		  ofi_atomic_get32(&cxip_mr->access_events),
+		  "Fetch atomic flush matches do not equal accesses");
+
+done:
+	fi_close(&mr->fid);
+
+	free(tgt_buf);
+	free(src_buf);
+}
+
+Test(mr_event, not_found_counts)
+{
+	int ret;
+	struct fi_cq_err_entry err;
+	struct fi_cq_tagged_entry cqe;
+	struct fid_mr *mr;
+	struct cxip_mr *cxip_mr;
+	uint8_t *src_buf;
+	uint8_t *tgt_buf;
+	int src_len = 8;
+	int tgt_len = 4096;
+	uint64_t key_val = 200;
+	int matches;
+	int accesses;
+	uint64_t operand1;
+	uint64_t result1;
+	struct fi_msg_atomic msg = {};
+	struct fi_ioc ioc;
+	struct fi_ioc result_ioc;
+	struct fi_rma_ioc rma_ioc;
+
+	src_buf = malloc(src_len);
+	cr_assert_not_null(src_buf, "src_buf alloc failed");
+
+	tgt_buf = calloc(1, tgt_len);
+	cr_assert_not_null(tgt_buf, "tgt_buf alloc failed");
+
+	/* Create MR */
+	ret = fi_mr_reg(cxit_domain, tgt_buf, tgt_len,
+			FI_REMOTE_WRITE | FI_REMOTE_READ, 0,
+			key_val, 0, &mr, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	cxip_mr = container_of(mr, struct cxip_mr, mr_fid);
+
+	ret = fi_mr_bind(mr, &cxit_ep->fid, 0);
+	cr_assert(ret == FI_SUCCESS);
+
+	ret = fi_mr_enable(mr);
+	cr_assert(ret == FI_SUCCESS);
+
+	if (cxit_fi->domain_attr->mr_mode & FI_MR_PROV_KEY)
+		key_val = fi_mr_key(mr);
+
+	/* Match counts do not apply to optimized MR */
+	if (cxip_generic_is_mr_key_opt(key_val))
+		goto done;
+
+	/* Use invalid key so that remote MR is not found */
+	key_val++;
+
+	matches = ofi_atomic_get32(&cxip_mr->match_events);
+	accesses = ofi_atomic_get32(&cxip_mr->access_events);
+
+	ret = fi_write(cxit_ep, src_buf, src_len, NULL,
+		       cxit_ep_fi_addr, 0, key_val, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, -FI_EAVAIL, "Unexpected RMA success %d", ret);
+
+	ret = fi_cq_readerr(cxit_tx_cq, &err, 1);
+	cr_assert_eq(ret, 1, "Unexpected fi_cq_readerr return %d", ret);
+	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
+
+	/* Validate match and access counts did not increment */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches,
+		  "Match count updated for RMA\n");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses,
+		  "Access count updated for RMA\n");
+
+	ret = fi_atomic(cxit_ep, &operand1, 1, 0, cxit_ep_fi_addr, 0,
+			key_val, FI_UINT64, FI_SUM, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, -FI_EAVAIL, "Unexpected atomic success %d", ret);
+
+	ret = fi_cq_readerr(cxit_tx_cq, &err, 1);
+	cr_assert_eq(ret, 1, "Unexpected fi_cq_readerr return %d", ret);
+	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
+
+	/* Validate match and access counts did not increment */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches,
+		  "Match count updated for atomic\n");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses,
+		  "Access count updated for atomic\n");
+
+	ret = fi_fetch_atomic(cxit_ep, &operand1, 1, NULL, &result1, NULL,
+			      cxit_ep_fi_addr, 0, key_val, FI_UINT64,
+			      FI_SUM, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, -FI_EAVAIL, "Unexpected atomic fetch success %d",
+		     ret);
+
+	ret = fi_cq_readerr(cxit_tx_cq, &err, 1);
+	cr_assert_eq(ret, 1, "Unexpected fi_cq_readerr return %d", ret);
+	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
+
+	/* Validate match and access counts did not increment */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches,
+		  "Match count updated for atomic fetch\n");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses,
+		  "Access count updated for atomic fetch\n");
+
+	ioc.addr = &operand1;
+	ioc.count = 1;
+	result_ioc.addr = &result1;
+	result_ioc.count = 1;
+	rma_ioc.addr = 0;
+	rma_ioc.count = 1;
+	rma_ioc.key = key_val;
+
+	msg.msg_iov = &ioc;
+	msg.iov_count = 1;
+	msg.rma_iov = &rma_ioc;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+	msg.datatype = FI_UINT64;
+	msg.op = FI_SUM;
+
+	/* Do a fetch with a flush */
+	ret = fi_fetch_atomicmsg(cxit_ep, &msg, &result_ioc, NULL, 1,
+				 FI_DELIVERY_COMPLETE);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, -FI_EAVAIL, "Unexpected atomic flush success %d",
+		     ret);
+
+	ret = fi_cq_readerr(cxit_tx_cq, &err, 1);
+	cr_assert_eq(ret, 1, "Unexpected fi_cq_readerr return %d", ret);
+	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
+
+	/* Validate match and access counts did not increment */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches,
+		  "Match count updated for atomic flush\n");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses,
+		  "Access count updated for atomic flush\n");
+
+done:
+	fi_close(&mr->fid);
+
+	free(tgt_buf);
+	free(src_buf);
+}
+
+Test(mr_event, bounds_err_counts)
+{
+	int ret;
+	struct fi_cq_err_entry err;
+	struct fi_cq_tagged_entry cqe;
+	struct fid_mr *mr;
+	struct cxip_mr *cxip_mr;
+	uint8_t *src_buf;
+	uint8_t *tgt_buf;
+	int src_len = 16;
+	int tgt_len = 8;
+	uint64_t key_val = 200;  /* Force client key to be standard MR */
+	int matches;
+	int accesses;
+	uint64_t operand1;
+	uint64_t result1;
+	struct fi_msg_atomic msg = {};
+	struct fi_ioc ioc;
+	struct fi_ioc result_ioc;
+	struct fi_rma_ioc rma_ioc;
+
+	src_buf = malloc(src_len);
+	cr_assert_not_null(src_buf, "src_buf alloc failed");
+
+	tgt_buf = calloc(1, tgt_len);
+	cr_assert_not_null(tgt_buf, "tgt_buf alloc failed");
+
+	/* Create MR */
+	ret = fi_mr_reg(cxit_domain, tgt_buf, tgt_len,
+			FI_REMOTE_WRITE | FI_REMOTE_READ, 0,
+			key_val, 0, &mr, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	cxip_mr = container_of(mr, struct cxip_mr, mr_fid);
+
+	ret = fi_mr_bind(mr, &cxit_ep->fid, 0);
+	cr_assert(ret == FI_SUCCESS);
+
+	ret = fi_mr_enable(mr);
+	cr_assert(ret == FI_SUCCESS);
+
+	if (cxit_fi->domain_attr->mr_mode & FI_MR_PROV_KEY)
+		key_val = fi_mr_key(mr);
+
+	/* Match counts do not apply to optimized MR */
+	if (cxip_generic_is_mr_key_opt(key_val))
+		goto done;
+
+	matches = ofi_atomic_get32(&cxip_mr->match_events);
+	accesses = ofi_atomic_get32(&cxip_mr->access_events);
+
+	/* src len is greater than remote MR len */
+	ret = fi_write(cxit_ep, src_buf, src_len, NULL,
+		       cxit_ep_fi_addr, 0, key_val, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, -FI_EAVAIL, "Unexpected RMA success %d", ret);
+
+	ret = fi_cq_readerr(cxit_tx_cq, &err, 1);
+	cr_assert_eq(ret, 1, "Unexpected fi_cq_readerr return %d", ret);
+	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
+
+	/* Validate match and access counts did not increment */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches,
+		  "Match count updated for RMA\n");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses,
+		  "Access count updated for RMA\n");
+
+	/* Remote offset of 8 is greater than remote MR bounds */
+	ret = fi_atomic(cxit_ep, &operand1, 1, NULL, cxit_ep_fi_addr, 8,
+			key_val, FI_UINT64, FI_SUM, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, -FI_EAVAIL, "Unexpected atomic success %d", ret);
+
+	ret = fi_cq_readerr(cxit_tx_cq, &err, 1);
+	cr_assert_eq(ret, 1, "Unexpected fi_cq_readerr return %d", ret);
+	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
+
+	/* Validate match and access counts did not increment */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches,
+		  "Match count updated for atomic\n");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses,
+		  "Access count updated for atomic\n");
+
+	/* Remote offset of 8 is greater than remote MR bounds */
+	ret = fi_fetch_atomic(cxit_ep, &operand1, 1, NULL, &result1, NULL,
+			      cxit_ep_fi_addr, 8, key_val, FI_UINT64,
+			      FI_SUM, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, -FI_EAVAIL, "Unexpected atomic fetch success %d",
+		     ret);
+
+	ret = fi_cq_readerr(cxit_tx_cq, &err, 1);
+	cr_assert_eq(ret, 1, "Unexpected fi_cq_readerr return %d", ret);
+	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
+
+	/* Validate match and access counts did not increment */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches,
+		  "Match count updated for atomic fetch\n");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses,
+		  "Access count updated for atomic fetch\n");
+
+	ioc.addr = &operand1;
+	ioc.count = 1;
+	result_ioc.addr = &result1;
+	result_ioc.count = 1;
+
+	/* Remote offset of 8 is greater than remote MR bounds */
+	rma_ioc.addr = 8;
+	rma_ioc.count = 1;
+	rma_ioc.key = key_val;
+
+	msg.msg_iov = &ioc;
+	msg.iov_count = 1;
+	msg.rma_iov = &rma_ioc;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+	msg.datatype = FI_UINT64;
+	msg.op = FI_SUM;
+
+	/* Do a fetch with a flush */
+	ret = fi_fetch_atomicmsg(cxit_ep, &msg, &result_ioc, NULL, 1,
+				 FI_DELIVERY_COMPLETE);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, -FI_EAVAIL, "Unexpected atomic flush success %d",
+		     ret);
+
+	ret = fi_cq_readerr(cxit_tx_cq, &err, 1);
+	cr_assert_eq(ret, 1, "Unexpected fi_cq_readerr return %d", ret);
+	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
+
+	/* For an atomic flush with FI_DELIVERY_COMPLETE using an
+	 * out of bounds offset we expect the atomic to not update
+	 * counts, but the zero byte flush should. Therefore the
+	 * counts should update only by 1.
+	 */
+	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches + 1,
+		  "Match count != 1 for flush with atomic error\n");
+	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses + 1,
+		  "Access count != 1 for flush with atomic error\n");
+
+done:
+	fi_close(&mr->fid);
+
+	free(tgt_buf);
+	free(src_buf);
+}
+
 /*
  * With FI_MR_PROV_KEY, test if all PID IDX mapping resources required by
  * optimized MR are consumed, that falling back to standard MR is done.

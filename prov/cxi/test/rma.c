@@ -2125,3 +2125,102 @@ Test(rma_tx_alias, weak_fence)
 	mr_destroy(&mem_window);
 	free(send_buf);
 }
+
+TestSuite(rma_mr_event, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
+	  .timeout = CXIT_DEFAULT_TIMEOUT);
+
+/* Test that use of stale MR keys cannot access cached memory */
+Test(rma_mr_event, stale_key)
+{
+	int ret;
+	long i;
+	struct fi_cq_err_entry err;
+	struct fi_cq_tagged_entry cqe;
+	struct fid_mr *mr;
+	struct cxip_mr *cxip_mr;
+	uint8_t *src_buf;
+	uint8_t *src_buf2;
+	uint8_t *tgt_buf;
+	int src_len = 8;
+	int tgt_len = 4096;
+	uint64_t key_val = 200;
+
+	src_buf = malloc(src_len);
+	cr_assert_not_null(src_buf, "src_buf alloc failed");
+	src_buf2 = malloc(src_len);
+	cr_assert_not_null(src_buf2, "src_buf2 alloc failed");
+	tgt_buf = calloc(1, tgt_len);
+	cr_assert_not_null(tgt_buf, "tgt_buf alloc failed");
+
+	for (i = 0; i < src_len; i++) {
+		src_buf[i] = 0xb1 * i;
+		src_buf2[i] = 0xa1 * i;
+	}
+
+	/* Create MR */
+	ret = fi_mr_reg(cxit_domain, tgt_buf, tgt_len, FI_REMOTE_WRITE, 0,
+			key_val, 0, &mr, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* We known cached FI_MR_PROV_KEY cannot support this
+	 * level of robustness, so just skip FI_MR_PROV_KEY
+	 * unless FI_CXI_MR_MATCH_EVENTS is enabled.
+	 */
+	cxip_mr = container_of(mr, struct cxip_mr, mr_fid);
+	if (cxit_fi->domain_attr->mr_mode & FI_MR_PROV_KEY &&
+	    !cxip_mr->count_events) {
+		fi_close(&mr->fid);
+		goto done;
+	}
+
+	ret = fi_mr_bind(mr, &cxit_ep->fid, 0);
+	cr_assert(ret == FI_SUCCESS);
+
+	ret = fi_mr_enable(mr);
+	cr_assert(ret == FI_SUCCESS);
+
+	if (cxit_fi->domain_attr->mr_mode & FI_MR_PROV_KEY)
+		key_val = fi_mr_key(mr);
+
+	ret = fi_write(cxit_ep, src_buf, src_len, NULL,
+		       cxit_ep_fi_addr, 0, key_val, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, 1, "fi_cq_read failed %d", ret);
+	validate_tx_event(&cqe, FI_RMA | FI_WRITE, NULL);
+
+	/* Validate sent data */
+	for (int i = 0; i < src_len; i++)
+		cr_assert_eq(tgt_buf[i], src_buf[i],
+			     "data mismatch, element: (%d) %02x != %02x\n", i,
+			     tgt_buf[i], src_buf[i]);
+
+	/* Close MR but leave memory backing it allocated/cached */
+	fi_close(&mr->fid);
+
+	/* Try to access using stale key */
+	ret = fi_write(cxit_ep, src_buf2, src_len, NULL,
+		       cxit_ep_fi_addr, 0, key_val, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, -FI_EAVAIL, "Unexpected RMA success %d", ret);
+
+	ret = fi_cq_readerr(cxit_tx_cq, &err, 1);
+	cr_assert_eq(ret, 1);
+	cr_assert_eq(err.err, FI_EIO, "Error return %d", err.err);
+
+	/* Verfiy data was not modified with src_buf2 data */
+	for (int i = 0; i < src_len; i++)
+		cr_assert_eq(tgt_buf[i], src_buf[i],
+			     "data mismatch, element: (%d) %02x != %02x\n", i,
+			     tgt_buf[i], src_buf[i]);
+
+done:
+	free(tgt_buf);
+	free(src_buf);
+	free(src_buf2);
+}

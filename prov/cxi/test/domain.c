@@ -123,6 +123,100 @@ Test(domain, get_dwq_depth)
 	cxit_destroy_domain();
 }
 
+Test(domain, enable_mr_match_events)
+{
+	int ret;
+	struct cxip_domain *cxip_dom;
+	struct cxip_mr *cxip_mr;
+	uint64_t key = 50;
+	struct mem_region region;
+
+	cxit_create_domain();
+	cr_assert(cxit_domain != NULL);
+
+	cxip_dom = container_of(cxit_domain, struct cxip_domain,
+				util_domain.domain_fid);
+	cr_assert_eq(cxip_env.mr_match_events,
+		     cxip_dom->mr_match_events, "Global setting failed");
+
+	if (!cxip_env.mr_match_events) {
+		ret = dom_ops->enable_mr_match_events(&cxit_domain->fid,
+						      true);
+		cr_assert_eq(ret, FI_SUCCESS,
+			     "enable_mr_match_events failed: %d", ret);
+
+		cr_assert_eq(cxip_dom->mr_match_events, true,
+			     "domain mr_match_events not set");
+	}
+
+	/* MR type established, setup RMA objects */
+	cxit_create_ep();
+	cxit_create_eq();
+	cxit_create_cqs();
+	cxit_bind_cqs();
+	cxit_create_cntrs();
+	cxit_bind_cntrs();
+	cxit_create_av();
+	cxit_bind_av();
+
+	ret = fi_enable(cxit_ep);
+	cr_assert_eq(ret, FI_SUCCESS, "EP enable failed %d", ret);
+
+	ret = mr_create(8, FI_REMOTE_WRITE | FI_REMOTE_READ, 0, &key, &region);
+	cr_assert_eq(ret, FI_SUCCESS, "MR create failed %d", ret);
+
+	cxip_mr = container_of(region.mr, struct cxip_mr, mr_fid);
+	cr_assert_eq(cxip_mr->count_events, true,
+		     "MR match events not set");
+
+	mr_destroy(&region);
+
+	/* Tear down RMA objects */
+	cxit_destroy_ep();
+	cxit_destroy_av();
+	cxit_destroy_cntrs();
+	cxit_destroy_cqs();
+	cxit_destroy_domain();
+}
+
+Test(domain, enable_optimized_mrs)
+{
+	int ret;
+	struct cxip_domain *cxip_dom;
+
+	cxit_create_domain();
+	cr_assert(cxit_domain != NULL);
+
+	cxip_dom = container_of(cxit_domain, struct cxip_domain,
+				util_domain.domain_fid);
+	cr_assert_eq(cxip_env.optimized_mrs,
+		     cxip_dom->optimized_mrs, "Global setting failed");
+
+	/* Disable optimized MRs for the domain */
+	ret = dom_ops->enable_optimized_mrs(&cxit_domain->fid, false);
+	if (cxip_dom->is_prov_key) {
+		cr_assert_eq(ret, FI_SUCCESS, "Unexpected call failure");
+		cr_assert_eq(cxip_dom->optimized_mrs, false, "Disable failed");
+	} else {
+		cr_assert_eq(ret, -FI_EINVAL, "Client key check failed");
+		cr_assert_eq(cxip_dom->optimized_mrs, cxip_env.optimized_mrs,
+			     "Client key altered domain specific setting");
+	}
+
+	/* Enable optimized MRs for the domain */
+	ret = dom_ops->enable_optimized_mrs(&cxit_domain->fid, true);
+	if (cxip_dom->is_prov_key) {
+		cr_assert_eq(ret, FI_SUCCESS, "Unexpected call failure");
+		cr_assert_eq(cxip_dom->optimized_mrs, true, "Enable failed");
+	} else {
+		cr_assert_eq(ret, -FI_EINVAL, "Client key check failed");
+		cr_assert_eq(cxip_dom->optimized_mrs, cxip_env.optimized_mrs,
+			     "Client key altered domain specific setting");
+	}
+
+	cxit_destroy_domain();
+}
+
 static const char *_fi_coll_to_text(enum fi_collective_op coll)
 {
 	switch (coll) {

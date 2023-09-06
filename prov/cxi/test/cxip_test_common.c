@@ -219,7 +219,7 @@ void cxit_create_domain(void)
 	ret = fi_domain(cxit_fabric, cxit_fi, &cxit_domain, NULL);
 	cr_assert(ret == FI_SUCCESS, "fi_domain");
 
-	/* Should be able to open either v1, v2, or v3 */
+	/* Should be able to open either v1 - v6 */
 	ret = fi_open_ops(&cxit_domain->fid, FI_CXI_DOM_OPS_1, 0,
 			  (void **)&dom_ops, NULL);
 	cr_assert(ret == FI_SUCCESS, "fi_open_ops v1");
@@ -237,6 +237,17 @@ void cxit_create_domain(void)
 	cr_assert(dom_ops->cntr_read != NULL &&
 		  dom_ops->topology != NULL &&
 		  dom_ops->enable_hybrid_mr_desc != NULL,
+		  "V3 functions returned");
+
+	ret = fi_open_ops(&cxit_domain->fid, FI_CXI_DOM_OPS_6, 0,
+			  (void **)&dom_ops, NULL);
+	cr_assert(ret == FI_SUCCESS, "fi_open_ops v6");
+	cr_assert(dom_ops->cntr_read != NULL &&
+		  dom_ops->topology != NULL &&
+		  dom_ops->enable_hybrid_mr_desc != NULL &&
+		  dom_ops->ep_get_unexp_msgs != NULL &&
+		  dom_ops->get_dwq_depth != NULL &&
+		  dom_ops->enable_mr_match_events != NULL,
 		  "V3 functions returned");
 
 	ret = fi_set_ops(&cxit_domain->fid, FI_SET_OPS_HMEM_OVERRIDE, 0,
@@ -576,6 +587,54 @@ void cxit_setup_enabled_ep_disable_fi_rma_event(void)
 	cr_assert(addrlen == sizeof(cxit_ep_addr));
 }
 
+void cxit_setup_enabled_ep_mr_events(void)
+{
+	int ret;
+	size_t addrlen = sizeof(cxit_ep_addr);
+
+	cxit_setup_getinfo();
+
+	cxit_tx_cq_attr.format = FI_CQ_FORMAT_TAGGED;
+	cxit_av_attr.type = FI_AV_TABLE;
+
+	cxit_fi_hints->domain_attr->data_progress = FI_PROGRESS_MANUAL;
+	cxit_fi_hints->domain_attr->data_progress = FI_PROGRESS_MANUAL;
+
+	cxit_setup_ep();
+
+	/* Enable FI_CXI_MR_MATCH_EVENTS via domain */
+	ret = dom_ops->enable_mr_match_events(&cxit_domain->fid,
+					      true);
+	cr_assert_eq(ret, FI_SUCCESS);
+
+	/* Disable RMA events to make sure MATCH_EVENTS on its own is
+	 * sufficient to disallow atomic with FI_DELIVERY_COMPLETE.
+	 */
+	cxit_fi->caps &= ~FI_RMA_EVENT;
+	cxit_fi->domain_attr->caps &= ~FI_RMA_EVENT;
+	cxit_fi->tx_attr->caps &= ~FI_RMA_EVENT;
+	cxit_fi->rx_attr->caps &= ~FI_RMA_EVENT;
+
+	/* Set up RMA objects */
+	cxit_create_ep();
+	cxit_create_eq();
+	cxit_bind_eq();
+	cxit_create_cqs();
+	cxit_bind_cqs();
+	cxit_create_cntrs();
+	cxit_bind_cntrs();
+	cxit_create_av();
+	cxit_bind_av();
+
+	ret = fi_enable(cxit_ep);
+	cr_assert(ret == FI_SUCCESS, "ret is: %d\n", ret);
+
+	/* Find assigned Endpoint address. Address is assigned during enable. */
+	ret = fi_getname(&cxit_ep->fid, &cxit_ep_addr, &addrlen);
+	cr_assert(ret == FI_SUCCESS, "ret is %d\n", ret);
+	cr_assert(addrlen == sizeof(cxit_ep_addr));
+}
+
 void cxit_setup_enabled_ep(void)
 {
 	int ret;
@@ -657,6 +716,23 @@ void cxit_setup_rma_disable_fi_rma_event(void)
 	struct cxip_addr fake_addr = {.nic = 0xad, .pid = 0xbc};
 
 	cxit_setup_enabled_ep_disable_fi_rma_event();
+
+	/* Insert local address into AV to prepare to send to self */
+	ret = fi_av_insert(cxit_av, (void *)&fake_addr, 1, NULL, 0, NULL);
+	cr_assert(ret == 1);
+
+	/* Insert local address into AV to prepare to send to self */
+	ret = fi_av_insert(cxit_av, (void *)&cxit_ep_addr, 1, &cxit_ep_fi_addr,
+			   0, NULL);
+	cr_assert(ret == 1);
+}
+
+void cxit_setup_rma_mr_events(void)
+{
+	int ret;
+	struct cxip_addr fake_addr = {.nic = 0xad, .pid = 0xbc};
+
+	cxit_setup_enabled_ep_mr_events();
 
 	/* Insert local address into AV to prepare to send to self */
 	ret = fi_av_insert(cxit_av, (void *)&fake_addr, 1, NULL, 0, NULL);
