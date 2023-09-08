@@ -385,7 +385,7 @@ static int _cxip_amo_cb(struct cxip_req *req, const union c_event *event)
 	if (req->amo.fetching_amo_flush) {
 		req->amo.fetching_amo_flush_event_count++;
 
-		if (event->hdr.event_type != C_EVENT_PUT)
+		if (event->hdr.event_type == C_EVENT_REPLY)
 			req->amo.fetching_amo_flush_event_rc =
 				cxi_init_event_rc(event);
 

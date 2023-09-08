@@ -2338,6 +2338,57 @@ Test(atomic_flush, fetch_flush)
 	cr_assert(flushes_end > flushes_start);
 }
 
+/* Perform a fetching AMO with flush at target, but use an illegal
+ * RMA offset. Verify that an error is returned in the CQE even though
+ * the subsequent flush succeeds.
+ */
+Test(atomic_flush, fetch_flush_bounds_err)
+{
+	struct mem_region mr;
+	struct fi_cq_err_entry err;
+	struct fi_cq_tagged_entry cqe;
+	uint64_t operand1 = 1;
+	uint64_t result = 0;
+	uint64_t *rma;
+	struct fi_msg_atomic msg = {};
+	struct fi_ioc ioc;
+	struct fi_rma_ioc rma_ioc;
+	struct fi_ioc result_ioc = { .count = 1, .addr = &result };
+	uint64_t key = RMA_WIN_KEY;
+	int ret;
+
+	rma = _cxit_create_mr(&mr, &key);
+	cr_assert_not_null(rma);
+
+	ioc.addr = &operand1;
+	ioc.count = 1;
+
+	rma_ioc.addr = RMA_WIN_LEN + 1;
+	rma_ioc.count = 1;
+	rma_ioc.key = key;
+
+	msg.msg_iov = &ioc;
+	msg.iov_count = 1;
+	msg.rma_iov = &rma_ioc;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+	msg.datatype = FI_UINT64;
+	msg.op = FI_SUM;
+
+	ret = fi_fetch_atomicmsg(cxit_ep, &msg, &result_ioc, NULL, 1,
+				 FI_DELIVERY_COMPLETE);
+	cr_assert(ret == FI_SUCCESS, "Return code  = %d", ret);
+
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, -FI_EAVAIL, "Unexpected atomic flush success");
+
+	ret = fi_cq_readerr(cxit_tx_cq, &err, 1);
+	cr_assert_eq(ret, 1, "fi_cq_readerr error %d", ret);
+	cr_assert_eq(err.err, FI_EIO, "Unexpected error value: %d", err.err);
+
+	_cxit_destroy_mr(&mr);
+}
+
 /* Perform an AMO that uses a flushing ZBR at the target. */
 Test(atomic, flush)
 {
