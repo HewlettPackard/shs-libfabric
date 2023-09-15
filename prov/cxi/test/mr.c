@@ -106,7 +106,7 @@ Test(mr, mr_zero_len)
 
 	ret = fi_write(cxit_ep, NULL, 0, NULL,
 		       cxit_ep_fi_addr, 0, key, NULL);
-	cr_assert(ret == FI_SUCCESS);
+	cr_assert(ret == FI_SUCCESS, "write failure %d", ret);
 
 	ret = cxit_await_completion(cxit_tx_cq, &cqe);
 	cr_assert_eq(ret, 1, "fi_cq_read failed %d", ret);
@@ -161,6 +161,94 @@ Test(mr, mr_unique_key)
 
 	ret = fi_close(&mr1->fid);
 	cr_assert(ret == FI_SUCCESS);
+}
+
+/* Validate not recycling non-cached FI_MR_PROV_KEY */
+Test(mr, mr_recycle)
+{
+	char buf[256];
+	struct fid_mr *mr1;
+	struct fid_mr *mr2;
+	struct fid_mr *mr3;
+	uint64_t rkey1 = 0;
+	uint64_t rkey2 = 0;
+	uint64_t rkey3 = 0;
+	int ret;
+
+	/* Must be non-cached FI_MR_PROV_KEY; we rely on the fact
+	 * rma EP are setup with a remote counter and bind it
+	 * to the EP which forces non-cached for the MR.
+	 */
+	if (!cxit_prov_key) {
+		assert(1);
+		return;
+	}
+
+	ret = fi_mr_reg(cxit_domain, buf, 256,
+			FI_REMOTE_READ | FI_REMOTE_WRITE, 0, rkey1, 0,
+			&mr1, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	ret = fi_mr_bind(mr1, &cxit_ep->fid, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind MR1 failed %d", ret);
+
+	ret = fi_mr_bind(mr1, &cxit_rem_cntr->fid, FI_REMOTE_WRITE);
+	cr_assert_eq(ret, FI_SUCCESS,
+		     "fi_mr_bind MR1 counter failed %d", ret);
+
+	ret = fi_mr_enable(mr1);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_enable MR1 failed %d", ret);
+
+	rkey1 = fi_mr_key(mr1);
+	cr_assert_neq(rkey1, FI_KEY_NOTAVAIL, "MR1 KEY invalid %lx", rkey1);
+
+	ret = fi_mr_reg(cxit_domain, buf, 256,
+			FI_REMOTE_READ | FI_REMOTE_WRITE, 0, rkey2, 0,
+			&mr2, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	ret = fi_mr_bind(mr2, &cxit_ep->fid, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind MR2 failed %d", ret);
+
+	ret = fi_mr_bind(mr2, &cxit_rem_cntr->fid, FI_REMOTE_WRITE);
+	cr_assert_eq(ret, FI_SUCCESS,
+		     "fi_mr_bind MR2 counter failed %d", ret);
+
+	ret = fi_mr_enable(mr2);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_enable MR2 failed %d", ret);
+
+	rkey2 = fi_mr_key(mr2);
+	cr_assert_neq(rkey2, FI_KEY_NOTAVAIL, "MR2 KEY invalid %lx", rkey2);
+	cr_assert_neq(rkey2, rkey1, "MR Keys not unique");
+
+	ret = fi_close(&mr2->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "close of MR2 %d", ret);
+
+	ret = fi_mr_reg(cxit_domain, buf, 256,
+			FI_REMOTE_READ | FI_REMOTE_WRITE, 0, rkey3, 0,
+			&mr3, NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	ret = fi_mr_bind(mr3, &cxit_ep->fid, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind MR3 failed %d", ret);
+
+	ret = fi_mr_bind(mr3, &cxit_rem_cntr->fid, FI_REMOTE_WRITE);
+	cr_assert_eq(ret, FI_SUCCESS,
+		     "fi_mr_bind MR3 counter failed %d", ret);
+
+	ret = fi_mr_enable(mr3);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_enable MR3 failed %d", ret);
+
+	rkey3 = fi_mr_key(mr3);
+	cr_assert_neq(rkey3, FI_KEY_NOTAVAIL, "MR3 KEY invalid %lx", rkey3);
+
+	cr_assert_neq(rkey3, rkey1, "MR3 Key not unique");
+	cr_assert_neq(rkey3, rkey2, "MR2 Key recycled");
+
+	ret = fi_close(&mr1->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "close of MR1 %d", ret);
+	ret = fi_close(&mr3->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "close of MR3 %d", ret);
 }
 
 /* Validate that RKEY are not required for local MR */
