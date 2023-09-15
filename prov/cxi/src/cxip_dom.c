@@ -66,22 +66,31 @@ void cxip_domain_ctrl_id_free(struct cxip_domain *dom,
 int cxip_domain_prov_mr_id_alloc(struct cxip_domain *dom,
 				 struct cxip_mr *mr)
 {
-	int mr_id;
+	struct cxip_mr_key key = {};
+	int buffer_id;
 
 	/* Allocations favor optimized MR range (if enabled) */
 	ofi_spin_lock(&dom->ctrl_id_lock);
-	mr_id = ofi_idx_insert(&dom->mr_ids, mr);
-	if (mr_id < 0 || mr_id >= CXIP_BUFFER_ID_MAX) {
+	buffer_id = ofi_idx_insert(&dom->mr_ids, mr);
+	if (buffer_id < 0 || buffer_id >= CXIP_BUFFER_ID_MAX) {
 		CXIP_WARN("Failed to allocate FI_MR_PROV_KEY MR ID: %d\n",
-			  mr_id);
+			  buffer_id);
 		ofi_spin_unlock(&dom->ctrl_id_lock);
 		return -FI_ENOSPC;
 	}
-	ofi_spin_unlock(&dom->ctrl_id_lock);
 
 	/* IDX 0 is reserved and should never be returned */
-	assert(mr_id > 0);
-	mr->mr_id = mr_id - 1;
+	assert(buffer_id > 0);
+	buffer_id = buffer_id - 1;
+
+	mr->mr_id = buffer_id;
+	key.is_prov = 1;
+	key.id = buffer_id;
+	key.seqnum = ++dom->prov_key_seqnum;
+	key.opt = cxip_env.optimized_mrs &&
+			key.id < CXIP_PTL_IDX_PROV_MR_OPT_CNT;
+	mr->key = key.raw;
+	ofi_spin_unlock(&dom->ctrl_id_lock);
 
 	return FI_SUCCESS;
 }
@@ -92,12 +101,16 @@ int cxip_domain_prov_mr_id_alloc(struct cxip_domain *dom,
 void cxip_domain_prov_mr_id_free(struct cxip_domain *dom,
 				 struct cxip_mr *mr)
 {
+	struct cxip_mr_key key = {
+		.raw = mr->key,
+	};
+
 	/* Only non-cached FI_MR_PROV_KEY MR require MR ID */
 	if (mr->mr_id < 0)
 		return;
 
 	ofi_spin_lock(&dom->ctrl_id_lock);
-	ofi_idx_remove(&dom->mr_ids, mr->mr_id + 1);
+	ofi_idx_remove(&dom->mr_ids, key.id + 1);
 	ofi_spin_unlock(&dom->ctrl_id_lock);
 }
 
@@ -1242,6 +1255,7 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 	struct cxip_domain *cxi_domain;
 	struct cxip_fabric *fab;
 	struct cxip_addr *src_addr;
+	uint32_t seed;
 	int ret;
 
 	/* The OFI check_info function does not verify that rx/tx attribute
@@ -1341,8 +1355,12 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 	}
 
 	/* Handle client vs provider MR RKEY differences */
-	if (cxi_domain->util_domain.mr_mode & FI_MR_PROV_KEY)
+	if (cxi_domain->util_domain.mr_mode & FI_MR_PROV_KEY) {
 		cxi_domain->is_prov_key = true;
+
+		seed = (uint32_t)ofi_gettime_ns();
+		cxi_domain->prov_key_seqnum = ofi_xorshift_random(seed);
+	}
 
 	cxi_domain->mr_match_events = cxip_env.mr_match_events;
 	cxi_domain->optimized_mrs = cxip_env.optimized_mrs;

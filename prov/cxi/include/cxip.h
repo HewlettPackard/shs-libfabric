@@ -358,7 +358,9 @@ struct cxip_addr {
 /* Map non-cached optimized MR keys (client or FI_MR_PROV_KEY)
  * to appropriate PTL index.
  */
-#define CXIP_MR_UNCACHED_KEY_TO_IDX(key) ((key) & CXIP_MR_KEY_MASK)
+#define CXIP_MR_PROV_KEY_MASK ((1ULL << 61) - 1)
+#define CXIP_MR_PROV_KEY_ID_MASK ((1ULL << 16) - 1)
+#define CXIP_MR_UNCACHED_KEY_TO_IDX(key) ((key) & CXIP_MR_PROV_KEY_ID_MASK)
 #define CXIP_PTL_IDX_WRITE_MR_OPT(key)		\
 	(CXIP_PTL_IDX_WRITE_MR_OPT_BASE +	\
 	 CXIP_MR_UNCACHED_KEY_TO_IDX(key))
@@ -436,7 +438,16 @@ struct cxip_mr_key {
 		};
 		/* Provider Key Only */
 		struct {
-			uint64_t unused3: 63;
+			/* Non-cached key consists of unique MR ID and sequence
+			 * number. The same MR ID can be used with sequence
+			 * number to create 2^45 unique keys. That is, a
+			 * single standard MR repeatedly created and destroyed
+			 * every micro-second, would take over a year before
+			 * it repeated.
+			 */
+			uint64_t id     : 16;  /* Unique - 64K MR */
+			uint64_t seqnum : 45;  /* Sequence with random seed */
+			uint64_t unused3: 2;
 			uint64_t is_prov: 1;
 			/* Overloads CXIP_CTRL_LE_TYPE_MR and must be cleared
 			 * before appending MR LE or TX using in match bits.
@@ -828,6 +839,12 @@ struct cxip_domain {
 	ofi_spin_t ctrl_id_lock;
 	struct indexer req_ids;
 	struct indexer mr_ids;
+
+	/* If FI_MR_PROV_KEY is not cached, keys include a sequence number
+	 * to reduce the likelyhood of a stale key being used to access
+	 * a recycled MR key.
+	 */
+	uint32_t prov_key_seqnum;
 
 	/* Translation cache */
 	struct ofi_mr_cache iomm;
@@ -2141,7 +2158,7 @@ struct cxip_mr {
 	bool enabled;
 	struct cxip_pte *pte;
 	enum cxip_mr_state mr_state;
-	int mr_id;			// Non-cached provider key uniqueness
+	int64_t mr_id;			// Non-cached provider key uniqueness
 	struct cxip_ctrl_req req;
 	bool optimized;
 

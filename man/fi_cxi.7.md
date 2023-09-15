@@ -47,6 +47,14 @@ desired. Client specified 32-bit MR keys are the default unless *FI_MR_PROV_KEY*
 is specified. For *FI_MR_PROV_KEY* provider generated 64-bit MR keys are used.
 An RMA initiator can work concurrently with client and provider generated keys.
 
+In client/server environments, if concerns with stale MR key usage exists, then
+*FI_MR_PROV_KEY* generated keys should be used along with *FI_CXI_MR_MATCH_EVENTS=1*
+and *FI_CXI_OPTIMIZED_MRS=0*. The former speeds up MR close, allowing non-remote
+MR cached keys to be used that enable full remote memory access protection
+after an MR is closed, even if that memory remains in the libfabric MR cache.
+The latter uses only standard MR which use matching to enable robust key
+usage, protecting against a stale MR key matching a newly generated MR keys.
+
 ## Data transfer operations
 
 The following data transfer interfaces are supported: *FI_ATOMIC*, *FI_MSG*,

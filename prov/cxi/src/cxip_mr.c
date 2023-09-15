@@ -781,7 +781,6 @@ static int cxip_init_mr_key(struct cxip_mr *mr, uint64_t req_key)
  */
 static int cxip_prov_init_mr_key(struct cxip_mr *mr, uint64_t req_key)
 {
-	struct cxip_mr_key key = {};
 	int ret;
 
 	/* Non-cached FI_MR_PROV_KEY MR keys need to be unique. */
@@ -789,13 +788,7 @@ static int cxip_prov_init_mr_key(struct cxip_mr *mr, uint64_t req_key)
 	if (ret)
 		return ret;
 
-	key.opt = mr->domain->optimized_mrs &&
-			mr->mr_id < CXIP_PTL_IDX_PROV_MR_OPT_CNT;
-	key.is_prov = 1;
-	key.key = mr->mr_id;
-
-	CXIP_DBG("Init non-cached MR key 0x%016lX\n", key.raw);
-	mr->key = key.raw;
+	CXIP_DBG("Init non-cached provider MR key 0x%016lX\n", mr->key);
 
 	return FI_SUCCESS;
 }
@@ -845,7 +838,10 @@ static bool cxip_is_valid_prov_mr_key(uint64_t key)
 		return CXIP_MR_UNCACHED_KEY_TO_IDX(cxip_key.key) <
 				CXIP_PTL_IDX_PROV_MR_OPT_CNT;
 
-	return cxip_is_valid_mr_key(cxip_key.key);
+	if (cxip_key.key & ~CXIP_MR_PROV_KEY_MASK)
+		return false;
+
+	return true;
 }
 
 bool cxip_generic_is_valid_mr_key(uint64_t key)
