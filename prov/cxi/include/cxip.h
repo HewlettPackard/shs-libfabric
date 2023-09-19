@@ -1421,6 +1421,7 @@ struct cxip_ep_zbcoll_obj {
  */
 struct cxip_ep_coll_obj {
 	struct index_map mcast_map;	// mc address -> object
+	struct dlist_entry mc_list;	// list of mcast addresses
 	struct cxip_coll_pte *coll_pte;	// PTE extensions
 	struct dlist_ts sched_list;	// scheduled actions
 	struct cxip_cmdq *rx_cmdq;	// shared with STD EP
@@ -2420,6 +2421,7 @@ struct cxip_coll_reduction {
 
 struct cxip_coll_mc {
 	struct fid_mc mc_fid;
+	struct dlist_entry entry;		// Link to mc object list
 	struct cxip_ep_obj *ep_obj;		// Associated endpoint
 	struct cxip_av_set *av_set_obj;		// associated AV set
 	struct cxip_zbcoll_obj *zb;		// zb object for zbcol

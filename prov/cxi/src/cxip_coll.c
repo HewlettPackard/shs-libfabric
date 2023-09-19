@@ -2522,6 +2522,72 @@ struct cxip_curl_mcast_usrptr {
 	int hwroot_rank;		// hardware root index
 };
 
+/* Close collective pte object - ep_obj->lock must be held */
+static void _close_pte(struct cxip_coll_pte *coll_pte)
+{
+	int ret;
+
+	do {
+		ret = _coll_pte_disable(coll_pte);
+	} while (ret == -FI_EAGAIN);
+	_coll_destroy_buffers(coll_pte);
+	cxip_pte_free(coll_pte->pte);
+	free(coll_pte);
+}
+
+/* pid_idx == CXIP_PTL_IDX_COLL+rank for NETSIM
+ * pid_idx == CXIP_PTL_IDX_COLL for all other cases
+ */
+static int _acquire_pte(struct cxip_ep_obj *ep_obj, int pid_idx,
+			 bool is_mcast, struct cxip_coll_pte **coll_pte_ret)
+{
+	struct cxi_pt_alloc_opts pt_opts = {
+		.use_long_event = 1,
+		.do_space_check = 1,
+		.en_restricted_unicast_lm = 1,
+	};
+	struct cxip_coll_pte *coll_pte;
+	int ret;
+
+	*coll_pte_ret = NULL;
+	coll_pte = calloc(1, sizeof(*coll_pte));
+	if (!coll_pte)
+		return -FI_ENOMEM;
+
+	/* initialize coll_pte */
+	coll_pte->ep_obj = ep_obj;
+	dlist_init(&coll_pte->buf_list);
+	ofi_atomic_initialize32(&coll_pte->buf_cnt, 0);
+	ofi_atomic_initialize32(&coll_pte->buf_swap_cnt, 0);
+	ofi_atomic_initialize32(&coll_pte->recv_cnt, 0);
+
+	/* bind PTE to domain */
+	ret = cxip_pte_alloc(ep_obj->if_dom, ep_obj->coll.rx_evtq->eq,
+			     pid_idx, is_mcast, &pt_opts, _coll_pte_cb,
+			     coll_pte, &coll_pte->pte);
+	if (ret)
+		goto fail;
+
+	/* enable the PTE */
+	ret = _coll_pte_enable(coll_pte, CXIP_PTE_IGNORE_DROPS);
+	if (ret)
+		goto fail;
+
+	/* add buffers to the PTE */
+	ret = _coll_add_buffers(coll_pte,
+				ep_obj->coll.buffer_size,
+				ep_obj->coll.buffer_count);
+	if (ret)
+		goto fail;
+
+	*coll_pte_ret = coll_pte;
+	return FI_SUCCESS;
+
+fail:
+	_close_pte(coll_pte);
+	return ret;
+}
+
 static int _close_mc(struct fid *fid);
 
 /* multicast object operational functions */
@@ -2534,19 +2600,12 @@ static struct fi_ops mc_ops = {
 static int _close_mc(struct fid *fid)
 {
 	struct cxip_coll_mc *mc_obj;
-	int ret;
 
 	TRACE_JOIN("%s entry\n", __func__);
 	mc_obj = container_of(fid, struct cxip_coll_mc, mc_fid.fid);
 	ofi_idm_clear(&mc_obj->ep_obj->coll.mcast_map, mc_obj->mcast_addr);
 	if (mc_obj->coll_pte) {
-		do {
-			ret = _coll_pte_disable(mc_obj->coll_pte);
-		} while (ret == -FI_EAGAIN);
-
-		_coll_destroy_buffers(mc_obj->coll_pte);
-		cxip_pte_free(mc_obj->coll_pte->pte);
-		free(mc_obj->coll_pte);
+		_close_pte(mc_obj->coll_pte);
 	}
 	if (mc_obj->reduction_md)
 		cxil_unmap(mc_obj->reduction_md);
@@ -2566,11 +2625,6 @@ static int _close_mc(struct fid *fid)
  */
 static int _initialize_mc(void *ptr)
 {
-	struct cxi_pt_alloc_opts pt_opts = {
-		.use_long_event = 1,
-		.do_space_check = 1,
-		.en_restricted_unicast_lm = 1,
-	};
 	struct cxip_join_state *jstate = ptr;
 	struct cxip_ep_obj *ep_obj = jstate->ep_obj;
 	struct cxip_av_set *av_set_obj = jstate->av_set_obj;
@@ -2582,39 +2636,10 @@ static int _initialize_mc(void *ptr)
 
 	TRACE_JOIN("%s entry\n", __func__);
 
-	coll_pte = calloc(1, sizeof(*coll_pte));
-	if (!coll_pte) {
-		ret = -FI_ENOMEM;
-		goto fail;
-	}
-
-	/* initialize coll_pte */
-	coll_pte->ep_obj = ep_obj;
-	dlist_init(&coll_pte->buf_list);
-	ofi_atomic_initialize32(&coll_pte->buf_cnt, 0);
-	ofi_atomic_initialize32(&coll_pte->buf_swap_cnt, 0);
-	ofi_atomic_initialize32(&coll_pte->recv_cnt, 0);
-
-	/* bind PTE to domain */
-	ret = cxip_pte_alloc(ep_obj->if_dom, ep_obj->coll.rx_evtq->eq,
-			     jstate->pid_idx, jstate->is_mcast, &pt_opts,
-			     _coll_pte_cb, coll_pte, &coll_pte->pte);
+	ret = _acquire_pte(ep_obj, jstate->pid_idx, jstate->is_mcast,
+			   &coll_pte);
 	if (ret)
 		goto fail;
-
-	/* enable the PTE */
-	ret = _coll_pte_enable(coll_pte, CXIP_PTE_IGNORE_DROPS);
-	if (ret)
-		goto fail;
-
-	/* add buffers to the PTE */
-	ret = _coll_add_buffers(coll_pte,
-				ep_obj->coll.buffer_size,
-				ep_obj->coll.buffer_count);
-	if (ret)
-		goto fail;
-
-	ret = -FI_ENOMEM;
 	mc_obj = calloc(1, sizeof(*av_set_obj->mc_obj));
 	if (!mc_obj) {
 		ret = -FI_ENOMEM;
@@ -3242,7 +3267,8 @@ static unsigned int _caddr_to_idx(struct cxip_av_set *av_set_obj,
  * Calling syntax is defined by libfabric.
  *
  * This is a multi-stage collective operation, progressed by calling TX/RX CQs
- * and the EQ for the endpoint.
+ * and the EQ for the endpoint. Upon completion of the state machine, the EQ
+ * will return an EQ event structure.
  *
  * We go through the following steps:
  *
@@ -3257,7 +3283,7 @@ static unsigned int _caddr_to_idx(struct cxip_av_set *av_set_obj,
  * This needs to be a non-blocking process, to support concurrent joins that are
  * driven by CQ/EQ polling. If the initial fi_join_collective() call returns
  * success, meaning the operation was initiated, actual completion success or
- * failure must be captured through EQ polling.
+ * failure must be captured through TX/RX CQ progression and EQ polling.
  *
  * Any transient errors associated with collective communications should be
  * retried internally, and indefinitely: once into the join state machine, there
@@ -3579,9 +3605,16 @@ struct fi_ops_collective cxip_collective_no_ops = {
 	.msg = fi_coll_no_msg,
 };
 
-/* Close collectives - call during EP close */
+/* Close collectives - call during EP close, ep_obj->lock is held */
 void cxip_coll_close(struct cxip_ep_obj *ep_obj)
 {
+	struct cxip_coll_mc *mc;
+
+	while (!dlist_empty(&ep_obj->coll.mc_list)) {
+		dlist_pop_front(&ep_obj->coll.mc_list,
+				struct cxip_coll_mc, mc, entry);
+		_close_mc(&mc->mc_fid.fid);
+	}
 }
 
 /**
@@ -3592,6 +3625,7 @@ void cxip_coll_init(struct cxip_ep_obj *ep_obj)
 
 	memset(&ep_obj->coll.mcast_map, 0, sizeof(ep_obj->coll.mcast_map));
 	dlist_ts_init(&ep_obj->coll.sched_list);
+	dlist_init(&ep_obj->coll.mc_list);
 	ep_obj->coll.rx_cmdq = NULL;
 	ep_obj->coll.tx_cmdq = NULL;
 	ep_obj->coll.rx_cntr = NULL;
