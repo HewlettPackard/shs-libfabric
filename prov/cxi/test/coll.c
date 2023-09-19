@@ -578,8 +578,13 @@ void _put_data(int count, int from_rank, int to_rank)
 		  "Expected mc_obj[%d] send_cnt == %d, saw %d",
 		  from_rank, count, cnt);
 
-	cnt = ofi_atomic_get32(&mc_obj_recv->recv_cnt);
+	cnt = ofi_atomic_get32(&mc_obj_recv->coll_pte->recv_cnt);
 	cr_assert(cnt == count,
+		  "Expected mc_obj raw recv_cnt == %d, saw %d",
+		  count, cnt);
+
+	cnt = ofi_atomic_get32(&mc_obj_recv->recv_cnt);
+	cr_assert(cnt == 0,
 		  "Expected mc_obj[%d]->[%d] recv_cnt == %d, saw %d",
 		  from_rank, to_rank, count, cnt);
 	cnt = ofi_atomic_get32(&mc_obj_recv->pkt_cnt);

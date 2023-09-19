@@ -868,8 +868,8 @@ static void _coll_rx_progress(struct cxip_req *req,
 	struct cxip_coll_reduction *reduction;
 	struct red_pkt *pkt;
 
-	mc_obj = req->coll.coll_pte->mc_obj;
-	ofi_atomic_inc32(&mc_obj->recv_cnt);
+	/* Raw packet of some sort received */
+	ofi_atomic_inc32(&req->coll.coll_pte->recv_cnt);
 
 	/* If not the right size, don't swap bytes */
 	if (req->data_len != sizeof(struct red_pkt)) {
@@ -886,11 +886,24 @@ static void _coll_rx_progress(struct cxip_req *req,
 		_swappkt(pkt);
 		return;
 	}
-
 	/* This is a reduction packet */
+
+	/* The coll.coll_pte->mc_obj is defined only for COMM_KEY_RANK */
+	mc_obj = req->coll.coll_pte->mc_obj;
+	if (!mc_obj)
+		mc_obj = ofi_idm_lookup(
+				&req->coll.coll_pte->ep_obj->coll.mcast_map,
+				pkt->hdr.cookie.mcast_id);
+	if (!mc_obj) {
+		TRACE_PKT("Bad coll lookup: %x\n", pkt->hdr.cookie.mcast_id);
+		return;
+	}
+	/* This is a valid reduction packet */
+	ofi_atomic_inc32(&mc_obj->recv_cnt);
 	req->coll.isred = true;
 	req->discard = mc_obj->rx_discard;
 	reduction = &mc_obj->reduction[pkt->hdr.cookie.red_id];
+	TRACE_PKT("Valid reduction packet\n");
 
 #if ENABLE_DEBUG
 	/* Test case, simulate packet dropped in-flight */
@@ -2525,6 +2538,7 @@ static int _close_mc(struct fid *fid)
 
 	TRACE_JOIN("%s entry\n", __func__);
 	mc_obj = container_of(fid, struct cxip_coll_mc, mc_fid.fid);
+	ofi_idm_clear(&mc_obj->ep_obj->coll.mcast_map, mc_obj->mcast_addr);
 	if (mc_obj->coll_pte) {
 		do {
 			ret = _coll_pte_disable(mc_obj->coll_pte);
@@ -2579,6 +2593,7 @@ static int _initialize_mc(void *ptr)
 	dlist_init(&coll_pte->buf_list);
 	ofi_atomic_initialize32(&coll_pte->buf_cnt, 0);
 	ofi_atomic_initialize32(&coll_pte->buf_swap_cnt, 0);
+	ofi_atomic_initialize32(&coll_pte->recv_cnt, 0);
 
 	/* bind PTE to domain */
 	ret = cxip_pte_alloc(ep_obj->if_dom, ep_obj->coll.rx_evtq->eq,
@@ -2605,7 +2620,10 @@ static int _initialize_mc(void *ptr)
 		ret = -FI_ENOMEM;
 		goto fail;
 	}
-	coll_pte->mc_obj = mc_obj;
+
+	/* required for COMM_KEY_RANK model */
+	if (av_set_obj->comm_key.keytype == COMM_KEY_RANK)
+		coll_pte->mc_obj = mc_obj;
 
 	/* link ep_obj to mc_obj (1 to many) */
 	mc_obj->ep_obj = ep_obj;
@@ -2681,7 +2699,25 @@ static int _initialize_mc(void *ptr)
 	if (ret)
 		goto fail;
 
-	/* Last to set */
+	/* index mc_obj by mcast_addr for fast lookup */
+	TRACE_JOIN("mc addr=%d obj=%p\n", mc_obj->mcast_addr, mc_obj);
+	ret =  ofi_idm_set(&ep_obj->coll.mcast_map,
+			   mc_obj->mcast_addr, mc_obj);
+	if (ret < 0) {
+		TRACE_JOIN("%s: idm set failed %d\n", __func__, ret);
+		goto fail;
+	}
+#if ENABLE_DEBUG
+	struct cxip_coll_mc *mc_obj_chk;
+
+	mc_obj_chk = ofi_idm_lookup(&ep_obj->coll.mcast_map,
+				    mc_obj->mcast_addr);
+	if (mc_obj_chk != mc_obj) {
+		TRACE_JOIN("%s: mcast set=%p get=%p\n",
+			   __func__, mc_obj, mc_obj_chk);
+	}
+#endif
+	/* Last field to set */
 	mc_obj->is_joined = true;
 
 	jstate->mc_obj = mc_obj;
@@ -3503,6 +3539,7 @@ void cxip_coll_reset_mc_ctrs(struct fid_mc *mc)
 {
 	struct cxip_coll_mc *mc_obj = (struct cxip_coll_mc *)mc;
 
+	ofi_atomic_set32(&mc_obj->coll_pte->recv_cnt, 0);
 	ofi_atomic_set32(&mc_obj->send_cnt, 0);
 	ofi_atomic_set32(&mc_obj->recv_cnt, 0);
 	ofi_atomic_set32(&mc_obj->pkt_cnt, 0);
@@ -3553,6 +3590,7 @@ void cxip_coll_init(struct cxip_ep_obj *ep_obj)
 {
 	cxip_coll_populate_opcodes();
 
+	memset(&ep_obj->coll.mcast_map, 0, sizeof(ep_obj->coll.mcast_map));
 	dlist_ts_init(&ep_obj->coll.sched_list);
 	ep_obj->coll.rx_cmdq = NULL;
 	ep_obj->coll.tx_cmdq = NULL;

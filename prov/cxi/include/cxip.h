@@ -1420,6 +1420,7 @@ struct cxip_ep_zbcoll_obj {
  * Initialized in cxip_coll_init() during EP creation.
  */
 struct cxip_ep_coll_obj {
+	struct index_map mcast_map;	// mc address -> object
 	struct cxip_coll_pte *coll_pte;	// PTE extensions
 	struct dlist_ts sched_list;	// scheduled actions
 	struct cxip_cmdq *rx_cmdq;	// shared with STD EP
@@ -2372,6 +2373,7 @@ struct cxip_coll_pte {
 	struct dlist_entry buf_list;		// PTE receive buffers
 	ofi_atomic32_t buf_cnt;			// count of linked buffers
 	ofi_atomic32_t buf_swap_cnt;		// for diagnostics
+	ofi_atomic32_t recv_cnt;		// for diagnostics
 	int buf_low_water;			// for diagnostics
 	bool enabled;				// enabled
 };
