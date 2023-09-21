@@ -318,10 +318,6 @@ struct cxip_addr {
 
 #define CXIP_ADDR_EQUAL(a, b) ((a).nic == (b).nic && (a).pid == (b).pid)
 
-#define CXIP_AV_ADDR_IDX(av, fi_addr) ((uint64_t)fi_addr & av->mask)
-#define CXIP_AV_ADDR_RXC(av, fi_addr) \
-	(av->rxc_bits ? ((uint64_t)fi_addr >> (64 - av->rxc_bits)) : 0)
-
 /*
  * A PID contains "pid_granule" logical endpoints. The PID granule is set per
  * device and can be found in libCXI devinfo. The default pid_granule is 256.
@@ -1036,7 +1032,6 @@ struct cxip_req_send {
 	struct cxip_md *send_md;	// send buffer memory descriptor
 	struct cxip_addr caddr;
 	fi_addr_t dest_addr;
-	uint8_t rxc_id;
 	bool tagged;
 	uint32_t tclass;
 	uint64_t tag;
@@ -1186,7 +1181,6 @@ struct cxip_fc_peer {
 	struct cxip_txc *txc;
 	struct cxip_ctrl_req req;
 	struct cxip_addr caddr;
-	uint8_t rxc_id;
 	struct dlist_entry msg_queue;
 	uint16_t pending;
 	uint16_t dropped;
@@ -1201,8 +1195,6 @@ struct cxip_fc_drops {
 	struct cxip_ctrl_req req;
 	uint32_t nic_addr;
 	uint32_t pid;
-	uint8_t txc_id;
-	uint8_t rxc_id;
 	uint16_t drops;
 	unsigned int retry_count;
 };
@@ -2580,15 +2572,13 @@ void cxip_ep_cmdq_put(struct cxip_ep_obj *ep_obj, bool transmit);
 int cxip_recv_ux_sw_matcher(struct cxip_ux_send *ux);
 int cxip_recv_req_sw_matcher(struct cxip_req *req);
 int cxip_recv_cancel(struct cxip_req *req);
-int cxip_fc_process_drops(struct cxip_ep_obj *ep_obj, uint8_t rxc_id,
-			  uint32_t nic_addr, uint32_t pid, uint8_t txc_id,
-			  uint16_t drops);
+int cxip_fc_process_drops(struct cxip_ep_obj *ep_obj, uint32_t nic_addr,
+			  uint32_t pid, uint16_t drops);
 void cxip_recv_pte_cb(struct cxip_pte *pte, const union c_event *event);
 void cxip_rxc_req_fini(struct cxip_rxc *rxc);
 int cxip_rxc_oflow_init(struct cxip_rxc *rxc);
 void cxip_rxc_oflow_fini(struct cxip_rxc *rxc);
-int cxip_fc_resume(struct cxip_ep_obj *ep_obj, uint8_t txc_id,
-		   uint32_t nic_addr, uint32_t pid, uint8_t rxc_id);
+int cxip_fc_resume(struct cxip_ep_obj *ep_obj, uint32_t nic_addr, uint32_t pid);
 
 void cxip_txc_struct_init(struct cxip_txc *txc, const struct fi_tx_attr *attr,
 			  void *context);

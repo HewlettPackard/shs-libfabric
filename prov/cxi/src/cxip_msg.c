@@ -2222,9 +2222,8 @@ int cxip_fc_resume_cb(struct cxip_ctrl_req *req, const union c_event *event)
  * disabled Endpoint indicating the number of drops experienced. The disabled
  * Endpoint peer must count all drops before re-enabling its RX queue.
  */
-int cxip_fc_process_drops(struct cxip_ep_obj *ep_obj, uint8_t rxc_id,
-			  uint32_t nic_addr, uint32_t pid, uint8_t txc_id,
-			  uint16_t drops)
+int cxip_fc_process_drops(struct cxip_ep_obj *ep_obj, uint32_t nic_addr,
+			  uint32_t pid, uint16_t drops)
 {
 	struct cxip_rxc *rxc = &ep_obj->rxc;
 	struct cxip_fc_drops *fc_drops;
@@ -2242,14 +2241,10 @@ int cxip_fc_process_drops(struct cxip_ep_obj *ep_obj, uint8_t rxc_id,
 	fc_drops->rxc = rxc;
 	fc_drops->nic_addr = nic_addr;
 	fc_drops->pid = pid;
-	fc_drops->txc_id = txc_id;
-	fc_drops->rxc_id = rxc_id;
 	fc_drops->drops = drops;
 
 	fc_drops->req.send.nic_addr = nic_addr;
 	fc_drops->req.send.pid = pid;
-	fc_drops->req.send.mb.txc_id = txc_id;
-	fc_drops->req.send.mb.rxc_id = rxc_id;
 	fc_drops->req.send.mb.drops = drops;
 
 	fc_drops->req.send.mb.ctrl_le_type = CXIP_CTRL_LE_TYPE_CTRL_MSG;
@@ -2259,8 +2254,8 @@ int cxip_fc_process_drops(struct cxip_ep_obj *ep_obj, uint8_t rxc_id,
 
 	dlist_insert_tail(&fc_drops->rxc_entry, &rxc->fc_drops);
 
-	RXC_DBG(rxc, "Processed drops: %d NIC: %#x PID: %d TXC: %d\n",
-		drops, nic_addr, pid, txc_id);
+	RXC_DBG(rxc, "Processed drops: %d NIC: %#x PID: %d\n",
+		drops, nic_addr, pid);
 
 	rxc->drop_count += drops;
 
@@ -4323,9 +4318,9 @@ static void report_send_completion(struct cxip_req *req, bool sw_cntr)
 		}
 	} else {
 		TXC_WARN(txc, "Request dest_addr: %ld caddr.nic: %#X caddr.pid:"
-			 " %u rxc_id: %u  error: %p (err: %d, %s)\n",
+			 " %u error: %p (err: %d, %s)\n",
 			 req->send.dest_addr, req->send.caddr.nic,
-			 req->send.caddr.pid, req->send.rxc_id, req, FI_EIO,
+			 req->send.caddr.pid, req, FI_EIO,
 			 cxi_rc_to_str(req->send.rc));
 
 		ret = cxip_cq_req_error(req, 0, FI_EIO, req->send.rc, NULL, 0);
@@ -5026,17 +5021,14 @@ static ssize_t _cxip_send_req(struct cxip_req *req)
  * Caller must hold ep_obj->lock.
  */
 static struct cxip_fc_peer *cxip_fc_peer_lookup(struct cxip_txc *txc,
-						struct cxip_addr caddr,
-						uint8_t rxc_id)
+						struct cxip_addr caddr)
 {
 	struct cxip_fc_peer *peer;
 
 	dlist_foreach_container(&txc->fc_peers, struct cxip_fc_peer,
 				peer, txc_entry) {
-		if (CXIP_ADDR_EQUAL(peer->caddr, caddr) &&
-		    peer->rxc_id == rxc_id) {
+		if (CXIP_ADDR_EQUAL(peer->caddr, caddr))
 			return peer;
-		}
 	}
 
 	return NULL;
@@ -5152,7 +5144,7 @@ int cxip_fc_notify_cb(struct cxip_ctrl_req *req, const union c_event *event)
  * Caller must hold ep_obj->lock.
  */
 static int cxip_fc_peer_init(struct cxip_txc *txc, struct cxip_addr caddr,
-			     uint8_t rxc_id, struct cxip_fc_peer **peer)
+			     struct cxip_fc_peer **peer)
 {
 	struct cxip_fc_peer *p;
 	struct cxip_req *req;
@@ -5165,7 +5157,6 @@ static int cxip_fc_peer_init(struct cxip_txc *txc, struct cxip_addr caddr,
 	}
 
 	p->caddr = caddr;
-	p->rxc_id = rxc_id;
 	p->txc = txc;
 	dlist_init(&p->msg_queue);
 	dlist_insert_tail(&p->txc_entry, &txc->fc_peers);
@@ -5184,8 +5175,7 @@ static int cxip_fc_peer_init(struct cxip_txc *txc, struct cxip_addr caddr,
 	/* Queue all Sends to the FC'ed peer */
 	dlist_foreach_container_safe(&txc->msg_queue, struct cxip_req,
 				     req, send.txc_entry, tmp) {
-		if (CXIP_ADDR_EQUAL(req->send.caddr, caddr) &&
-		     req->send.rxc_id == rxc_id) {
+		if (CXIP_ADDR_EQUAL(req->send.caddr, caddr)) {
 			dlist_remove(&req->send.txc_entry);
 			dlist_insert_tail(&req->send.txc_entry, &p->msg_queue);
 			p->pending++;
@@ -5205,8 +5195,7 @@ static int cxip_fc_peer_init(struct cxip_txc *txc, struct cxip_addr caddr,
  *
  * Replay all dropped Sends in order.
  */
-int cxip_fc_resume(struct cxip_ep_obj *ep_obj, uint8_t txc_id,
-		   uint32_t nic_addr, uint32_t pid, uint8_t rxc_id)
+int cxip_fc_resume(struct cxip_ep_obj *ep_obj, uint32_t nic_addr, uint32_t pid)
 {
 	struct cxip_txc *txc = &ep_obj->txc;
 	struct cxip_fc_peer *peer;
@@ -5218,7 +5207,7 @@ int cxip_fc_resume(struct cxip_ep_obj *ep_obj, uint8_t txc_id,
 	struct dlist_entry *tmp;
 	int ret __attribute__((unused));
 
-	peer = cxip_fc_peer_lookup(txc, caddr, rxc_id);
+	peer = cxip_fc_peer_lookup(txc, caddr);
 	if (!peer)
 		TXC_FATAL(txc, "Fatal, FC peer not found: NIC: %#x PID: %d\n",
 			  nic_addr, pid);
@@ -5263,10 +5252,9 @@ static int cxip_send_req_dropped(struct cxip_txc *txc, struct cxip_req *req)
 	int ret;
 
 	/* Check if peer is already disabled */
-	peer = cxip_fc_peer_lookup(txc, req->send.caddr, req->send.rxc_id);
+	peer = cxip_fc_peer_lookup(txc, req->send.caddr);
 	if (!peer) {
-		ret = cxip_fc_peer_init(txc, req->send.caddr, req->send.rxc_id,
-					&peer);
+		ret = cxip_fc_peer_init(txc, req->send.caddr, &peer);
 		if (ret != FI_SUCCESS)
 			return ret;
 
@@ -5300,8 +5288,7 @@ static int cxip_send_req_queue(struct cxip_txc *txc, struct cxip_req *req)
 	struct cxip_fc_peer *peer;
 
 	if (!dlist_empty(&txc->fc_peers)) {
-		peer = cxip_fc_peer_lookup(txc, req->send.caddr,
-					   req->send.rxc_id);
+		peer = cxip_fc_peer_lookup(txc, req->send.caddr);
 		if (peer) {
 			/* Peer is disabled. Progress control EQs so future
 			 * cxip_send_req_queue() may succeed.
@@ -5541,10 +5528,6 @@ ssize_t cxip_send_common(struct cxip_txc *txc, uint32_t tclass, const void *buf,
 		TXC_WARN(txc, "Failed to look up FI addr: %d\n", ret);
 		goto err_req_buf_fini;
 	}
-
-	/* TODO: Remove not needed - Check for RX context ID */
-	req->send.rxc_id = CXIP_AV_ADDR_RXC(txc->ep_obj->av, dest_addr);
-	caddr.pid += req->send.rxc_id;
 
 	req->send.caddr = caddr;
 	req->send.dest_addr = dest_addr;

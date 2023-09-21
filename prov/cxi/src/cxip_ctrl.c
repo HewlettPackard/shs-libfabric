@@ -41,15 +41,13 @@ int cxip_ctrl_msg_cb(struct cxip_ctrl_req *req, const union c_event *event)
 
 		switch (mb.ctrl_msg_type) {
 		case CXIP_CTRL_MSG_FC_NOTIFY:
-			ret = cxip_fc_process_drops(req->ep_obj, mb.rxc_id,
-						    nic_addr, pid, mb.txc_id,
+			ret = cxip_fc_process_drops(req->ep_obj, nic_addr, pid,
 						    mb.drops);
 			assert(ret == FI_SUCCESS);
 
 			break;
 		case CXIP_CTRL_MSG_FC_RESUME:
-			ret = cxip_fc_resume(req->ep_obj, mb.txc_id, nic_addr,
-					     pid, mb.rxc_id);
+			ret = cxip_fc_resume(req->ep_obj, nic_addr, pid);
 			assert(ret == FI_SUCCESS);
 
 			break;
