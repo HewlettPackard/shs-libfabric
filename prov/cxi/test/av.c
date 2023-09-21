@@ -65,48 +65,12 @@ test_addrs_fini(void)
 static void
 test_create(size_t count)
 {
-	struct cxip_av *av;
-	size_t expect;
-	int i;
-
-	expect = (count) ? count : cxip_av_def_sz;
 	cxit_av_attr.count = count;
 	cxit_create_av();
 
-	/* Should return the actual count   */
-	cr_assert(cxit_av_attr.count == expect,
-		"attr count=%ld, expect=%ld", cxit_av_attr.count, expect);
 	/* Should allocate a structure   */
 	cr_assert(cxit_av != NULL,
 		"cxit_av=%p", cxit_av);
-
-	/* Check the table memory   */
-	av = container_of(&cxit_av->fid, struct cxip_av, av_fid.fid);
-	cr_assert(av->table_hdr != NULL,
-		"av->table_hdr=%p", av->table_hdr);
-	cr_assert(av->table != NULL,
-		"av->table=%p", av->table);
-	cr_assert(av->table_hdr->size == expect,
-		"av->table_hdr->size=%ld, expect %ld",
-		av->table_hdr->size, expect);
-
-	if (cxit_av_attr.name) {
-		/* Named AVs should allocate shared memory   */
-		cr_assert(av->idx_arr != NULL,
-			"av->idx_arr=%p, expect ptr", av->idx_arr);
-		/* Not read-only, so this should not return this pointer   */
-		cr_assert(cxit_av_attr.map_addr == NULL,
-			"map_addr=%p", cxit_av_attr.map_addr);
-		/* All of the indices should be -1   */
-		for (i = 0; i < av->table_hdr->size; i++) {
-			cr_assert(av->idx_arr[i] == (uint64_t)-1,
-				"av->idx_arr[%d]=%ld", i, av->idx_arr[i]);
-		}
-	} else {
-		/* Unnamed AV should not allocate shared memory */
-		cr_assert(av->idx_arr == NULL,
-			"av->idx_arr=%p, expect (nil)", av->idx_arr);
-	}
 
 	cxit_destroy_av();
 }
@@ -244,46 +208,6 @@ test_insert(void)
 	__test_insert(naddrs, iters);
 }
 
-/* Opening bracket for a read-only test. This will open a read-only AV, and
- * return information in attrRO and avRO. There must be a read-write AV open
- * when this is called.
- */
-static void
-shmem_readonly_init(const char *name, struct fi_av_attr *attrRO,
-	struct fid_av **avRO)
-{
-	int ret;
-
-	memset(attrRO, 0, sizeof(*attrRO));
-
-	attrRO->count = 0;
-	attrRO->type = FI_AV_MAP;
-	attrRO->name = name;
-	attrRO->flags |= FI_READ;
-
-	*avRO = NULL;
-
-	ret = fi_av_open(cxit_domain, attrRO, avRO, NULL);
-	/* This should succeed   */
-	cr_assert(ret == FI_SUCCESS,
-		"fi_av_open RO");
-	/* Read-only open should return a map   */
-	cr_assert(attrRO->map_addr != NULL,
-		"fi_av_open RO no map");
-	/* Read-only count should have read the size   */
-	cr_assert(attrRO->count != 0,
-		"fi_av_open RO zero count");
-}
-
-static void
-shmem_readonly_term(struct fid_av *avRO)
-{
-	int ret;
-
-	ret = fi_close(&avRO->fid);
-	cr_assert(ret == FI_SUCCESS, "fi_close RO");
-}
-
 TestSuite(av, .init = cxit_setup_av, .fini = cxit_teardown_av,
 	  .timeout = CXIT_DEFAULT_TIMEOUT);
 
@@ -371,36 +295,12 @@ Test(av, table_create)
 	test_create(1024);
 }
 
-Test(av, shmem_table_create)
-{
-	char name[64];
-
-	snprintf(name, sizeof(name), "/bogus%d", getpid());
-	cxit_av_attr.type = FI_AV_TABLE;
-	cxit_av_attr.name = name;
-	test_create(0);
-	test_create(1024);
-	cxit_av_attr.name = NULL;
-}
-
 /* Test basic AV map creation */
 Test(av, map_create)
 {
 	cxit_av_attr.type = FI_AV_MAP;
 	test_create(0);
 	test_create(1024);
-}
-
-Test(av, shmem_map_create)
-{
-	char name[64];
-
-	snprintf(name, sizeof(name), "/bogus%d", getpid());
-	cxit_av_attr.type = FI_AV_MAP;
-	cxit_av_attr.name = name;
-	test_create(0);
-	test_create(1024);
-	cxit_av_attr.name = NULL;
 }
 
 /* Test basic AV default creation */
@@ -411,196 +311,24 @@ Test(av, unspecified_create)
 	test_create(1024);
 }
 
-Test(av, shmem_unspecified_create)
-{
-	char name[64];
-
-	snprintf(name, sizeof(name), "/bogus%d", getpid());
-	cxit_av_attr.type = FI_AV_UNSPEC;
-	cxit_av_attr.name = name;
-	test_create(0);
-	test_create(1024);
-	cxit_av_attr.name = NULL;
-}
-
-#if 0
-/* Comment out since cr_skip_test() aborts the test and
- * libfabric will trip a MR cleanup assertion.
- */
-
 /* Test basic AV table insert */
 Test(av, table_insert)
 {
-	cr_skip_test();
 	cxit_av_attr.count = AV_COUNT;
 	cxit_av_attr.type = FI_AV_TABLE;
 	naddrs = cxit_av_attr.count * 10;
 
 	test_insert();
 }
-#endif
-
-Test(av, shmem_table_insert)
-{
-	char name[64];
-
-	snprintf(name, sizeof(name), "/bogus%d", getpid());
-	cxit_av_attr.count = AV_COUNT;
-	cxit_av_attr.type = FI_AV_TABLE;
-	cxit_av_attr.name = name;
-	naddrs = cxit_av_attr.count * 10;
-
-	test_insert();
-}
-
-#if 0
-/* Comment out since cr_skip_test() aborts the test and
- * libfabric will trip a MR cleanup assertion.
- */
 
 /* Test basic AV map insert */
 Test(av, map_insert)
 {
-	cr_skip_test();
 	cxit_av_attr.count = AV_COUNT;
 	cxit_av_attr.type = FI_AV_MAP;
 	naddrs = cxit_av_attr.count * 10;
 
 	test_insert();
-}
-#endif
-
-Test(av, shmem_map_insert)
-{
-	char name[64];
-
-	snprintf(name, sizeof(name), "/bogus%d", getpid());
-	cxit_av_attr.count = AV_COUNT;
-	cxit_av_attr.type = FI_AV_MAP;
-	cxit_av_attr.name = name;
-	naddrs = cxit_av_attr.count * 10;
-
-	test_insert();
-}
-
-/* Test shared memory implementation */
-Test(av, shmem_map_readonly)
-{
-	struct fi_av_attr attrRW, attrRO;
-	struct fid_av *avRW, *avRO;
-	char name[64];
-	uint64_t *map;
-	int ret, siz, i;
-
-	test_addrs_init();
-
-	memset(&attrRW, 0, sizeof(attrRW));
-	memset(&avRW, 0, sizeof(avRW));
-
-	/* Create a very small RW AV */
-	snprintf(name, sizeof(name), "/bogus%d", getpid());
-	attrRW.count = 32;
-	attrRW.type = FI_AV_MAP;
-	attrRW.name = name;
-
-	ret = fi_av_open(cxit_domain, &attrRW, &avRW, NULL);
-	cr_assert(ret == FI_SUCCESS, "fi_av_open RW");
-
-	/* Make sure the map has invalid tokens */
-	shmem_readonly_init(name, &attrRO, &avRO);
-	do {
-		map = (uint64_t *)attrRO.map_addr;
-		for (i = 0; i < attrRO.count; i++) {
-			cr_assert(map[i] == (uint64_t)-1,
-				"map[%d]=%016lx\n", i, map[i]);
-		}
-	} while (0);
-	shmem_readonly_term(avRO);
-
-
-	/* Fill to increasing sizes */
-	for (siz = 1; siz < 36; siz++) {
-		/* Insert siz addresses   */
-		ret = fi_av_insert(avRW, &test_addrs[0], siz,
-			&test_fi_addrs[0], 0, NULL);
-		cr_assert(ret == siz,
-			"insertion failed siz=%d ret=%d", siz, ret);
-		for (i = 0; i < siz; i++) {
-			cr_assert(test_fi_addrs[i] == i,
-				"bad index siz=%d idx=%i val=%ld",
-				siz, i, test_fi_addrs[i]);
-		}
-
-		/* Look at the read-only map   */
-		shmem_readonly_init(name, &attrRO, &avRO);
-		do {
-			map = (uint64_t *)attrRO.map_addr;
-			/* There should be space in the map   */
-			cr_assert(attrRO.count >= siz,
-				"map too small, count=%ld, siz=%d\n",
-				attrRO.count, siz);
-			/* First 'siz' should be valid indices */
-			for (i = 0; i < siz; i++) {
-				cr_assert(map[i] == i,
-					"map[%d]=%016lx\n", 0, map[0]);
-			}
-			/* Remainder should be invalid   */
-			for (; i < attrRO.count; i++) {
-				cr_assert(map[i] == (uint64_t)-1,
-					"map[%d]=%016lx\n", i, map[i]);
-			}
-		} while (0);
-		shmem_readonly_term(avRO);
-
-		/* Remove all but the last address   */
-		ret = fi_av_remove(avRW, &test_fi_addrs[0], siz - 1, 0);
-		cr_assert(ret == FI_SUCCESS,
-			"remove %d failed", siz - 1);
-
-		shmem_readonly_init(name, &attrRO, &avRO);
-		do {
-			map = (uint64_t *)attrRO.map_addr;
-			/* First siz-1 should be invalid   */
-			for (i = 0; i < siz - 1; i++) {
-				cr_assert(map[i] == (uint64_t)-1,
-					"map[%d]=%016lx\n", i, map[i]);
-			}
-			/* Last item should be valid   */
-			for (; i < siz; i++) {
-				cr_assert(map[i] == i,
-					"map[%d]=%016lx\n", 0, map[0]);
-			}
-			/* Remainder should be invalid   */
-			for (; i < attrRO.count; i++) {
-				cr_assert(map[i] == (uint64_t)-1,
-					"map[%d]=%016lx\n", i, map[i]);
-			}
-		} while (0);
-		shmem_readonly_term(avRO);
-
-		/* Fill up again   */
-		ret = fi_av_insert(avRW, &test_addrs[0], siz - 1,
-			&test_fi_addrs[0], 0, NULL);
-		cr_assert(ret == siz - 1,
-			"reinsertion failed siz=%d ret=%d", siz, ret);
-		/* These should have filled in-order   */
-		for (i = 0; i < siz; i++) {
-			cr_assert(test_fi_addrs[i] == i,
-				"bad index siz=%d idx=%i val=%ld",
-				siz, i, test_fi_addrs[i]);
-		}
-
-		/* Clean up for next pass   */
-		ret = fi_av_remove(avRW, &test_fi_addrs[0], siz, 0);
-		cr_assert(ret == FI_SUCCESS,
-			"remove %d failed", siz);
-
-	}
-
-	ret = fi_close(&avRW->fid);
-	cr_assert(ret == FI_SUCCESS, "fi_close RW");
-
-	test_addrs_fini();
 }
 
 /* Test address conversion to string */
@@ -627,19 +355,6 @@ Test(av, straddr)
 	free(buf);
 
 	cxit_destroy_av();
-}
-
-Test(av, shmem_zero_size)
-{
-	struct util_shm shm;
-	void *ptr;
-	int ret;
-	char name[64] = {};
-
-	ret = ofi_shm_map(&shm, name, 0, 0, &ptr);
-	cr_assert(ret == -FI_EINVAL, "create shmem RW size 0 = %d", ret);
-	ret = ofi_shm_map(&shm, name, 0, 1, &ptr);
-	cr_assert(ret == -FI_EINVAL, "create shmem RO size 0 = %d", ret);
 }
 
 Test(av, insertsvc)

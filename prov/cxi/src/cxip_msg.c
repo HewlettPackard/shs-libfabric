@@ -178,17 +178,16 @@ static fi_addr_t recv_req_src_addr(struct cxip_req *req)
 	 * physical address in the EQ event to logical FI address.
 	 */
 	if (rxc->attr.caps & FI_SOURCE) {
-		uint32_t nic;
-		uint32_t pid;
+		struct cxip_addr addr = {};
 
-		if (rxc->ep_obj->av->attr.flags & FI_SYMMETRIC)
+		if (rxc->ep_obj->av->symmetric)
 			return CXI_MATCH_ID_EP(rxc->pid_bits,
 					       req->recv.initiator);
 
-		nic = CXI_MATCH_ID_EP(rxc->pid_bits, req->recv.initiator);
-		pid = CXI_MATCH_ID_PID(rxc->pid_bits, req->recv.initiator);
+		addr.nic = CXI_MATCH_ID_EP(rxc->pid_bits, req->recv.initiator);
+		addr.pid = CXI_MATCH_ID_PID(rxc->pid_bits, req->recv.initiator);
 
-		return _cxip_av_reverse_lookup(rxc->ep_obj->av, nic, pid);
+		return cxip_av_lookup_fi_addr(rxc->ep_obj->av, &addr);
 	}
 
 	return FI_ADDR_NOTAVAIL;
@@ -528,10 +527,10 @@ static int rdzv_mrecv_req_lookup(struct cxip_req *req,
 
 	if ((event->hdr.event_type == C_EVENT_PUT_OVERFLOW ||
 	     event->hdr.event_type == C_EVENT_PUT)  &&
-	    rxc->ep_obj->av->attr.flags & FI_SYMMETRIC) {
-		ret = _cxip_av_lookup(rxc->ep_obj->av,
-				      CXI_MATCH_ID_EP(rxc->pid_bits, ev_init),
-				      &caddr);
+	    rxc->ep_obj->av->symmetric) {
+		ret = cxip_av_lookup_addr(rxc->ep_obj->av,
+					  CXI_MATCH_ID_EP(rxc->pid_bits, ev_init),
+					  &caddr);
 		if (ret != FI_SUCCESS)
 			RXC_FATAL(rxc, "Lookup of FI addr 0x%x: failed %d\n",
 				  ev_init, ret);
@@ -936,16 +935,15 @@ static void cxip_recv_req_set_rget_info(struct cxip_req *req)
 	struct cxip_rxc *rxc = req->recv.rxc;
 	int ret;
 
-	if (rxc->ep_obj->av->attr.flags & FI_SYMMETRIC) {
+	if (rxc->ep_obj->av->symmetric) {
 		struct cxip_addr caddr;
 
 		RXC_DBG(rxc, "Translating initiator: %x, req: %p\n",
 			req->recv.initiator, req);
 
-		ret = _cxip_av_lookup(rxc->ep_obj->av,
-				      CXI_MATCH_ID_EP(rxc->pid_bits,
-						      req->recv.initiator),
-				      &caddr);
+		ret = cxip_av_lookup_addr(rxc->ep_obj->av,
+				          CXI_MATCH_ID_EP(rxc->pid_bits, req->recv.initiator),
+					  &caddr);
 		if (ret != FI_SUCCESS)
 			RXC_FATAL(rxc, "Failed to look up FI addr: %d\n", ret);
 
@@ -3083,7 +3081,7 @@ static bool init_match(struct cxip_rxc *rxc, uint32_t init, uint32_t match_id)
 	if (match_id == CXI_MATCH_ID_ANY)
 		return true;
 
-	if (rxc->ep_obj->av->attr.flags & FI_SYMMETRIC) {
+	if (rxc->ep_obj->av->symmetric) {
 		init = CXI_MATCH_ID_EP(rxc->pid_bits, init);
 		match_id = CXI_MATCH_ID_EP(rxc->pid_bits, match_id);
 	}
@@ -4131,13 +4129,13 @@ ssize_t cxip_recv_common(struct cxip_rxc *rxc, void *buf, size_t len,
 	 */
 	if (rxc->attr.caps & FI_DIRECTED_RECV &&
 	    src_addr != FI_ADDR_UNSPEC) {
-		if (rxc->ep_obj->av->attr.flags & FI_SYMMETRIC) {
+		if (rxc->ep_obj->av->symmetric) {
 			/* PID is not used for matching */
 			match_id = CXI_MATCH_ID(rxc->pid_bits, C_PID_ANY,
 						src_addr);
 		} else {
-			ret = _cxip_av_lookup(rxc->ep_obj->av, src_addr,
-					      &caddr);
+			ret = cxip_av_lookup_addr(rxc->ep_obj->av, src_addr,
+						  &caddr);
 			if (ret != FI_SUCCESS) {
 				RXC_WARN(rxc, "Failed to look up FI addr: %d\n",
 					 ret);
@@ -4253,10 +4251,8 @@ static fi_addr_t _txc_fi_addr(struct cxip_txc *txc)
 {
 	if (txc->ep_obj->fi_addr == FI_ADDR_NOTAVAIL) {
 		txc->ep_obj->fi_addr =
-				_cxip_av_reverse_lookup(
-						txc->ep_obj->av,
-						txc->ep_obj->src_addr.nic,
-						txc->ep_obj->src_addr.pid);
+				cxip_av_lookup_fi_addr(txc->ep_obj->av,
+						       &txc->ep_obj->src_addr);
 		TXC_DBG(txc, "Found EP FI Addr: %lu\n", txc->ep_obj->fi_addr);
 	}
 
@@ -4280,7 +4276,7 @@ static fi_addr_t _txc_fi_addr(struct cxip_txc *txc)
 static uint32_t cxip_msg_match_id(struct cxip_txc *txc)
 {
 	/* PID is not used for logical matching, but is used for rendezvous. */
-	if (txc->ep_obj->av->attr.flags & FI_SYMMETRIC)
+	if (txc->ep_obj->av->symmetric)
 		return CXI_MATCH_ID(txc->pid_bits, txc->ep_obj->src_addr.pid,
 				    _txc_fi_addr(txc));
 
@@ -5523,7 +5519,7 @@ ssize_t cxip_send_common(struct cxip_txc *txc, uint32_t tclass, const void *buf,
 	}
 
 	/* Look up target CXI address */
-	ret = _cxip_av_lookup(txc->ep_obj->av, dest_addr, &caddr);
+	ret = cxip_av_lookup_addr(txc->ep_obj->av, dest_addr, &caddr);
 	if (ret != FI_SUCCESS) {
 		TXC_WARN(txc, "Failed to look up FI addr: %d\n", ret);
 		goto err_req_buf_fini;

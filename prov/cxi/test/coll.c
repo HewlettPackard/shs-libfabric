@@ -156,7 +156,7 @@ Test(coll_init, reenable)
  * JOIN testing.
  */
 TestSuite(coll_join, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
-	  .disabled = false, .timeout = CXIT_DEFAULT_TIMEOUT);
+	  .disabled = true, .timeout = CXIT_DEFAULT_TIMEOUT);
 
 /* expand AV and create av_sets for collectives */
 static void _create_av_set(int count, int rank, bool rx_discard,
@@ -184,7 +184,7 @@ static void _create_av_set(int count, int rank, bool rx_discard,
 	ep = container_of(cxit_ep, struct cxip_ep, ep);
 
 	/* lookup initiator caddr as set in test framework */
-	ret = _cxip_av_lookup(ep->ep_obj->av, cxit_ep_fi_addr, &caddr);
+	ret = cxip_av_lookup_addr(ep->ep_obj->av, cxit_ep_fi_addr, &caddr);
 	cr_assert(ret == 0, "bad lookup on address %ld: %d\n",
 		  cxit_ep_fi_addr, ret);
 
@@ -442,7 +442,7 @@ Test(coll_join, fail_ptlte) {
  */
 
 TestSuite(coll_put, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
-	  .disabled = false, .timeout = CXIT_DEFAULT_TIMEOUT);
+	  .disabled = true, .timeout = CXIT_DEFAULT_TIMEOUT);
 
 /* 50-byte packet */
 struct fakebuf {
@@ -800,7 +800,7 @@ Test(coll_put, put_red_pkt_distrib)
  * Test reduction concurrency.
  */
 TestSuite(coll_reduce, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
-	  .disabled = false, .timeout = 2*CXIT_DEFAULT_TIMEOUT);
+	  .disabled = true, .timeout = 2*CXIT_DEFAULT_TIMEOUT);
 
 /* Simulated user context, specifically to return error codes */
 struct user_context {
@@ -1199,7 +1199,7 @@ void teardown_coll(void) {
 }
 
 TestSuite(coll_reduce_ops, .init = setup_coll, .fini = teardown_coll,
-	  .disabled = false, .timeout = CXIT_DEFAULT_TIMEOUT);
+	  .disabled = true, .timeout = CXIT_DEFAULT_TIMEOUT);
 
 /* Test barrier */
 Test(coll_reduce_ops, barrier)

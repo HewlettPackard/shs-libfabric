@@ -179,20 +179,15 @@ Test(avset, basics)
 	};
 	struct fid_av_set *set2;
 	struct fid_av_set *setX;
-	struct cxip_av *cxi_av;
 	int errors;
 	int i, ret;
 
 	errors = 0;
 
 	// Expand the AV, so we have enough addresses to test
-	cxi_av = container_of(cxit_av, struct cxip_av, av_fid);
 	for (i = 0; i < 20; i++) {
 		struct cxip_addr fake_addr = { .nic = i, .pid = 0xff };
 		int inserted;
-
-		if (i < cxi_av->table_hdr->size && cxi_av->table[i].valid)
-			continue;
 
 		inserted = fi_av_insert(cxit_av, (void *)&fake_addr,
 					1, NULL, 0, NULL);

@@ -260,7 +260,7 @@ static int cxip_rdzv_base_pte_alloc(struct cxip_txc *txc,
 	ofi_atomic_initialize32(&base_pte->le_linked_success_count, 0);
 	ofi_atomic_initialize32(&base_pte->le_linked_failure_count, 0);
 
-	if (matching && txc->ep_obj->av->attr.flags & FI_SYMMETRIC)
+	if (matching && txc->ep_obj->av->symmetric)
 		pt_opts.use_logical = 1;
 
 	/* Reserve the Rendezvous Send PTE */

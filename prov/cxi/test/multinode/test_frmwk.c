@@ -30,7 +30,6 @@
 int main(int argc, char **argv)
 {
 	fi_addr_t *fiaddr = NULL;
-	struct cxip_av *av;
 	size_t size = 0;
 	int i, j, ret;
 
@@ -56,11 +55,10 @@ int main(int argc, char **argv)
 	if (frmwk_errmsg(ret, "frmwk_populate_av()\n"))
 		return ret;
 
-	av = container_of(cxit_av, struct cxip_av, av_fid.fid);
 	printf("[%d|%d] fiaddrs\n", frmwk_rank, frmwk_numranks);
 	for (i = 0; i < size; i++) {
-		printf("[%d|%d] %ld=%05x\n", frmwk_rank, frmwk_numranks,
-			fiaddr[i], av->table[i].nic);
+		printf("[%d|%d] %ld\n", frmwk_rank, frmwk_numranks,
+			fiaddr[i]);
 	}
 
 	cxip_trace_rank = frmwk_rank;

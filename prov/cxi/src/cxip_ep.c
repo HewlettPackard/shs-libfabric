@@ -590,11 +590,8 @@ int cxip_free_endpoint(struct cxip_ep *ep)
 		return -FI_EBUSY;
 	}
 
-	if (ep_obj->av) {
-		fid_list_remove(&ep_obj->av->ep_list, &ep_obj->av->list_lock,
-				&ep->ep.fid);
-		ofi_atomic_dec32(&ep_obj->av->ref);
-	}
+	if (ep_obj->av)
+		cxip_av_unbind_ep(ep_obj->av, ep);
 
 	if (ep->ep_obj->eq) {
 		ofi_mutex_lock(&ep_obj->eq->list_lock);
@@ -788,28 +785,6 @@ static int cxip_ep_bind_cntr(struct cxip_ep *ep, struct cxip_cntr *cntr,
 }
 
 /*
- * cxip_ep_bind_av() - Bend EP to AV resource
- */
-static int cxip_ep_bind_av(struct cxip_ep *ep, struct cxip_av *av)
-{
-	int ret;
-
-	if (ep->ep_obj->domain != av->domain) {
-		CXIP_WARN("Invalid AV domain for EP\n");
-		return -FI_EINVAL;
-	}
-
-	ep->ep_obj->av = av;
-	ofi_atomic_inc32(&av->ref);
-
-	ret = fid_list_insert(&av->ep_list, &av->list_lock, &ep->ep.fid);
-	if (ret)
-		CXIP_WARN("Add of EP to AV context list failed %d : %s\n",
-			  ret, fi_strerror(-ret));
-	return ret;
-}
-
-/*
  * cxip_ep_bind() - Bind EP resources.
  */
 int cxip_ep_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
@@ -857,9 +832,11 @@ int cxip_ep_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 
 	case FI_CLASS_AV:
 		av = container_of(bfid, struct cxip_av, av_fid.fid);
-		ret = cxip_ep_bind_av(ep, av);
+		ret = cxip_av_bind_ep(av, ep);
 		if (ret)
 			return ret;
+		ep->ep_obj->av = av;
+
 		break;
 
 	default:
@@ -1212,7 +1189,6 @@ int cxip_alloc_endpoint(struct cxip_domain *cxip_dom, struct fi_info *hints,
 	ep_obj->domain = cxip_dom;
 	ep_obj->src_addr.nic = nic;
 	ep_obj->src_addr.pid = pid;
-	ep_obj->src_addr.valid = 1;
 	ep_obj->fi_addr = FI_ADDR_NOTAVAIL;
 
 	ofi_atomic_initialize32(&ep_obj->txq_ref, 0);

@@ -105,7 +105,6 @@
 #define CXIP_AMO_MAX_IOV		1
 #define CXIP_EQ_DEF_SZ			(1 << 8)
 #define CXIP_CQ_DEF_SZ			1024U
-#define CXIP_AV_DEF_SZ			(1 << 8)
 #define CXIP_REMOTE_CQ_DATA_SZ		8
 
 #define CXIP_PTE_IGNORE_DROPS		((1 << 24) - 1)
@@ -130,7 +129,7 @@
 	 FI_DIRECTED_RECV | FI_MSG | FI_NAMED_RX_CTX | \
 	 FI_COLLECTIVE | FI_HMEM)
 #define CXIP_EP_SEC_CAPS \
-	(FI_SOURCE | FI_SOURCE_ERR | FI_SHARED_AV | FI_LOCAL_COMM | \
+	(FI_SOURCE | FI_SOURCE_ERR | FI_LOCAL_COMM | \
 	 FI_REMOTE_COMM | FI_RMA_EVENT | FI_MULTI_RECV | FI_FENCE | FI_TRIGGER)
 #define CXIP_EP_CAPS (CXIP_EP_PRI_CAPS | CXIP_EP_SEC_CAPS)
 #define CXIP_MSG_ORDER			(FI_ORDER_SAS | \
@@ -178,7 +177,6 @@ extern char cxip_prov_name[];
 extern struct fi_provider cxip_prov;
 extern struct util_prov cxip_util_prov;
 
-extern int cxip_av_def_sz;
 extern int cxip_cq_def_sz;
 extern int cxip_eq_def_sz;
 
@@ -310,7 +308,6 @@ struct cxip_addr {
 		struct {
 			uint32_t pid		: C_DFA_PID_BITS_MAX;
 			uint32_t nic		: C_DFA_NIC_BITS;
-			uint32_t valid		: 1;
 		};
 		uint32_t raw;
 	};
@@ -2126,39 +2123,57 @@ struct cxip_mr {
 	struct dlist_entry mr_domain_entry;
 };
 
-/*
- * Address Vector header
- *
- * Support structure.
- */
-struct cxip_av_table_hdr {
-	uint64_t size;
-	uint64_t stored;
+struct cxip_av_entry {
+	ofi_atomic32_t use_cnt;
+	UT_hash_handle hh;
+	struct cxip_addr addr;
 };
 
-/*
- * Address Vector
- *
- * libfabric fi_av implementation.
- *
- * Created in cxip_av_open().
- */
 struct cxip_av {
 	struct fid_av av_fid;
-	struct cxip_domain *domain;	// parent domain
+	struct cxip_domain *domain;
+
+	/* List of endpoints bound to this AV. Each bind takes a reference
+	 * as well.
+	 */
+	struct dlist_entry ep_list;
 	ofi_atomic32_t ref;
-	struct fi_av_attr attr;		// copy of user attributes
-	socklen_t addrlen;		// size of struct cxip_addr
-	struct cxip_eq *eq;		// event queue
-	struct cxip_av_table_hdr *table_hdr;
-					// mapped AV table
-	struct cxip_addr *table;	// address data in table_hdr memory
-	uint64_t *idx_arr;		// valid only for shared AVs
-	struct util_shm shm;		// OFI shared memory structure
-	int shared;			// set if shared
-	struct dlist_entry ep_list;	// contains EP fid objects
-	ofi_mutex_t list_lock;
+
+	/* Memory used to implement lookups. Two data structures are used.
+	 * 1. ibuf pool for O(1) lookup on the data path
+	 * 2. hash table for O(1) on the receive path
+	 */
+	struct cxip_av_entry *hash;
+	struct ofi_bufpool *av_entry_pool;
+	ofi_atomic32_t entry_cnt;
+
+	/* Single lock is used to protect entire AV. With domain level
+	 * threading, this lock is not used.
+	 */
+	bool lockless;
+	pthread_rwlock_t lock;
+
+	/* AV is configured as symmetric. This is an optimization which enables
+	 * endpoints to use logical address.
+	 */
+	bool symmetric;
+
+	/* Address vector type. */
+	enum fi_av_type type;
 };
+
+int cxip_av_lookup_addr(struct cxip_av *av, fi_addr_t fi_addr,
+			struct cxip_addr *addr);
+fi_addr_t cxip_av_lookup_fi_addr(struct cxip_av *av,
+				 const struct cxip_addr *addr);
+int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
+		 struct fid_av **av, void *context);
+int cxip_av_bind_ep(struct cxip_av *av, struct cxip_ep *ep);
+void cxip_av_unbind_ep(struct cxip_av *av, struct cxip_ep *ep);
+static inline int cxip_av_entry_count(struct cxip_av *av)
+{
+	return ofi_atomic_get32(&av->entry_cnt);
+}
 
 /*
  * AV Set
@@ -2543,13 +2558,6 @@ void cxip_evtq_fini(struct cxip_evtq *eq);
 
 int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 		struct fid_domain **dom, void *context);
-
-fi_addr_t _cxip_av_reverse_lookup(struct cxip_av *av, uint32_t nic,
-				  uint32_t pid);
-int _cxip_av_lookup(struct cxip_av *av, fi_addr_t fi_addr,
-		    struct cxip_addr *addr);
-int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
-		 struct fid_av **av, void *context);
 
 int cxip_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fabric,
 		void *context);

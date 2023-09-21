@@ -140,7 +140,7 @@ static int rxc_msg_init(struct cxip_rxc *rxc)
 	/* If applications AVs are symmetric, use logical FI addresses for
 	 * matching. Otherwise, physical addresses will be used.
 	 */
-	if (rxc->ep_obj->av->attr.flags & FI_SYMMETRIC) {
+	if (rxc->ep_obj->av->symmetric) {
 		CXIP_DBG("Using logical PTE matching\n");
 		pt_opts.use_logical = 1;
 	}

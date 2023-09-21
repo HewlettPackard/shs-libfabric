@@ -697,7 +697,7 @@ ssize_t cxip_rma_common(enum fi_op_type op, struct cxip_txc *txc,
 	}
 
 	/* Build target network address. */
-	ret = _cxip_av_lookup(txc->ep_obj->av, tgt_addr, &caddr);
+	ret = cxip_av_lookup_addr(txc->ep_obj->av, tgt_addr, &caddr);
 	if (ret) {
 		TXC_WARN(txc, "Failed to look up FI addr: %d:%s\n",
 			 ret, fi_strerror(-ret));

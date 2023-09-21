@@ -574,7 +574,7 @@ static int _gen_tx_dfa(struct cxip_coll_reduction *reduction,
 			return -FI_EINVAL;
 		}
 		dest_addr = av_set_obj->fi_addr_ary[av_set_idx];
-		ret = _cxip_av_lookup(ep_obj->av, dest_addr, &dest_caddr);
+		ret = cxip_av_lookup_addr(ep_obj->av, dest_addr, &dest_caddr);
 		if (ret != FI_SUCCESS)
 			return ret;
 		pid_bits = ep_obj->domain->iface->dev->info.pid_bits;
@@ -2720,7 +2720,7 @@ static void _cxip_create_mcast_cb(struct cxip_curl_handle *handle)
 		TRACE_JOIN("mcastID=%d hwRoot='%s'=%x\n", mcaddr, hwrootstr,
 			   hwroot);
 		for (i = 0; i < jstate->av_set_obj->fi_addr_cnt; i++) {
-			ret = _cxip_av_lookup(
+			ret = cxip_av_lookup_addr(
 					jstate->av_set_obj->cxi_av,
 					jstate->av_set_obj->fi_addr_ary[i],
 					&caddr);
@@ -2814,7 +2814,7 @@ static void _start_curl(void *ptr)
 	if (!mac)
 		goto quit;
 	for (i = 0; i < jstate->av_set_obj->fi_addr_cnt; i++) {
-		ret = _cxip_av_lookup(
+		ret = cxip_av_lookup_addr(
 				jstate->av_set_obj->cxi_av,
 				jstate->av_set_obj->fi_addr_ary[i], &caddr);
 		if (ret < 0)

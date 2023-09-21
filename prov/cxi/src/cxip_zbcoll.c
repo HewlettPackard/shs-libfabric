@@ -491,8 +491,8 @@ static int _zbcoll_config(struct cxip_zbcoll_obj *zb, int num_addrs,
 			return -FI_ENOMEM;
 		zb->simrank = -1;
 		for (i = 0; i < num_addrs; i++) {
-			ret = _cxip_av_lookup(zb->ep_obj->av,
-					      fiaddrs[i], &zb->caddrs[i]);
+			ret = cxip_av_lookup_addr(zb->ep_obj->av,
+						  fiaddrs[i], &zb->caddrs[i]);
 			if (ret) {
 				CXIP_WARN("Lookup on fiaddr=%ld failed\n",
 					  fiaddrs[i]);

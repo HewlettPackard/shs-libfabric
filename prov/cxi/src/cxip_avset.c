@@ -262,7 +262,7 @@ static struct fi_ops cxip_av_set_fid_ops = {
 
 static inline int fi_addr_is_valid(struct cxip_av *av, fi_addr_t fi_addr)
 {
-	return (fi_addr < av->table_hdr->size && av->table[fi_addr].valid);
+	return cxip_av_lookup_addr(av, fi_addr, NULL) == FI_SUCCESS;
 }
 
 int cxip_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
@@ -275,8 +275,11 @@ int cxip_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 	size_t count, stride;
 	fi_addr_t i, j;
 	int ret;
+	size_t max_size;
+	size_t av_entry_count;
 
 	cxi_av = container_of(av, struct cxip_av, av_fid);
+	av_entry_count = cxip_av_entry_count(cxi_av);
 
 	if (!attr)
 		return -FI_EINVAL;
@@ -310,7 +313,7 @@ int cxip_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 		goto err0;
 
 	/* Cannot specify a range for FI_AV_MAP */
-	if (abeg && cxi_av->attr.type == FI_AV_MAP)
+	if (abeg && cxi_av->type == FI_AV_MAP)
 		goto err0;
 
 	/* Cannot specify a range for empty AV set */
@@ -334,7 +337,7 @@ int cxip_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 	if (start == FI_ADDR_NOTAVAIL)
 		start = 0;
 	if (end == FI_ADDR_NOTAVAIL)
-		end = cxi_av->table_hdr->size - 1;
+		end = 0;
 	if (count > end - start + 1)
 		count = end - start + 1;
 
@@ -345,7 +348,9 @@ int cxip_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 	}
 
 	/* Allocate enough space to add all addresses */
-	cxi_set->fi_addr_ary = calloc(cxi_av->table_hdr->size,
+	max_size = attr->count ?
+		attr->count : MAX(ofi_universe_size, av_entry_count);
+	cxi_set->fi_addr_ary = calloc(max_size,
 				      sizeof(*cxi_set->fi_addr_ary));
 	if (!cxi_set->fi_addr_ary) {
 		ret = -FI_ENOMEM;
@@ -354,14 +359,14 @@ int cxip_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 
 	/* Add address indices */
 	for (i=0, j=start;
-	     i < count && j <= end && j < cxi_av->table_hdr->size;
+	     i < count && j <= end && j < av_entry_count;
 	     i++, j+=stride) {
 		/* Skip over invalid addresses as if not there */
 		while (!fi_addr_is_valid(cxi_av, i)) {
-		       if (++j >= cxi_av->table_hdr->size)
+		       if (++j >= av_entry_count)
 			       break;
 		}
-		if (j >= cxi_av->table_hdr->size)
+		if (j >= av_entry_count)
 			break;
 		cxi_set->fi_addr_ary[i] = (fi_addr_t)j;
 		cxi_set->fi_addr_cnt++;

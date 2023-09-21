@@ -87,7 +87,6 @@ The CXI provider also supports the following capabilities and features:
 * *FI_MULTI_RECV*
 * *FI_SOURCE*
 * *FI_NAMED_RX_CTX*
-* *FI_SHARED_AV*
 * *FI_RM_ENABLED*
 * *FI_RMA_EVENT*
 * *FI_REMOTE_CQ_DATA*

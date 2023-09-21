@@ -1515,7 +1515,7 @@ int cxip_amo_common(enum cxip_amo_req_type req_type, struct cxip_txc *txc,
 	}
 
 	/* Look up target CXI address */
-	ret = _cxip_av_lookup(txc->ep_obj->av, msg->addr, &caddr);
+	ret = cxip_av_lookup_addr(txc->ep_obj->av, msg->addr, &caddr);
 	if (ret != FI_SUCCESS) {
 		TXC_WARN_RET(txc, ret, "Failed to look up dst FI addr\n");
 		return ret;
