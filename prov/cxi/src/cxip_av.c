@@ -418,7 +418,7 @@ static int cxip_av_lookup(struct fid_av *avfid, fi_addr_t fi_addr, void *addr,
 		   "fid=%p, addr=%p, addrlen=%p\n", avfid, addr, addrlen);
 
 	av = container_of(avfid, struct cxip_av, av_fid);
-	index = ((uint64_t)fi_addr & av->mask);
+	index = fi_addr;
 	if (index >= av->table_hdr->size) {
 		CXIP_WARN("requested address is invalid\n");
 		return -FI_EINVAL;
@@ -464,7 +464,7 @@ static int cxip_av_remove(struct fid_av *avfid, fi_addr_t *fi_addr,
 	for (i = 0; i < count; i++) {
 		uint64_t index;
 
-		index = ((uint64_t)fi_addr[i] & av->mask);
+		index = fi_addr[i];
 		if (index >= av->table_hdr->size)
 			continue;
 
@@ -690,10 +690,6 @@ int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 	av->av_fid.ops = avops;
 
 	av->addrlen = addrlen;
-
-	av->rxc_bits = av->attr.rx_ctx_bits;
-	av->mask = av->attr.rx_ctx_bits ?
-		((uint64_t)1 << (64 - av->attr.rx_ctx_bits)) - 1 : ~0;
 
 	dlist_init(&av->ep_list);
 	ofi_mutex_init(&av->list_lock);

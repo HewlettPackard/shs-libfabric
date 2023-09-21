@@ -2148,8 +2148,6 @@ struct cxip_av {
 	struct cxip_domain *domain;	// parent domain
 	ofi_atomic32_t ref;
 	struct fi_av_attr attr;		// copy of user attributes
-	uint64_t mask;			// mask with rxc_bits MSbits clear
-	int rxc_bits;			// address bits needed for SEP RXs
 	socklen_t addrlen;		// size of struct cxip_addr
 	struct cxip_eq *eq;		// event queue
 	struct cxip_av_table_hdr *table_hdr;
