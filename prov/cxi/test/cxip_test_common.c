@@ -25,7 +25,6 @@ struct fid_ep *cxit_ep;
 struct fid_ep *cxit_tx_alias_ep;
 struct cxip_addr cxit_ep_addr;
 fi_addr_t cxit_ep_fi_addr;
-struct fid_ep *cxit_sep;
 struct fi_eq_attr cxit_eq_attr = {};
 struct fid_eq *cxit_eq;
 struct fi_cq_attr cxit_tx_cq_attr = {
@@ -272,24 +271,6 @@ void cxit_destroy_ep(void)
 		cr_assert(ret == FI_SUCCESS, "fi_close endpoint = %d", ret);
 		cxit_ep = NULL;
 	}
-}
-
-void cxit_create_sep(void)
-{
-	int ret;
-
-	ret = fi_scalable_ep(cxit_domain, cxit_fi, &cxit_sep, NULL);
-	cr_assert_eq(ret, FI_SUCCESS, "fi_scalable_ep");
-	cr_assert_not_null(cxit_sep);
-}
-
-void cxit_destroy_sep(void)
-{
-	int ret;
-
-	ret = fi_close(&cxit_sep->fid);
-	cr_assert_eq(ret, FI_SUCCESS, "fi_close scalable ep");
-	cxit_sep = NULL;
 }
 
 void cxit_create_eq(void)
