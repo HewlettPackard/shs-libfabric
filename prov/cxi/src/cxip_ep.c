@@ -576,7 +576,6 @@ int cxip_free_endpoint(struct cxip_ep *ep)
 	int count;
 
 	/* Each bound MR increments ref, so MRs must be removed.
-	 * Collective objects must be removed.
 	 */
 	count = ofi_atomic_get32(&ep_obj->ref);
 	if (count) {

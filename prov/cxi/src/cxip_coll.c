@@ -2500,6 +2500,7 @@ struct cxip_join_state {
 	uint64_t join_flags;		// user-supplied libfabric join flags
 	union pack_mcast bcast_data;	// packed multicast data
 	bool rx_discard;		// set if RX events should be discarded
+	bool is_rank;			// set if using COLL simulation model
 	bool is_mcast;			// set if using Rosetta multicast tree
 	bool create_mcast;		// set to create Rosetta multicast tree
 	bool creating_mcast;		// set once CURL has been initiated
@@ -2527,6 +2528,8 @@ static void _close_pte(struct cxip_coll_pte *coll_pte)
 {
 	int ret;
 
+	if (!coll_pte)
+		return;
 	do {
 		ret = _coll_pte_disable(coll_pte);
 	} while (ret == -FI_EAGAIN);
@@ -2588,38 +2591,75 @@ fail:
 	return ret;
 }
 
-static int _close_mc(struct fid *fid);
+/* Close multicast collective object */
+static void _close_mc(struct cxip_coll_mc *mc_obj)
+{
+	int count;
+
+	if (!mc_obj)
+		return;
+	/* clear the mcast_addr -> mc_obj reference*/
+	ofi_idm_clear(&mc_obj->ep_obj->coll.mcast_map, mc_obj->mcast_addr);
+
+	/* clear the avset alteration lockout */
+	mc_obj->av_set_obj->mc_obj = NULL;
+
+	/* unmap the reduction mem descriptor for DMA */
+	if (mc_obj->reduction_md)
+		cxil_unmap(mc_obj->reduction_md);
+
+	/* close any PTE associated with mc_obj (NETSIM) */
+	if (mc_obj->coll_pte != mc_obj->ep_obj->coll.coll_pte)
+		_close_pte(mc_obj->coll_pte);
+
+	/* decrement multicast count (real), close PTE if unused */
+	count = ofi_atomic_dec32(&mc_obj->ep_obj->coll.num_mc);
+	count = ofi_atomic_get32(&mc_obj->ep_obj->coll.num_mc);
+	if (!count && mc_obj->ep_obj->coll.coll_pte) {
+		_close_pte(mc_obj->ep_obj->coll.coll_pte);
+		mc_obj->ep_obj->coll.coll_pte = NULL;
+	}
+	free(mc_obj);
+}
+
+static int _fi_close_mc(struct fid *fid)
+{
+	struct cxip_coll_mc *mc_obj;
+
+	mc_obj = container_of(fid, struct cxip_coll_mc, mc_fid.fid);
+	_close_mc(mc_obj);
+	return FI_SUCCESS;
+}
 
 /* multicast object operational functions */
 static struct fi_ops mc_ops = {
 	.size = sizeof(struct fi_ops),
-	.close = _close_mc,
+	.close = _fi_close_mc,
 };
 
-/* Close multicast collective object */
-static int _close_mc(struct fid *fid)
-{
-	struct cxip_coll_mc *mc_obj;
-
-	TRACE_JOIN("%s entry\n", __func__);
-	mc_obj = container_of(fid, struct cxip_coll_mc, mc_fid.fid);
-	ofi_idm_clear(&mc_obj->ep_obj->coll.mcast_map, mc_obj->mcast_addr);
-	if (mc_obj->coll_pte) {
-		_close_pte(mc_obj->coll_pte);
-	}
-	if (mc_obj->reduction_md)
-		cxil_unmap(mc_obj->reduction_md);
-
-	mc_obj->av_set_obj->mc_obj = NULL;
-	ofi_atomic_dec32(&mc_obj->ep_obj->coll.num_mc);
-	free(mc_obj);
-
-	return FI_SUCCESS;
-}
-
 /**
- * Utility routine to set up the collective framework. Any failures are reported
- * to all endpoints with C_RC_PTLTE_NOT_FOUND as the prov_errno.
+ * Utility routine to set up the collective framework in response to calls to
+ * fi_join_collective(). Any failures are reported to all endpoints with
+ * C_RC_PTLTE_NOT_FOUND as the prov_errno.
+ *
+ * If jstate->is_rank is true, this is a NETSIM model, which opens a PTE for
+ * each call to fi_join_collective() that is bound to the multicast object
+ * created by that call. This allows simulated multicast traffic through the
+ * NETSIM loopback port by using different pte_idx values for each PTE to
+ * disambiguate traffic intended for different simulated hardware endpoints.
+ * This model does not support multiple MC objects at an endpoint: there is
+ * exactly one MC address. Progressing the single endpoint will progress all
+ * of the simulated MC objects. Extending this model to support multiple MC
+ * objects is not a priority at this time.
+ *
+ * If jstate->is_rank is false, this is a multinode model. The first call to
+ * fi_join_collective() creates a single PTE which is bound to the EP, and
+ * creates the first multicast object for that endpoint. Every subsequent
+ * join will create an additional multicast object that shares the PTE for
+ * that endpoint. Multiple NICs on the node are represented by separate EP
+ * objects, which are functionally distinct: all endpoints must be progressed
+ * independently, and if any endpoint is not progressed, it will stall the
+ * collective.
  *
  * Caller must hold ep_obj->lock.
  */
@@ -2636,19 +2676,34 @@ static int _initialize_mc(void *ptr)
 
 	TRACE_JOIN("%s entry\n", __func__);
 
-	ret = _acquire_pte(ep_obj, jstate->pid_idx, jstate->is_mcast,
-			   &coll_pte);
-	if (ret)
-		goto fail;
-	mc_obj = calloc(1, sizeof(*av_set_obj->mc_obj));
-	if (!mc_obj) {
-		ret = -FI_ENOMEM;
-		goto fail;
-	}
+	mc_obj = calloc(1, sizeof(*mc_obj));
+	if (!mc_obj)
+		return -FI_ENOMEM;
 
-	/* required for COMM_KEY_RANK model */
-	if (av_set_obj->comm_key.keytype == COMM_KEY_RANK)
-		coll_pte->mc_obj = mc_obj;
+	/* COMM_KEY_RANK model needs a distinct PTE for every MC object.
+	 * All other models share a single PTE for all MCs using an EP.
+	 */
+	coll_pte = ep_obj->coll.coll_pte;
+	if (!coll_pte) {
+		TRACE_DEBUG("acqiring PTE\n");
+		ret = _acquire_pte(ep_obj, jstate->pid_idx, jstate->is_mcast,
+				   &coll_pte);
+		if (ret) {
+			TRACE_DEBUG("acquiring PTE failed %d\n", ret);
+			free(mc_obj);
+			return ret;
+		}
+		if (!jstate->is_rank) {
+			TRACE_DEBUG("assigned PTE to ep_obj\n");
+			ep_obj->coll.coll_pte = coll_pte;
+		}
+		/* else leave ep_obj->coll.coll_pte == NULL */
+	}
+	/* copy coll_pte to mc_obj */
+	mc_obj->coll_pte = coll_pte;
+
+	/* if COMM_KEY_RANK model, PTE must know the mc_obj */
+	coll_pte->mc_obj = (jstate->is_rank) ? mc_obj : NULL;
 
 	/* link ep_obj to mc_obj (1 to many) */
 	mc_obj->ep_obj = ep_obj;
@@ -2658,14 +2713,11 @@ static int _initialize_mc(void *ptr)
 	av_set_obj->mc_obj = mc_obj;
 	mc_obj->av_set_obj = av_set_obj;
 
-	/* initialize mc_obj */
+	/* initialize remainder of mc_obj */
 	mc_obj->mc_fid.fid.fclass = FI_CLASS_MC;
 	mc_obj->mc_fid.fid.context = mc_obj;
 	mc_obj->mc_fid.fid.ops = &mc_ops;
 	mc_obj->mc_fid.fi_addr = (fi_addr_t)(uintptr_t)mc_obj;
-	mc_obj->ep_obj = ep_obj;
-	mc_obj->av_set_obj = av_set_obj;
-	mc_obj->coll_pte = coll_pte;
 	mc_obj->hwroot_idx = jstate->bcast_data.hwroot_idx;
 	mc_obj->mcast_addr = jstate->bcast_data.mcast_addr;
 	mc_obj->mynode_idx = jstate->mynode_idx;
@@ -2717,10 +2769,8 @@ static int _initialize_mc(void *ptr)
 
 	/* Set this now to instantiate cmdq CP */
 	cmdq = ep_obj->coll.tx_cmdq;
-
 	ret = cxip_txq_cp_set(cmdq, ep_obj->auth_key.vni,
 			      mc_obj->tc, mc_obj->tc_type);
-
 	if (ret)
 		goto fail;
 
@@ -2745,6 +2795,7 @@ static int _initialize_mc(void *ptr)
 	/* Last field to set */
 	mc_obj->is_joined = true;
 
+	/* Return information to the caller */
 	jstate->mc_obj = mc_obj;
 	*jstate->mc = &mc_obj->mc_fid;
 	TRACE_JOIN("%s: initialized mc[%d] to %p\n",
@@ -2753,8 +2804,7 @@ static int _initialize_mc(void *ptr)
 	return FI_SUCCESS;
 
 fail:
-	if (mc_obj)
-		_close_mc(&mc_obj->mc_fid.fid);
+	_close_mc(mc_obj);
 	return ret;
 }
 
@@ -3405,6 +3455,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		jstate->bcast_data.hwroot_idx = 0;
 		jstate->bcast_data.mcast_addr = 0;
 		jstate->bcast_data.valid = false;
+		jstate->is_rank = false;
 		jstate->is_mcast = true;
 		jstate->create_mcast = (jstate->mynode_idx == 0);
 		jstate->rx_discard = true;
@@ -3428,6 +3479,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		jstate->bcast_data.mcast_addr =
 			av_set_obj->comm_key.mcast.mcast_addr;
 		jstate->bcast_data.valid = true;
+		jstate->is_rank = false;
 		jstate->is_mcast = true;
 		jstate->create_mcast = false;
 		jstate->rx_discard = true;
@@ -3450,6 +3502,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 			av_set_obj->comm_key.ucast.hwroot_idx;
 		jstate->bcast_data.mcast_addr = ep_obj->src_addr.nic;
 		jstate->bcast_data.valid = true;
+		jstate->is_rank = false;
 		jstate->is_mcast = false;
 		jstate->create_mcast = false;
 		jstate->rx_discard = true;
@@ -3465,6 +3518,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		jstate->bcast_data.hwroot_idx = 0;
 		jstate->bcast_data.mcast_addr = ep_obj->src_addr.nic;
 		jstate->bcast_data.valid = true;
+		jstate->is_rank = true;
 		jstate->is_mcast = false;
 		jstate->create_mcast = false;
 		jstate->rx_discard = av_set_obj->comm_key.rank.rx_discard;
@@ -3608,12 +3662,12 @@ struct fi_ops_collective cxip_collective_no_ops = {
 /* Close collectives - call during EP close, ep_obj->lock is held */
 void cxip_coll_close(struct cxip_ep_obj *ep_obj)
 {
-	struct cxip_coll_mc *mc;
+	struct cxip_coll_mc *mc_obj;
 
 	while (!dlist_empty(&ep_obj->coll.mc_list)) {
 		dlist_pop_front(&ep_obj->coll.mc_list,
-				struct cxip_coll_mc, mc, entry);
-		_close_mc(&mc->mc_fid.fid);
+				struct cxip_coll_mc, mc_obj, entry);
+		_close_mc(mc_obj);
 	}
 }
 
