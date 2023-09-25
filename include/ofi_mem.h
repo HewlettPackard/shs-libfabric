@@ -383,6 +383,7 @@ struct ofi_bufpool_hdr {
 	} entry;
 	struct ofi_bufpool_region	*region;
 	size_t 				index;
+	bool				allocated;
 
 	OFI_DBG_VAR(bool, allocated)
 	OFI_DBG_VAR(struct ofi_bufpool_ftr *, ftr)
@@ -559,6 +560,7 @@ static inline void *ofi_ibuf_alloc(struct ofi_bufpool *pool)
 
 	if (dlist_empty(&buf_region->free_list))
 		dlist_remove_init(&buf_region->entry);
+
 	return ofi_buf_data(buf_hdr);
 }
 

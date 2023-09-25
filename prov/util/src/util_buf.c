@@ -181,6 +181,7 @@ int ofi_bufpool_grow(struct ofi_bufpool *pool)
 	for (i = 0; i < pool->attr.chunk_cnt; i++) {
 		buf = (buf_region->mem_region + i * pool->entry_size);
 		buf_hdr = ofi_buf_hdr(buf);
+		buf_hdr->allocated = false;
 		buf_hdr->region = buf_region;
 		buf_hdr->index = pool->entry_cnt + i;
 		OFI_DBG_SET(buf_hdr->allocated, false);
