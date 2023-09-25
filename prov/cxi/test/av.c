@@ -469,3 +469,60 @@ Test(av, insertsvc)
 	test_addrs_fini();
 	cxit_destroy_av();
 }
+
+static double diff_timespec(const struct timespec *time1,
+			    const struct timespec *time0) {
+	return (time1->tv_sec - time0->tv_sec) +
+		(time1->tv_nsec - time0->tv_nsec) / 1000000000.0;
+}
+
+/* Verify that reserve lookup is O(1). */
+Test(av, reverse_lookup)
+{
+	int i;
+	int ret;
+	struct cxip_av *av;
+	struct cxip_addr addr = {};
+	struct timespec start;
+	struct timespec end;
+	double timestamp1;
+	double timestamp2;
+	fi_addr_t fi_addr;
+
+	cxit_create_av();
+
+	av = container_of(cxit_av, struct cxip_av, av_fid.fid);
+
+	/* Insert lots of addresses into the AV. */
+	for (i = 0; i < 10000; i++) {
+		addr.nic = i;
+
+		ret = fi_av_insert(cxit_av, &addr, 1, NULL, 0, NULL);
+		cr_assert_eq(ret, 1, "fi_av_insert failed: %d", ret);
+	}
+
+	/* Verify that reserve lookup is not linear. Verify this by the
+	 * addresses being within 5% of each other.
+	 */
+	addr.nic = 0;
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	fi_addr = cxip_av_lookup_fi_addr(av, &addr);
+	clock_gettime(CLOCK_MONOTONIC, &end);
+
+	cr_assert_neq(fi_addr, FI_ADDR_NOTAVAIL,
+		      "cxip_av_lookup_fi_addr failed");
+	timestamp1 = diff_timespec(&end, &start);
+
+	addr.nic = i - 1;
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	fi_addr = cxip_av_lookup_fi_addr(av, &addr);
+	clock_gettime(CLOCK_MONOTONIC, &end);
+
+	cr_assert_neq(fi_addr, FI_ADDR_NOTAVAIL,
+		      "cxip_av_lookup_fi_addr failed");
+	timestamp2 = diff_timespec(&end, &start);
+
+	cr_assert((timestamp1 * 1.05) > timestamp2, "O(1) verification failed");
+
+	cxit_destroy_av();
+}
