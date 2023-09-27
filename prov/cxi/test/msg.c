@@ -1971,3 +1971,40 @@ Test(msg, zero_byte_send_recv_msg)
 	} while (ret == -FI_EAGAIN);
 	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
 }
+
+/* Verify that FI_AV_USER_ID is returned from fi_cq_readfrom(). */
+Test(msg, av_user_id)
+{
+	int ret;
+	struct fi_cq_tagged_entry tx_cqe,
+				  rx_cqe;
+	fi_addr_t from;
+	fi_addr_t user_id = 0xdeadbeef;
+
+	/* Need to remove loopback address from AV and reinsert with
+	 * FI_AV_USER_ID.
+	 */
+	ret = fi_av_remove(cxit_av, &cxit_ep_fi_addr, 1, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_av_remove failed: %d", ret);
+
+	cxit_ep_fi_addr = user_id;
+	ret = fi_av_insert(cxit_av, (void *)&cxit_ep_addr, 1, &cxit_ep_fi_addr,
+			   FI_AV_USER_ID, NULL);
+	cr_assert_eq(ret, 1, "fi_av_insert failed: %d", ret);
+
+	ret = fi_recv(cxit_ep, NULL, 0, NULL, cxit_ep_fi_addr, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed %d", ret);
+
+	ret = fi_send(cxit_ep, NULL, 0, NULL, cxit_ep_fi_addr, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_send failed %d", ret);
+
+	do {
+		ret = fi_cq_readfrom(cxit_rx_cq, &rx_cqe, 1, &from);
+	} while (ret == -FI_EAGAIN);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+	cr_assert_eq(from, user_id, "Invalid user id: expected=%#lx got=%#lx",
+		     user_id, from);
+
+	ret = cxit_await_completion(cxit_tx_cq, &tx_cqe);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+}
