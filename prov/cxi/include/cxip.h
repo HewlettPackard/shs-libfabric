@@ -2157,6 +2157,7 @@ struct cxip_av_entry {
 	ofi_atomic32_t use_cnt;
 	UT_hash_handle hh;
 	struct cxip_addr addr;
+	fi_addr_t fi_addr;
 };
 
 struct cxip_av {

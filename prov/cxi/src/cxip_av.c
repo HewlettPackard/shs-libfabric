@@ -82,7 +82,7 @@ static inline void cxip_av_unlock(struct cxip_av *av)
 }
 
 static int cxip_av_insert_addr(struct cxip_av *av, struct cxip_addr *addr,
-			       fi_addr_t *fi_addr)
+			       fi_addr_t *fi_addr, uint64_t flags)
 {
 	struct cxip_av_entry *entry;
 
@@ -111,6 +111,11 @@ static int cxip_av_insert_addr(struct cxip_av *av, struct cxip_addr *addr,
 	ofi_atomic_initialize32(&entry->use_cnt, 1);
 	HASH_ADD(hh, av->hash, addr, sizeof(*addr), entry);
 
+	if (flags & FI_AV_USER_ID)
+		entry->fi_addr = *fi_addr;
+	else
+		entry->fi_addr = ofi_buf_index(entry);
+
 	if (fi_addr)
 		*fi_addr = ofi_buf_index(entry);
 
@@ -119,13 +124,14 @@ static int cxip_av_insert_addr(struct cxip_av *av, struct cxip_addr *addr,
 	return FI_SUCCESS;
 }
 
-#define AV_INSERT_VALID_FLAGS FI_MORE
+#define AV_INSERT_VALID_FLAGS (FI_MORE | FI_AV_USER_ID)
 
 static int cxip_av_insert_validate_args(struct fid_av *fid, const void *addr_in,
 					size_t count, fi_addr_t *fi_addr,
 					uint64_t flags, void *context)
 {
 	uint64_t unsupported_flags = flags & ~AV_INSERT_VALID_FLAGS;
+	struct cxip_av *av = container_of(fid, struct cxip_av, av_fid.fid);
 
 	if (!addr_in && count) {
 		CXIP_WARN("NULL addr buffer\n");
@@ -135,6 +141,20 @@ static int cxip_av_insert_validate_args(struct fid_av *fid, const void *addr_in,
 	if (unsupported_flags) {
 		CXIP_WARN("Unsupported AV insert flags: %#lx\n",
 			  unsupported_flags);
+		return -FI_EINVAL;
+	}
+
+	/* FI_SYMMETRIC is an optimization using logical matching. This avoids
+	 * doing a reverse lookup for support FI_SOURCE. Since no lookup
+	 * occurs, FI_AV_USER_ID cannot be support.
+	 */
+	if (av->symmetric && (flags & FI_AV_USER_ID)) {
+		CXIP_WARN("FI_SYMMETRIC not supported with FI_AV_USER_ID\n");
+		return -FI_EINVAL;
+	}
+
+	if (!fi_addr && (flags & FI_AV_USER_ID)) {
+		CXIP_WARN("NULL fi_addr with FI_AV_USER_ID\n");
 		return -FI_EINVAL;
 	}
 
@@ -158,7 +178,7 @@ static int cxip_av_insert(struct fid_av *fid, const void *addr_in, size_t count,
 
 	for (i = 0; i < count; i++) {
 		ret = cxip_av_insert_addr(av, (struct cxip_addr *)addr_in + i,
-					  fi_addr ? &fi_addr[i] : NULL);
+					  fi_addr ? &fi_addr[i] : NULL, flags);
 		if (ret == FI_SUCCESS)
 			success_cnt++;
 	}
@@ -235,7 +255,7 @@ fi_addr_t cxip_av_lookup_fi_addr(struct cxip_av *av,
 	struct cxip_av_entry *entry;
 
 	HASH_FIND(hh, av->hash, addr, sizeof(*addr), entry);
-	return entry ? ofi_buf_index(entry) : FI_ADDR_NOTAVAIL;
+	return entry ? entry->fi_addr : FI_ADDR_NOTAVAIL;
 }
 
 int cxip_av_bind_ep(struct cxip_av *av, struct cxip_ep *ep)
