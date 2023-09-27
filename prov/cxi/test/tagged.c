@@ -1090,12 +1090,10 @@ ssize_t try_peek(fi_addr_t addr, uint64_t tag, uint64_t ignore,
 	ssize_t ret;
 
 	do {
+		fi_cq_read(cxit_tx_cq, NULL, 0);
+		fi_cq_read(cxit_rx_cq, NULL, 0);
 		ret = fi_trecvmsg(cxit_ep, &tmsg,
 				  claim ? FI_CLAIM | FI_PEEK : FI_PEEK);
-		if (ret == -FI_EAGAIN) {
-			fi_cq_read(cxit_tx_cq, NULL, 0);
-			fi_cq_read(cxit_rx_cq, NULL, 0);
-		}
 	} while (ret == -FI_EAGAIN);
 	if (ret != FI_SUCCESS)
 		return ret;
@@ -1125,6 +1123,18 @@ ssize_t try_peek(fi_addr_t addr, uint64_t tag, uint64_t ignore,
 			break;
 		}
 	} while (ret == -FI_EAGAIN);
+
+	return ret;
+}
+
+static int wait_peek(fi_addr_t addr, uint64_t tag, uint64_t ignore,
+		     ssize_t len, void *context, bool claim)
+{
+	int ret;
+
+	do {
+		ret = try_peek(addr, tag, ignore, len, context, claim);
+	} while (ret == FI_ENOMSG);
 
 	return ret;
 }
@@ -1476,6 +1486,118 @@ Test(tagged, ux_claim)
 Test(tagged, ux_claim_rdzv)
 {
 	test_ux_claim(4, 65536);
+}
+
+#define PEEK_ORDER_SEND_COUNT 5
+#define PEEK_ORDER_TAG 0x1234ULL
+
+static void verify_peek_claim_order_same_tag(size_t xfer_base_size, bool claim)
+{
+	void *buf;
+	struct fi_context context;
+	int i;
+	int ret;
+	struct fi_cq_tagged_entry cqe;
+	fi_addr_t from;
+	struct fi_msg_tagged tmsg = {};
+	struct iovec iovec;
+	size_t buf_size = xfer_base_size + (PEEK_ORDER_SEND_COUNT - 1);
+	size_t xfer_size;
+
+	buf = malloc(buf_size);
+	cr_assert_not_null(buf);
+
+	/* Issue sends unexpected to target. Same tagged is used with different
+	 * transfer size. Transfer size identifies operation order.
+	 */
+	for (i = 0; i < PEEK_ORDER_SEND_COUNT; i++) {
+		ret = fi_tsend(cxit_ep, buf, xfer_base_size + i, NULL,
+			       cxit_ep_fi_addr, PEEK_ORDER_TAG, NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_tsend failed: %d", ret);
+	}
+
+	/* Receives should be processed in order. Order is incrementing receive
+	 * size.
+	 */
+	iovec.iov_base = buf;
+	iovec.iov_len = buf_size;
+
+	tmsg.msg_iov = &iovec;
+	tmsg.iov_count = 1;
+	tmsg.addr = cxit_ep_fi_addr;
+	tmsg.tag = PEEK_ORDER_TAG;
+	tmsg.ignore = 0;
+	tmsg.context = &context;
+
+	for (i = 0; i < PEEK_ORDER_SEND_COUNT; i++) {
+		xfer_size = xfer_base_size + i;
+
+		ret = wait_peek(cxit_ep_fi_addr, PEEK_ORDER_TAG, 0,
+				xfer_size, tmsg.context, claim);
+		cr_assert_eq(ret, FI_SUCCESS, "try_peek failed: %d", ret);
+
+		/* With claim, subsequent FI_PEEK without FI_CLAIM should always
+		 * return next message.
+		 */
+		if (claim && i < (PEEK_ORDER_SEND_COUNT - 1)) {
+			ret = wait_peek(cxit_ep_fi_addr, PEEK_ORDER_TAG, 0,
+					xfer_size + 1, NULL, false);
+			cr_assert_eq(ret, FI_SUCCESS, "try_peek failed: %d",
+				     ret);
+		}
+
+		/* Recieve unexpected message. If message is FI_CLAIM,
+		 * FI_CONTEXT buffer contains data to progress receive.
+		 */
+		ret = fi_trecvmsg(cxit_ep, &tmsg, claim ? FI_CLAIM : 0);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_trecv failed: %d", ret);
+
+		do {
+			/* Process TX CQ (if needed). */
+			fi_cq_read(cxit_tx_cq, NULL, 0);
+			ret = fi_cq_readfrom(cxit_rx_cq, &cqe, 1, &from);
+		} while (ret == -FI_EAGAIN);
+
+		cr_assert_eq(ret, 1, "fi_cq_read failed: %d", ret);
+		cr_assert_eq(from, cxit_ep_fi_addr,
+			     "Invalid user id: expected=%#lx got=%#lx",
+			     cxit_ep_fi_addr, from);
+		validate_rx_event_mask(&cqe, tmsg.context, xfer_size,
+				       FI_RECV | FI_TAGGED,
+				       NULL, 0, PEEK_ORDER_TAG, 0);
+	}
+
+	free(buf);
+}
+
+Test(tagged, verify_peek_order_same_tag_idc)
+{
+	verify_peek_claim_order_same_tag(0, false);
+}
+
+Test(tagged, verify_peek_order_same_tag_eager)
+{
+	verify_peek_claim_order_same_tag(257, false);
+}
+
+Test(tagged, verify_peek_order_same_tag_rendezvous)
+{
+	verify_peek_claim_order_same_tag(1048576, false);
+}
+
+Test(tagged, verify_claim_order_same_tag_idc)
+{
+	verify_peek_claim_order_same_tag(0, true);
+}
+
+Test(tagged, verify_claim_order_same_tag_eager)
+{
+	verify_peek_claim_order_same_tag(257, true);
+}
+
+Test(tagged, verify_claim_order_same_tag_rendezvous)
+{
+	verify_peek_claim_order_same_tag(1048576, true);
 }
 
 /* Test MQD get of unexpected message list */
