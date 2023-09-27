@@ -39,11 +39,6 @@ The CXI provider supports a subset of OFI features.
 The provider supports the *FI_EP_RDM* endpoint type, including scalable
 endpoints.
 
-## Address vectors
-
-The provider implements both the *FI_AV_MAP* and *FI_AV_TABLE* address vector
-types. *FI_EVENT* is unsupported.
-
 ## Memory registration modes
 
 The provider implements scalable memory registration. The provider requires
@@ -229,17 +224,23 @@ CXI integrated launcher and CXI authorization key aware libfabric user:
 
 ## Address Vectors
 
-Currently, the CXI provider supports both *FI_AV_TABLE* and *FI_AV_MAP* with the
-same internal implementation. Optimizations are planned for *FI_AV_MAP*. In the
-future, when using *FI_AV_MAP*, the CXI address will be encoded in the FI address.
-This will avoid per-operation node address translation and reduce AV memory
-footprint.
+The CXI provider supports both *FI_AV_TABLE* and *FI_AV_MAP* with the same
+internal implementation.
 
-The CXI provider uses the *FI_SYMMETRIC* AV flag for optimization. When a
-client guarantees that all processes have symmetric AV layout, the provider
-uses FI addresses for source address matching (rather than physical addresses).
-This reduces the overhead for source address matching during two-sided Receive
-operations.
+The CXI provider uses the *FI_SYMMETRIC* AV flag for optimization. When used
+with *FI_AV_TABLE*, the CXI provider can use the fi_addr_t index as an endpoint
+identifier instead of a network address. The benefit of this is when running
+with FI_SOURCE, a reverse lookup is not needed to generate the source fi_addr_t
+for target CQ events. Note: FI_SOURCE_ERR should not be used for this
+configuration.
+
+If the AV is not configured with *FI_SYMMETRIC*, *FI_AV_USER_ID* is supported
+as a flag which can be passed into AV insert.
+
+Since scalable EPs are not support, fi_av_attr::rx_ctx_bits must be zero.
+
+The following AV capabilities and flags are not supported: FI_SHARED_AV,
+FI_SYNC_ERR, FI_EVENT, and FI_READ.
 
 ## Operation flags
 

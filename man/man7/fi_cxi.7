@@ -35,11 +35,6 @@ The CXI provider supports a subset of OFI features.
 .PP
 The provider supports the \f[I]FI_EP_RDM\f[R] endpoint type, including
 scalable endpoints.
-.SS Address vectors
-.PP
-The provider implements both the \f[I]FI_AV_MAP\f[R] and
-\f[I]FI_AV_TABLE\f[R] address vector types.
-\f[I]FI_EVENT\f[R] is unsupported.
 .SS Memory registration modes
 .PP
 The provider implements scalable memory registration.
@@ -266,21 +261,26 @@ Application processes select from the list of available service IDs and
 VNIs to form an authorization key to use for Endpoint allocation.
 .SS Address Vectors
 .PP
-Currently, the CXI provider supports both \f[I]FI_AV_TABLE\f[R] and
+The CXI provider supports both \f[I]FI_AV_TABLE\f[R] and
 \f[I]FI_AV_MAP\f[R] with the same internal implementation.
-Optimizations are planned for \f[I]FI_AV_MAP\f[R].
-In the future, when using \f[I]FI_AV_MAP\f[R], the CXI address will be
-encoded in the FI address.
-This will avoid per-operation node address translation and reduce AV
-memory footprint.
 .PP
 The CXI provider uses the \f[I]FI_SYMMETRIC\f[R] AV flag for
 optimization.
-When a client guarantees that all processes have symmetric AV layout,
-the provider uses FI addresses for source address matching (rather than
-physical addresses).
-This reduces the overhead for source address matching during two-sided
-Receive operations.
+When used with \f[I]FI_AV_TABLE\f[R], the CXI provider can use the
+fi_addr_t index as an endpoint identifier instead of a network address.
+The benefit of this is when running with FI_SOURCE, a reverse lookup is
+not needed to generate the source fi_addr_t for target CQ events.
+Note: FI_SOURCE_ERR should not be used for this configuration.
+.PP
+If the AV is not configured with \f[I]FI_SYMMETRIC\f[R],
+\f[I]FI_AV_USER_ID\f[R] is supported as a flag which can be passed into
+AV insert.
+.PP
+Since scalable EPs are not support, fi_av_attr::rx_ctx_bits must be
+zero.
+.PP
+The following AV capabilities and flags are not supported: FI_SHARED_AV,
+FI_SYNC_ERR, FI_EVENT, and FI_READ.
 .SS Operation flags
 .PP
 The CXI provider supports the following Operation flags:
