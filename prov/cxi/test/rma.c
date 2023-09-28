@@ -989,7 +989,7 @@ Test(rma, writemsg_failures)
 
 	/* Invalid length */
 	iov[0].iov_base = send_buf;
-	iov[0].iov_len = 1024*1024*1024+1;
+	iov[0].iov_len = cxit_fi->ep_attr->max_msg_size + 1;
 
 	rma[0].addr = 0;
 	rma[0].len = send_len;

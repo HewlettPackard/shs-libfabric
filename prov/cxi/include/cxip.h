@@ -72,7 +72,7 @@
 #define CXIP_EP_MAX_CTX_BITS		0
 #define CXIP_EP_MAX_TX_CNT		(1 << CXIP_EP_MAX_CTX_BITS)
 #define CXIP_EP_MAX_RX_CNT		(1 << CXIP_EP_MAX_CTX_BITS)
-#define CXIP_EP_MAX_MSG_SZ		(1 << 30)
+#define CXIP_EP_MAX_MSG_SZ		((1ULL << 32) - 1)
 #define CXIP_EP_MIN_MULTI_RECV		64
 #define CXIP_EP_MAX_MULTI_RECV		((1 << 24) - 1)
 
