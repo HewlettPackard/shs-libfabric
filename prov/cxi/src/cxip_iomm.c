@@ -10,6 +10,9 @@
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_MR, __VA_ARGS__)
 #define CXIP_INFO(...) _CXIP_INFO(FI_LOG_MR, __VA_ARGS__)
 
+#define MAP_FAIL_MSG "cxil_map lni: %d base: 0x%p len: %ld " \
+		     "map_flags: 0x%0X failure: %d, %s\n"
+
 /**
  * cxip_do_map() - IO map a buffer.
  */
@@ -92,7 +95,9 @@ static int cxip_do_map(struct ofi_mr_cache *cache, struct ofi_mr_entry *entry)
 	ret = cxil_map(dom->lni->lni, entry->info.iov.iov_base,
 		       entry->info.iov.iov_len, map_flags, &hints, &md->md);
 	if (ret) {
-		CXIP_WARN("cxil_map failed: %d:%s\n", ret, fi_strerror(-ret));
+		CXIP_WARN(MAP_FAIL_MSG, dom->lni->lni->id,
+			  entry->info.iov.iov_base, entry->info.iov.iov_len,
+			  map_flags,  ret, fi_strerror(-ret));
 		goto err;
 	}
 
