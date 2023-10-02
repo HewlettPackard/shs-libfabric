@@ -42,6 +42,7 @@
 #include <ofi_osd.h>
 #include <ofi_util.h>
 #include <ofi_mem.h>
+#include <ofi_hmem.h>
 #include <unistd.h>
 
 #include "libcxi/libcxi.h"
