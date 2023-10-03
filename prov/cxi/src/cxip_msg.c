@@ -371,7 +371,7 @@ static void recv_req_report(struct cxip_req *req)
 			RXC_DBG(rxc, "Request canceled: %p (err: %d)\n", req,
 				err);
 		} else if (truncated) {
-			err = FI_EMSGSIZE;
+			err = FI_ETRUNC;
 			RXC_DBG(rxc, "Request truncated: %p (err: %d)\n", req,
 				err);
 		} else if (req->recv.flags & FI_PEEK) {

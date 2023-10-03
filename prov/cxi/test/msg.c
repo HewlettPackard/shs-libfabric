@@ -1307,7 +1307,7 @@ void do_multi_recv(uint8_t *send_buf, size_t send_len,
 			cr_assert(err_cqe.olen == olen,
 				  "Invalid Error RX CQE olen, got: %ld exp: %ld",
 				  err_cqe.olen, olen);
-			cr_assert(err_cqe.err == FI_EMSGSIZE,
+			cr_assert(err_cqe.err == FI_ETRUNC,
 				  "Invalid Error RX CQE code\n");
 			cr_assert(err_cqe.prov_errno == C_RC_OK,
 				  "Invalid Error RX CQE errno");
