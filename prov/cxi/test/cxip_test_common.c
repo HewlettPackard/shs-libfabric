@@ -50,6 +50,7 @@ struct fid_av_set *cxit_av_set;
 struct fid_mc *cxit_mc;
 bool cxit_prov_key;
 int s_page_size;
+bool enable_cxi_hmem_ops = 1;
 
 /* Get _SC_PAGESIZE */
 static void cxit_set_page_size(void)
@@ -250,9 +251,11 @@ void cxit_create_domain(void)
 		  dom_ops->enable_mr_match_events != NULL,
 		  "V3 functions returned");
 
-	ret = fi_set_ops(&cxit_domain->fid, FI_SET_OPS_HMEM_OVERRIDE, 0,
-			 &cxi_hmem_ops, NULL);
-	cr_assert(ret == FI_SUCCESS, "fi_set_ops");
+	if (enable_cxi_hmem_ops) {
+		ret = fi_set_ops(&cxit_domain->fid, FI_SET_OPS_HMEM_OVERRIDE, 0,
+				 &cxi_hmem_ops, NULL);
+		cr_assert(ret == FI_SUCCESS, "fi_set_ops");
+	}
 }
 
 void cxit_destroy_domain(void)
@@ -775,9 +778,11 @@ void cxit_create_domain_hybrid_mr_desc(void)
 		  dom_ops->enable_hybrid_mr_desc != NULL,
 		  "V3 functions returned");
 
-	ret = fi_set_ops(&cxit_domain->fid, FI_SET_OPS_HMEM_OVERRIDE, 0,
-			 &cxi_hmem_ops, NULL);
-	cr_assert(ret == FI_SUCCESS, "fi_set_ops");
+	if (enable_cxi_hmem_ops) {
+		ret = fi_set_ops(&cxit_domain->fid, FI_SET_OPS_HMEM_OVERRIDE, 0,
+				 &cxi_hmem_ops, NULL);
+		cr_assert(ret == FI_SUCCESS, "fi_set_ops");
+	}
 
 	ret = dom_ops->enable_hybrid_mr_desc(&cxit_domain->fid, true);
 	cr_assert(ret == FI_SUCCESS, "enable_hybrid_mr_desc failed");

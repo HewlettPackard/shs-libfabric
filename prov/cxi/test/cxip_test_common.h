@@ -39,6 +39,7 @@ extern struct fid_mc *cxit_mc;
 extern FILE *cxit_mc_fifo;
 extern bool cxit_prov_key;
 extern int s_page_size;
+extern bool enable_cxi_hmem_ops;
 
 extern bool cxip_trace_enable(bool enable);
 extern void cxip_trace_flush(void);

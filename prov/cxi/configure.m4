@@ -127,10 +127,14 @@ AC_DEFUN([FI_CXI_CONFIGURE],[
 			AM_CONDITIONAL([HAVE_CRITERION], [test "x$have_criterion" = "xtrue"])
 			AM_CONDITIONAL([HAVE_PMI], [test "x$have_pmi" = "xtrue"])
 			AM_CONDITIONAL([HAVE_ZE], [test "$have_ze" = "1" && test "$with_ze" != ""])
+			AM_CONDITIONAL([HAVE_CUDA], [test "$have_cuda" = "1" && test "$with_cuda" != ""])
 
 			AS_IF([test "$have_ze" = "1" && test "$with_ze" != "" && test x"$with_ze" != x"yes"],
 					[cxitest_CPPFLAGS="$cxitest_CPPFLAGS -I$with_ze/include"
 					cxitest_LDFLAGS="$cxitest_LDFLAGS -L$with_ze/lib64"])
+			AS_IF([test "$have_cuda" = "1" && test "$with_cuda" != "" && test x"$with_cuda" != x"yes"],
+					[cxitest_CPPFLAGS="$cxitest_CPPFLAGS -I$with_cuda/include"
+					cxitest_LDFLAGS="$cxitest_LDFLAGS -L$with_cuda/lib64"])
 
 			AC_SUBST(cxitest_CPPFLAGS)
 			AC_SUBST(cxitest_LDFLAGS)
