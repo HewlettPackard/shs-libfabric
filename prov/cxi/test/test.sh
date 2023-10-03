@@ -92,7 +92,7 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-test="FI_CXI_ENABLE_TRIG_OP_LIMIT=1 FI_CXI_DEVICE_NAME=cxi1 ../../../util/fi_info"
+test="FI_CXI_ENABLE_TRIG_OP_LIMIT=1 FI_CXI_DEVICE_NAME=cxi1 ../../../util/fi_info -p cxi"
 echo "running: $test"
 eval $test
 if [[ $? -eq 0 ]]; then
