@@ -682,6 +682,7 @@ Test(mr_event, bounds_err_counts)
 	struct fi_ioc ioc;
 	struct fi_ioc result_ioc;
 	struct fi_rma_ioc rma_ioc;
+	struct cxip_ep *cxi_ep;
 
 	src_buf = malloc(src_len);
 	cr_assert_not_null(src_buf, "src_buf alloc failed");
@@ -710,6 +711,11 @@ Test(mr_event, bounds_err_counts)
 	if (cxip_generic_is_mr_key_opt(key_val))
 		goto done;
 
+	/* Netsim does not generate EVENT_MATCH for bounds,
+	 * while hardware does. TODO: Fix this in netsim.
+	 */
+	cxi_ep = container_of(cxit_ep, struct cxip_ep, ep);
+
 	matches = ofi_atomic_get32(&cxip_mr->match_events);
 	accesses = ofi_atomic_get32(&cxip_mr->access_events);
 
@@ -726,11 +732,15 @@ Test(mr_event, bounds_err_counts)
 	cr_assert_eq(ret, 1, "Unexpected fi_cq_readerr return %d", ret);
 	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
 
-	/* Validate match and access counts did not increment */
+	/* Validate match and access counts increment */
+	if (!is_netsim(cxi_ep->ep_obj)) {
+		matches++;
+		accesses++;
+	}
 	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches,
-		  "Match count updated for RMA\n");
+		  "Match count mismatch for RMA\n");
 	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses,
-		  "Access count updated for RMA\n");
+		  "Access count mismatch for RMA\n");
 
 	/* Remote offset of 8 is greater than remote MR bounds */
 	ret = fi_atomic(cxit_ep, &operand1, 1, NULL, cxit_ep_fi_addr, 8,
@@ -745,11 +755,15 @@ Test(mr_event, bounds_err_counts)
 	cr_assert_eq(ret, 1, "Unexpected fi_cq_readerr return %d", ret);
 	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
 
-	/* Validate match and access counts did not increment */
+	/* Validate match and access counts increment */
+	if (!is_netsim(cxi_ep->ep_obj)) {
+		matches++;
+		accesses++;
+	}
 	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches,
-		  "Match count updated for atomic\n");
+		  "Match count mismatch for atomic\n");
 	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses,
-		  "Access count updated for atomic\n");
+		  "Access count mismatch for atomic\n");
 
 	/* Remote offset of 8 is greater than remote MR bounds */
 	ret = fi_fetch_atomic(cxit_ep, &operand1, 1, NULL, &result1, NULL,
@@ -766,11 +780,15 @@ Test(mr_event, bounds_err_counts)
 	cr_assert_eq(ret, 1, "Unexpected fi_cq_readerr return %d", ret);
 	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
 
-	/* Validate match and access counts did not increment */
+	/* Validate match and access counts increment */
+	if (!is_netsim(cxi_ep->ep_obj)) {
+		matches++;
+		accesses++;
+	}
 	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches,
-		  "Match count updated for atomic fetch\n");
+		  "Match count mismatch atomic fetch\n");
 	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses,
-		  "Access count updated for atomic fetch\n");
+		  "Access count mismatch for atomic fetch\n");
 
 	ioc.addr = &operand1;
 	ioc.count = 1;
@@ -805,14 +823,19 @@ Test(mr_event, bounds_err_counts)
 	cr_assert_eq(err.err, FI_EIO, "Unexpected error value %d", err.err);
 
 	/* For an atomic flush with FI_DELIVERY_COMPLETE using an
-	 * out of bounds offset we expect the atomic to not update
-	 * counts, but the zero byte flush should. Therefore the
-	 * counts should update only by 1.
+	 * out-of-bounds offset we expect both the atomic and zero
+	 * by flush to generate events.
 	 */
+	if (!is_netsim(cxi_ep->ep_obj)) {
+		matches++;
+		accesses++;
+	}
 	cr_assert(ofi_atomic_get32(&cxip_mr->match_events) == matches + 1,
-		  "Match count != 1 for flush with atomic error\n");
+		  "Match count != %d for flush with atomic error",
+		  matches + 1);
 	cr_assert(ofi_atomic_get32(&cxip_mr->access_events) == accesses + 1,
-		  "Access count != 1 for flush with atomic error\n");
+		  "Access count != %d for flush with atomic error",
+		  accesses + 1);
 
 done:
 	fi_close(&mr->fid);

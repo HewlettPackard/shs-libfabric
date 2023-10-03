@@ -261,7 +261,6 @@ static struct cxip_ctrl_req *cxip_ep_ctrl_event_req(struct cxip_ep_obj *ep_obj,
 		event_rc = cxi_event_rc(event);
 
 		if (event_rc != C_RC_ENTRY_NOT_FOUND &&
-		    event_rc != C_RC_NO_SPACE &&
 		    event_rc != C_RC_MST_CANCELLED) {
 			req = cxip_domain_ctrl_id_at(ep_obj->domain,
 						     event->tgt_long.buffer_id);
@@ -276,10 +275,10 @@ static struct cxip_ctrl_req *cxip_ep_ctrl_event_req(struct cxip_ep_obj *ep_obj,
 
 		/* Silently drop any invalidated LE events. Since the control
 		 * PtlTE is used for non-optimized MRs, it is possible to
-		 * trigger a target error event if an invalid MR key or
-		 * out-of-bounds offset was specified. For such operations, it
-		 * is safe to just log the bad access attempt and drop the EQ
-		 * event, the error will be reported to the initiator.
+		 * trigger a target error event if an invalid MR key was
+		 * specified. For such operations, it is safe to just log the
+		 * bad access attempt and drop the EQ event, the error will be
+		 * reported to the initiator.
 		 */
 		if (event_rc != C_RC_MST_CANCELLED)
 			CXIP_WARN("Unexpected %s event rc: %s\n",
