@@ -1133,7 +1133,7 @@ Test(rma, write_spanning_page)
 	int ret;
 	uint8_t *send_buf;
 	uint8_t *send_addr;
-	int win_len = 0x2000;
+	int win_len = s_page_size * 2;
 	int send_len = 8;
 	struct mem_region mem_window;
 	uint64_t key_val = RMA_WIN_KEY;

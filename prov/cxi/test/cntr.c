@@ -414,6 +414,9 @@ Test(cntr, op_cntr_wb1)
 
 	cxi_cntr = container_of(&cntr->fid, struct cxip_cntr, cntr_fid.fid);
 
+	ret = wait_for_cnt(cntr, 0, fi_cntr_read);
+	cr_assert(ret == 0);
+
 	ret = fi_cntr_add(cntr, trig_thresh);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_cntr_add failed %d", ret);
 
@@ -446,6 +449,9 @@ Test(cntr, op_cntr_wb2)
 	ret = fi_open_ops(&cntr->fid, FI_CXI_COUNTER_OPS, 0,
 			  (void **)&cntr_ops, NULL);
 	cr_assert(ret == FI_SUCCESS);
+
+	ret = wait_for_cnt(cntr, 0, fi_cntr_read);
+	cr_assert(ret == 0);
 
 	cxi_cntr = container_of(&cntr->fid, struct cxip_cntr, cntr_fid.fid);
 
