@@ -156,7 +156,13 @@ Test(coll_init, reenable)
  * JOIN testing.
  */
 TestSuite(coll_join, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
-	  .disabled = true, .timeout = CXIT_DEFAULT_TIMEOUT);
+	  .disabled = false, .timeout = CXIT_DEFAULT_TIMEOUT);
+
+struct cxip_addr caddr_base;
+void insert_out(struct cxip_addr *addr, struct cxip_addr *addr_out)
+{
+	*addr = caddr_base;
+}
 
 /* expand AV and create av_sets for collectives */
 static void _create_av_set(int count, int rank, bool rx_discard,
@@ -187,6 +193,7 @@ static void _create_av_set(int count, int rank, bool rx_discard,
 	ret = cxip_av_lookup_addr(ep->ep_obj->av, cxit_ep_fi_addr, &caddr);
 	cr_assert(ret == 0, "bad lookup on address %ld: %d\n",
 		  cxit_ep_fi_addr, ret);
+	caddr_base = caddr;
 
 	/* create empty av_set */
 	ret = fi_av_set(&ep->ep_obj->av->av_fid, &attr, av_set_fid, NULL);
@@ -201,6 +208,7 @@ static void _create_av_set(int count, int rank, bool rx_discard,
 		cr_assert(ret == 1, "%d cxip_av_insert failed: %d\n", i, ret);
 		ret = fi_av_set_insert(*av_set_fid, fi_addr);
 		cr_assert(ret == 0, "%d fi_av_set_insert failed: %d\n", i, ret);
+		caddr.nic++;
 	}
 }
 
@@ -208,6 +216,9 @@ void _create_netsim_collective(int count, bool discard, int exp)
 {
 	int i, ret;
 
+	/* replace the insertion/lookup model */
+	cxip_av_addr_out = insert_out;
+	
 	TRACE("========================\n%s: entry\n", __func__);
 	TRACE("%s: count=%d\n", __func__, count);
 	cxit_coll_mc_list.count = count;
@@ -442,7 +453,7 @@ Test(coll_join, fail_ptlte) {
  */
 
 TestSuite(coll_put, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
-	  .disabled = true, .timeout = CXIT_DEFAULT_TIMEOUT);
+	  .disabled = false, .timeout = CXIT_DEFAULT_TIMEOUT);
 
 /* 50-byte packet */
 struct fakebuf {
@@ -800,7 +811,7 @@ Test(coll_put, put_red_pkt_distrib)
  * Test reduction concurrency.
  */
 TestSuite(coll_reduce, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
-	  .disabled = true, .timeout = 2*CXIT_DEFAULT_TIMEOUT);
+	  .disabled = false, .timeout = 2*CXIT_DEFAULT_TIMEOUT);
 
 /* Simulated user context, specifically to return error codes */
 struct user_context {
@@ -1199,7 +1210,7 @@ void teardown_coll(void) {
 }
 
 TestSuite(coll_reduce_ops, .init = setup_coll, .fini = teardown_coll,
-	  .disabled = true, .timeout = CXIT_DEFAULT_TIMEOUT);
+	  .disabled = false, .timeout = CXIT_DEFAULT_TIMEOUT);
 
 /* Test barrier */
 Test(coll_reduce_ops, barrier)

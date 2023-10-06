@@ -2211,6 +2211,9 @@ struct cxip_av {
 	enum fi_av_type type;
 };
 
+struct cxip_addr *(*cxip_av_addr_in)(const void *addr);
+void (*cxip_av_addr_out)(struct cxip_addr *addr_out,
+			 struct cxip_addr *addr);
 int cxip_av_lookup_addr(struct cxip_av *av, fi_addr_t fi_addr,
 			struct cxip_addr *addr);
 fi_addr_t cxip_av_lookup_fi_addr(struct cxip_av *av,

@@ -161,6 +161,25 @@ static int cxip_av_insert_validate_args(struct fid_av *fid, const void *addr_in,
 	return FI_SUCCESS;
 }
 
+/* NETSIM collectives simulation reqires many-to-one fi_addr to cxip_addr,
+ * i.e., multiple fi_addr values that resolve to the same target address. The
+ * new reverse-lookup model requires unique one-to-one, i.e. every cxip_addr
+ * must be unique. These filter functions allow insert/lookup modifications
+ * of the values by replacing these functions in the test code.
+ */
+static struct cxip_addr *insert_in(const void *addr_in)
+{
+	return (struct cxip_addr *)addr_in;
+}
+static void insert_out(struct cxip_addr *addr_out,
+		       struct cxip_addr *addr_in)
+{
+	*addr_out = *addr_in;
+}
+struct cxip_addr *(*cxip_av_addr_in)(const void *addr) = insert_in;
+void (*cxip_av_addr_out)(struct cxip_addr *addr_out,
+			 struct cxip_addr *addr) = insert_out;
+
 static int cxip_av_insert(struct fid_av *fid, const void *addr_in, size_t count,
 			  fi_addr_t *fi_addr, uint64_t flags, void *context)
 {
@@ -177,7 +196,7 @@ static int cxip_av_insert(struct fid_av *fid, const void *addr_in, size_t count,
 	cxip_av_write_lock(av);
 
 	for (i = 0; i < count; i++) {
-		ret = cxip_av_insert_addr(av, (struct cxip_addr *)addr_in + i,
+		ret = cxip_av_insert_addr(av, cxip_av_addr_in(addr_in) + i,
 					  fi_addr ? &fi_addr[i] : NULL, flags);
 		if (ret == FI_SUCCESS)
 			success_cnt++;
@@ -237,7 +256,7 @@ int cxip_av_lookup_addr(struct cxip_av *av, fi_addr_t fi_addr,
 
 	entry = ofi_bufpool_get_ibuf(av->av_entry_pool, fi_addr);
 	if (entry && addr)
-		*addr = entry->addr;
+		cxip_av_addr_out(addr, &entry->addr);
 
 	cxip_av_unlock(av);
 
