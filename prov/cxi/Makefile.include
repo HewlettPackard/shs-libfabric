@@ -155,6 +155,23 @@ TESTS += prov/cxi/test/cxitestcuda
 
 endif HAVE_CUDA
 
+# ROCR test suite is its own binary
+if HAVE_ROCR
+
+bin_PROGRAMS += prov/cxi/test/cxitestrocr
+nodist_prov_cxi_test_cxitestrocr_SOURCES = \
+	prov/cxi/test/cxip_test_common.c \
+	prov/cxi/test/rocr.c
+
+prov_cxi_test_cxitestrocr_CPPFLAGS = $(AM_CPPFLAGS) $(cxi_CPPFLAGS) \
+	$(cxitest_CPPFLAGS) $(PTHREAD_CFLAGS)
+prov_cxi_test_cxitestrocr_LDFLAGS = $(cxitest_LDFLAGS) -static
+prov_cxi_test_cxitestrocr_LDADD =  $(cxitest_LIBS) $(linkback) $(PTHREAD_LIBS) -lhsa-runtime64
+
+TESTS += prov/cxi/test/cxitestrocr
+
+endif HAVE_ROCR
+
 endif HAVE_CRITERION
 
 if HAVE_CXI_DL
