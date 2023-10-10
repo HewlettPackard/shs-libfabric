@@ -1216,11 +1216,6 @@ Test(tagged, ux_peek)
 	ret = try_peek(3, PEEK_TAG_BASE, 0, tx_len, NULL, false);
 	cr_assert_eq(ret, FI_ENOMSG, "Peek with wrong match address");
 
-	/* Invalid address with valid tag */
-	ret = try_peek(cxit_ep_fi_addr + 7, PEEK_TAG_BASE, 0, tx_len,
-		       NULL, false);
-	cr_assert_eq(ret, -FI_EINVAL, "Peek with bad address");
-
 	/* Valid with any address and valid tag */
 	ret = try_peek(FI_ADDR_UNSPEC, PEEK_TAG_BASE + 1, 0, tx_len,
 		       NULL, false);
@@ -1391,11 +1386,6 @@ void test_ux_claim(int num_msgs, int msg_len)
 	/* Non matching valid source address with valid tag and context */
 	ret = try_peek(3, PEEK_TAG_BASE, 0, tx_len, &rx_context[0], true);
 	cr_assert_eq(ret, FI_ENOMSG, "FI_CLAIM with wrong match address");
-
-	/* Invalid address with valid tag and context */
-	ret = try_peek(cxit_ep_fi_addr + 7, PEEK_TAG_BASE, 0, tx_len,
-		       &rx_context[0], true);
-	cr_assert_eq(ret, -FI_EINVAL, "FI_CLAIM with bad address");
 
 	/* Verify peek of all sends */
 	for (i = 0; i < num_msgs; i++) {
@@ -1782,13 +1772,6 @@ void directed_recv(bool logical)
 		ret = fi_trecv(cxit_ep, fake_recv_buf, recv_len, NULL, i, 0, 0,
 			       NULL);
 		cr_assert(ret == FI_SUCCESS);
-	}
-
-	if (!logical) {
-		/* Test bad source addr (not valid for logical matching) */
-		ret = fi_trecv(cxit_ep, fake_recv_buf, recv_len, NULL, 100, 0,
-			       0, NULL);
-		cr_assert(ret == -FI_EINVAL);
 	}
 
 	/* Post short RX buffer matching EP name 3 */

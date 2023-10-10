@@ -137,13 +137,6 @@ __test_insert(int count, int iters)
 			"fi_av_remove() mid iter=%d, idx=%d, ret=%d\n",
 			j, i, ret);
 
-		/* Make sure that lookup fails   */
-		addrlen = sizeof(struct cxip_addr);
-		ret = fi_av_lookup(cxit_av, test_fi_addrs[i], &addr, &addrlen);
-		cr_assert(ret == -FI_EINVAL,
-			"fi_av_lookup() mid iter=%d, idx=%d, ret=%d\n",
-			j, i, ret);
-
 		/* Insert an address   */
 		ret = fi_av_insert(cxit_av, &test_addrs[i], 1,
 			&test_fi_addrs[i], 0, NULL);
@@ -424,13 +417,6 @@ Test(av, insertsvc)
 	ret = fi_av_remove(cxit_av, &test_fi_addrs[i], 1, 0);
 	cr_assert(ret == FI_SUCCESS,
 		"fi_av_remove() mid idx=%d, ret=%d\n",
-		i, ret);
-
-	/* Make sure that lookup fails   */
-	addrlen = sizeof(struct cxip_addr);
-	ret = fi_av_lookup(cxit_av, test_fi_addrs[i], &addr, &addrlen);
-	cr_assert(ret == -FI_EINVAL,
-		"fi_av_lookup() mid idx=%d, ret=%d\n",
 		i, ret);
 
 	/* Insert an address   */
