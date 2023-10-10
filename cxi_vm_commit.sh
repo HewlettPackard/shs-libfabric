@@ -24,7 +24,7 @@ set -e
 	--with-default-monitor=uffd \
 	--with-criterion=$(realpath ../Criterion/build/install/) \
 	--with-cassini-headers=$(realpath ../cassini-headers/install) \
-	--with-cxi-upai-headers=$(realpath ../cxi-driver) \
+	--with-cxi-uapi-headers=$(realpath ../cxi-driver) \
 	--enable-cxi=$(realpath ../libcxi/install)
 
 make clean

@@ -23,9 +23,9 @@ AC_DEFUN([FI_CXI_CONFIGURE],[
 
 	# Support non-standard install path for cxi kernel UAPI headers. This is
 	# needed by libcxi.
-	AC_ARG_WITH([cxi-upai-headers],
-		[AS_HELP_STRING([--with-cxi-upai-headers=DIR], [Install directory for kernel CXI UAPI headers])],
-		[CPPFLAGS="-I$with_cxi_upai_headers/include $CPPFLAGS"])
+	AC_ARG_WITH([cxi-uapi-headers],
+		[AS_HELP_STRING([--with-cxi-uapi-headers=DIR], [Install directory for kernel CXI UAPI headers])],
+		[CPPFLAGS="-I$with_cxi_uapi_headers/include $CPPFLAGS"])
 
 	# Support non-standard install path for curl. This is needed by CXI provider.
 	AC_ARG_WITH([curl],
@@ -63,8 +63,8 @@ AC_DEFUN([FI_CXI_CONFIGURE],[
 				cxi_CPPFLAGS="$cxi_CPPFLAGS -I$with_cassini_headers/include"
 			fi
 
-			if test "$with_cxi_upai_headers" != "" && test "$with_cxi_upai_headers" != "no"; then
-				cxi_CPPFLAGS="$cxi_CPPFLAGS -I$with_cxi_upai_headers/include"
+			if test "$with_cxi_uapi_headers" != "" && test "$with_cxi_uapi_headers" != "no"; then
+				cxi_CPPFLAGS="$cxi_CPPFLAGS -I$with_cxi_uapi_headers/include"
 			fi
 
 			# Add on curl if installed in non-default location.
