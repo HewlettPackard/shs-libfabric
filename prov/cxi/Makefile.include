@@ -5,10 +5,7 @@
 if HAVE_CXI
 
 AM_CPPFLAGS += \
-	-I$(top_srcdir)/prov/cxi/include \
-	-I$(top_srcdir)/prov/cxi \
-	-I$(srcdir)/../cxi-driver/include \
-	-I$(srcdir)/../cassini-headers/install/include
+	-I$(top_srcdir)/prov/cxi/include
 
 _cxi_files = \
 	prov/cxi/src/cxip_if.c \
@@ -48,9 +45,6 @@ _cxi_headers = \
 
 rdmainclude_HEADERS += \
 	prov/cxi/include/fi_cxi_ext.h
-
-_cxi_libs = \
-	-lcurl -ljson-c -lm
 
 # Stand-alone srun tests for hardware testing environment
 noinst_PROGRAMS += prov/cxi/test/multinode/test_frmwk
@@ -140,9 +134,9 @@ prov_cxi_test_cxitestze_CPPFLAGS = $(AM_CPPFLAGS) $(cxi_CPPFLAGS) \
 prov_cxi_test_cxitestze_LDFLAGS = $(cxitest_LDFLAGS) -static
 prov_cxi_test_cxitestze_LDADD =  $(cxitest_LIBS) $(linkback) $(PTHREAD_LIBS) -lze_loader
 
-endif HAVE_ZE
-
 TESTS += prov/cxi/test/cxitestze
+
+endif HAVE_ZE
 
 endif HAVE_CRITERION
 
@@ -150,14 +144,14 @@ if HAVE_CXI_DL
 pkglib_LTLIBRARIES += libcxi-fi.la
 libcxi_fi_la_SOURCES = $(_cxi_files) $(_cxi_headers) $(common_srcs)
 libcxi_fi_la_CPPFLAGS = $(cxi_CPPFLAGS)
-libcxi_fi_la_LIBADD = $(linkback) $(cxi_LIBS) $(_cxi_libs)
+libcxi_fi_la_LIBADD = $(linkback) $(cxi_LIBS)
 libcxi_fi_la_LDFLAGS = $(cxi_LDFLAGS) \
 	-module -avoid-version -shared -export-dynamic
 libcxi_fi_la_DEPENDENCIES = $(linkback)
 else !HAVE_CXI_DL
 src_libfabric_la_SOURCES += $(_cxi_files) $(_cxi_headers)
 src_libfabric_la_CPPFLAGS += $(cxi_CPPFLAGS)
-src_libfabric_la_LIBADD += $(cxi_LIBS) $(_cxi_libs)
+src_libfabric_la_LIBADD += $(cxi_LIBS)
 src_libfabric_la_LDFLAGS += $(cxi_LDFLAGS)
 endif !HAVE_CXI_DL
 

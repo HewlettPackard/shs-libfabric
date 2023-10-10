@@ -4,7 +4,7 @@ git log -1
 set -e
 
 ./autogen.sh
-PKG_CONFIG_PATH=$(realpath ../libcxi/install/lib/pkgconfig/) ./configure \
+./configure \
 	--prefix=$PWD/install \
 	--disable-sockets \
 	--disable-udp \
@@ -22,7 +22,10 @@ PKG_CONFIG_PATH=$(realpath ../libcxi/install/lib/pkgconfig/) ./configure \
 	--disable-opx \
 	--enable-debug \
 	--with-default-monitor=uffd \
-	--with-criterion=$(realpath ../Criterion/build/install/)
+	--with-criterion=$(realpath ../Criterion/build/install/) \
+	--with-cassini-headers=$(realpath ../cassini-headers/install) \
+	--with-cxi-upai-headers=$(realpath ../cxi-driver) \
+	--enable-cxi=$(realpath ../libcxi/install)
 
 make clean
 make -j 8 install
