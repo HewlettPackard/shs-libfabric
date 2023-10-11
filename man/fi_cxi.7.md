@@ -1043,9 +1043,9 @@ The CXI provider checks for the following environment variables:
     accessible by the CPU with load/store operations.
 
 *FI_CXI_OPTIMIZED_MRS*
-:   Enables optimized memory regions. See section *CXI Domain Extensions* on how
-    to enable/disable optimized MRs at the domain level instead of for the
-    global process/job.
+:   Enables optimized memory regions. See section
+    *CXI Domain Control Extensions* on how to enable/disable optimized MRs at
+    the domain level instead of for the global process/job.
 
 *FI_CXI_MR_MATCH_EVENTS*
 :   Enabling MR match events in a client/server environment can be used
@@ -1056,8 +1056,16 @@ The CXI provider checks for the following environment variables:
     overflow. There is a slight additional cost in the creation and
     tear-down of MR. This option is disabled by default.
 
-    See section *CXI Domain Extensions* on how to enable MR match events at
-    the domain level instead of for the global process/job.
+    See section *CXI Domain Control Extensions* on how to enable MR match
+    events at the domain level instead of for the global process/job.
+
+*FI_CXI_PROV_KEY_CACHE*
+:   Enabled by default, the caching of remote MR provider keys can be
+    disable by setting to 0.
+
+    See section *CXI Domain Control Extensions* on how to disable the
+    remote provider key cache at the domain level instead of for the
+    global process/job.
 
 *FI_CXI_LLRING_MODE*
 :   Set the policy for use of the low-latency command queue ring mechanism.
@@ -1264,6 +1272,48 @@ Note: Use the fi_info utility to query provider environment variables:
 The CXI provider supports various fabric-specific extensions. Extensions are
 accessed using the fi_open_ops function.
 
+### CXI Domain Control Extensions
+
+The **fi_control**() function is extended for domain FIDs to query and override
+global environment settings for a specific domain. This is useful for example
+where the application process also includes a client API that has different
+optimizations and protections.
+
+Command *FI_OPT_CXI_GET_OPTIMIZED* where the argument is a pointer to a bool.
+The call returns the setting for optimized MR usage for the domain. The default
+is determined by the environment setting of *FI_CXI_OPTIMIZED_MRS*.
+
+Command *FI_OPT_CXI_SET_OPTIMIZED* where the argument is a pointer to a bool
+initialized to true or false. The call enables or disables the use of optimized
+MRs for the domain. If the domain is not configured for FI_MR_PROV_KEY MR mode,
+the call will fail with -FI_EINVAL, it is not supported for client generated
+keys. It must be called prior to MR being created.
+
+Command *FI_OPT_CXI_GET_MR_MATCH_EVENTS* where the argument is a pointer to a
+bool. The call returns the setting for MR Match Event accounting for the
+domain. The default is determined by the environment setting of
+*FI_CXI_MR_MATCH_EVENTS*.
+
+Command *FI_OPT_CXI_SET_MR_MATCH_EVENTS* where the argument is a pointer to a
+bool initialized to true or false. This call enables or disables the use of MR
+Match Event counting. This ensures that memory backing a MR cannot be accessed
+after invoking fi_close() on the MR, even if that memory remains in the
+libfabric MR cache. Manual progress must be made to process events at the RMA
+destination. It can only be changed prior to any EP or MR being created.
+
+Command *FI_OPT_CXI_GET_PROV_KEY_CACHE* where the argument is a pointer to a
+bool. The call returns the setting for enabling use of the remote MR
+cache for provider keys for the domain. The default is determined by the
+environment setting of *FI_CXI_PROV_KEY_CACHE* and is only valid if
+FI_MR_PROV_KEY MR mode is used.
+
+Command *FI_OPT_CXI_SET_PROV_KEY_CACHE* where the argument is a pointer to a
+bool initialized to true or false. This call enables or disables the use of
+the remote MR cache for provider keys for the domain. By default the cache
+is enabled and can be used for provider keys that do not require events.
+The command will fail with -FI_EINVAL if FI_MR_PROV_KEY MR mode is not in use.
+It can only be changed prior to any MR being created.
+
 ## CXI Domain Extensions
 
 CXI domain extensions have been named *FI_CXI_DOM_OPS_6*. The flags parameter
@@ -1290,8 +1340,6 @@ struct fi_cxi_dom_ops {
 				    size_t count, fi_addr_t *src_addr,
 				    size_t *ux_count);
 	int (*get_dwq_depth)(struct fid *fid, size_t *depth);
-	int (*enable_mr_match_events)(struct fid *fid, bool enable);
-	int (*enable_optimized_mrs)(struct fid *fid, bool enable);
 };
 ```
 
@@ -1338,18 +1386,10 @@ The depth is not per fi_domain but rather per service ID. Since a single service
 ID is intended to be shared between all processing using the same NIC in a job
 step, the triggered operations are shared across processes.
 
-*enable_mr_match_events* is used to enable/disable MR match event counting for
-a specific domain in a client/server environment. It will ensure that memory
-backing a MR cannot be accessed after invoking fi_close() on the MR, even if
-that memory remains in the libfabric MR cache. Manual progress must be made at
-the target even for single sided operations.
-
-*enable_optimized_mrs* is used to enable/disable the use of optimized MRs for
-a specific domain. This is useful if multiple domains are created within a single
-process and the use of optimized MRs is only desirable for a subset of domains.
-Domains default to the global setting *FI_CXI_OPTIMIZED_MRS* or enabled. If the
-domain is not configured for FI_MR_PROV_KEY MR mode, the call will fail
-with -FI_EINVAL, it is not supported for client generated keys.
+*enable_mr_match_events* and *enable_optimized_mrs* have been deprecated
+in favor of using the fi_control() API. While the can be still be called via
+the domain ops, They will be removed from the domain opts prior to software
+release 2.2.
 
 ## CXI Counter Extensions
 

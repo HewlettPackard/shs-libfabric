@@ -130,6 +130,7 @@ Test(domain, enable_mr_match_events)
 	struct cxip_mr *cxip_mr;
 	uint64_t key = 50;
 	struct mem_region region;
+	bool enable;
 
 	cxit_create_domain();
 	cr_assert(cxit_domain != NULL);
@@ -140,8 +141,9 @@ Test(domain, enable_mr_match_events)
 		     cxip_dom->mr_match_events, "Global setting failed");
 
 	if (!cxip_env.mr_match_events) {
-		ret = dom_ops->enable_mr_match_events(&cxit_domain->fid,
-						      true);
+		enable = true;
+		ret = fi_control(&cxit_domain->fid,
+				 FI_OPT_CXI_SET_MR_MATCH_EVENTS, &enable);
 		cr_assert_eq(ret, FI_SUCCESS,
 			     "enable_mr_match_events failed: %d", ret);
 
@@ -183,6 +185,7 @@ Test(domain, enable_optimized_mrs)
 {
 	int ret;
 	struct cxip_domain *cxip_dom;
+	bool optimized;
 
 	cxit_create_domain();
 	cr_assert(cxit_domain != NULL);
@@ -194,6 +197,9 @@ Test(domain, enable_optimized_mrs)
 
 	/* Disable optimized MRs for the domain */
 	ret = dom_ops->enable_optimized_mrs(&cxit_domain->fid, false);
+	optimized = false;
+	ret = fi_control(&cxit_domain->fid,
+			 FI_OPT_CXI_SET_OPTIMIZED_MRS, &optimized);
 	if (cxip_dom->is_prov_key) {
 		cr_assert_eq(ret, FI_SUCCESS, "Unexpected call failure");
 		cr_assert_eq(cxip_dom->optimized_mrs, false, "Disable failed");
@@ -204,7 +210,9 @@ Test(domain, enable_optimized_mrs)
 	}
 
 	/* Enable optimized MRs for the domain */
-	ret = dom_ops->enable_optimized_mrs(&cxit_domain->fid, true);
+	optimized = true;
+	ret = fi_control(&cxit_domain->fid,
+			 FI_OPT_CXI_SET_OPTIMIZED_MRS, &optimized);
 	if (cxip_dom->is_prov_key) {
 		cr_assert_eq(ret, FI_SUCCESS, "Unexpected call failure");
 		cr_assert_eq(cxip_dom->optimized_mrs, true, "Enable failed");
@@ -212,6 +220,35 @@ Test(domain, enable_optimized_mrs)
 		cr_assert_eq(ret, -FI_EINVAL, "Client key check failed");
 		cr_assert_eq(cxip_dom->optimized_mrs, cxip_env.optimized_mrs,
 			     "Client key altered domain specific setting");
+	}
+
+	cxit_destroy_domain();
+}
+
+Test(domain, disable_prov_key_cache)
+{
+	int ret;
+	struct cxip_domain *cxip_dom;
+	bool enable = false;
+
+	cxit_create_domain();
+	cr_assert(cxit_domain != NULL);
+
+	cxip_dom = container_of(cxit_domain, struct cxip_domain,
+				util_domain.domain_fid);
+	cr_assert_eq(cxip_env.prov_key_cache,
+		     cxip_dom->prov_key_cache, "Global setting failed");
+
+	ret = fi_control(&cxit_domain->fid, FI_OPT_CXI_SET_PROV_KEY_CACHE,
+			 &enable);
+
+	if (cxip_dom->is_prov_key) {
+		cr_assert_eq(ret, FI_SUCCESS, "Unexpected failure %d", ret);
+		cr_assert_eq(cxip_dom->prov_key_cache, false, "Update failed");
+	} else {
+		cr_assert_eq(ret, -FI_EINVAL, "Unexpected success");
+		cr_assert_eq(cxip_env.prov_key_cache,
+			     cxip_dom->prov_key_cache, "Unexpected update");
 	}
 
 	cxit_destroy_domain();

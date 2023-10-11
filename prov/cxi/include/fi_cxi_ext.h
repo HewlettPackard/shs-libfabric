@@ -51,6 +51,13 @@ enum {
 
 	/* fid_nic control operation to refresh NIC attributes. */
 	FI_OPT_CXI_NIC_REFRESH_ATTR,
+
+	FI_OPT_CXI_SET_MR_MATCH_EVENTS,			/* bool */
+	FI_OPT_CXI_GET_MR_MATCH_EVENTS,			/* bool */
+	FI_OPT_CXI_SET_OPTIMIZED_MRS,			/* bool */
+	FI_OPT_CXI_GET_OPTIMIZED_MRS,			/* bool */
+	FI_OPT_CXI_SET_PROV_KEY_CACHE,			/* bool */
+	FI_OPT_CXI_GET_PROV_KEY_CACHE,			/* bool */
 };
 
 /*
@@ -284,29 +291,12 @@ struct fi_cxi_dom_ops {
 	 */
 	int (*get_dwq_depth)(struct fid *fid, size_t *depth);
 
-	/* Enable/disable MR match event counting for the domain in a
-	 * client/server environment to ensure that memory backing a MR cannot
-	 * be accessed after invoking fi_close() on the MR, even if it that
-	 * memory remains in the libfabric MR cache. Manual progress must
-	 * be made at the target even for single sided operations.
-	 *
-	 * @fid: Domain FID class.
-	 * @enable: True to enable, false to disable.
-	 *
-	 * This function must be called for the domain FID before
-	 * any EP is created.
+	/* The following two functions have been deprecated in favor of
+	 * using the fi_control() standardized interface. They will be
+	 * removed in a future software release, but are left here initially
+	 * to allow early users to adjust their usage.
 	 */
 	int (*enable_mr_match_events)(struct fid *fid, bool enable);
-
-	/* Enable/disable the use of optimized MRs for a specific domain.
-	 * This is useful if multiple domains are created within a single
-	 * process and the use of optimized MRs is desirable for only a
-	 * subset of the domains. FI_MR_PROV_KEY MR mode must be configured
-	 * for the domain; otherwise -FI_EINVAL is returned otherwise.
-	 *
-	 * @fid: Domain FID class.
-	 * @enable: True to enable, false to disable.
-	 */
 	int (*enable_optimized_mrs)(struct fid *fid, bool enable);
 };
 

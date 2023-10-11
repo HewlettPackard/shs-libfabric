@@ -632,6 +632,7 @@ struct cxip_environment cxip_env = {
 	.safe_devmem_copy_threshold =  CXIP_SAFE_DEVMEM_COPY_THRESH,
 	.optimized_mrs = true,
 	.mr_match_events = false,
+	.prov_key_cache = true,
 	.llring_mode = CXIP_LLRING_IDLE,
 	.cq_policy = CXI_CQ_UPDATE_LOW_FREQ_EMPTY,
 	.default_vni = 10,
@@ -919,9 +920,16 @@ static void cxip_env_init(void)
 			  &cxip_env.optimized_mrs);
 
 	fi_param_define(&cxip_prov, "mr_match_events", FI_PARAM_BOOL,
-			"Enable MR match counting (default %lu).");
+			"Enable MR match counting (default %lu).",
+			&cxip_env.mr_match_events);
 	fi_param_get_bool(&cxip_prov, "mr_match_events",
 			  &cxip_env.mr_match_events);
+
+	fi_param_define(&cxip_prov, "prov_key_cache", FI_PARAM_BOOL,
+			"Disable caching of FI_MR_PROV_KEY (default %lu).",
+			&cxip_env.prov_key_cache);
+	fi_param_get_bool(&cxip_prov, "prov_key_cache",
+			  &cxip_env.prov_key_cache);
 
 	fi_param_define(&cxip_prov, "llring_mode", FI_PARAM_STRING,
 			"Set low-latency command queue ring mode.");

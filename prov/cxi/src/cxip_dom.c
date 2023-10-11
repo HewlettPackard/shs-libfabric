@@ -945,11 +945,75 @@ static int cxip_dom_dwq_flush_work(struct cxip_domain *dom)
 	return FI_SUCCESS;
 }
 
+static int cxip_domain_enable_mr_match_events(struct fid *fid, bool enable)
+{
+	struct cxip_domain *dom;
+
+	if (fid->fclass != FI_CLASS_DOMAIN) {
+		CXIP_WARN("Invalid FID: %p\n", fid);
+		return -FI_EINVAL;
+	}
+
+	dom = container_of(fid, struct cxip_domain,
+			   util_domain.domain_fid.fid);
+	dom->mr_match_events = enable;
+
+	return FI_SUCCESS;
+}
+
+static int cxip_domain_enable_optimized_mrs(struct fid *fid, bool enable)
+{
+	struct cxip_domain *dom;
+
+	if (fid->fclass != FI_CLASS_DOMAIN) {
+		CXIP_WARN("Invalid FID: %p\n", fid);
+		return -FI_EINVAL;
+	}
+
+	dom = container_of(fid, struct cxip_domain,
+			   util_domain.domain_fid.fid);
+	if (!dom->is_prov_key) {
+		CXIP_WARN("Requires FI_MR_PROV_KEY\n");
+		return -FI_EINVAL;
+	}
+
+	dom->optimized_mrs = enable;
+
+	return FI_SUCCESS;
+}
+
+static int cxip_domain_enable_prov_key_cache(struct fid *fid, bool enable)
+{
+	struct cxip_domain *dom;
+
+	if (fid->fclass != FI_CLASS_DOMAIN) {
+		CXIP_WARN("Invalid FID: %p\n", fid);
+		return -FI_EINVAL;
+	}
+
+	dom = container_of(fid, struct cxip_domain,
+			   util_domain.domain_fid.fid);
+	if (!dom->is_prov_key) {
+		CXIP_WARN("Requires FI_MR_PROV_KEY\n");
+		return -FI_EINVAL;
+	}
+
+	dom->prov_key_cache = enable;
+
+	return FI_SUCCESS;
+}
+
+
 static int cxip_dom_control(struct fid *fid, int command, void *arg)
 {
 	struct cxip_domain *dom;
 
 	dom = container_of(fid, struct cxip_domain, util_domain.domain_fid.fid);
+
+	if (command != FI_FLUSH_WORK && !arg) {
+		CXIP_WARN("Required argument missing\n");
+		return -FI_EINVAL;
+	}
 
 	switch (command) {
 	case FI_QUEUE_WORK:
@@ -958,9 +1022,32 @@ static int cxip_dom_control(struct fid *fid, int command, void *arg)
 	case FI_FLUSH_WORK:
 		return cxip_dom_dwq_flush_work(dom);
 
+	case FI_OPT_CXI_SET_OPTIMIZED_MRS:
+		return cxip_domain_enable_optimized_mrs(fid, *(bool *)arg);
+
+	case FI_OPT_CXI_GET_OPTIMIZED_MRS:
+		*(bool *)arg = dom->optimized_mrs;
+		break;
+
+	case FI_OPT_CXI_SET_MR_MATCH_EVENTS:
+		return cxip_domain_enable_mr_match_events(fid, *(bool *)arg);
+
+	case FI_OPT_CXI_GET_MR_MATCH_EVENTS:
+		*(bool *)arg = dom->mr_match_events;
+		break;
+
+	case FI_OPT_CXI_SET_PROV_KEY_CACHE:
+		return cxip_domain_enable_prov_key_cache(fid, *(bool *)arg);
+
+	case FI_OPT_CXI_GET_PROV_KEY_CACHE:
+		*(bool *)arg = dom->prov_key_cache;
+		break;
+
 	default:
 		return -FI_EINVAL;
 	}
+
+	return FI_SUCCESS;
 }
 
 static int cxip_domain_cntr_read(struct fid *fid, unsigned int cntr,
@@ -1041,43 +1128,6 @@ static int cxip_domain_get_dwq_depth(struct fid *fid, size_t *depth)
 			   util_domain.domain_fid.fid);
 
 	*depth = dom->max_trig_op_in_use;
-
-	return FI_SUCCESS;
-}
-
-static int cxip_domain_enable_mr_match_events(struct fid *fid, bool enable)
-{
-	struct cxip_domain *dom;
-
-	if (fid->fclass != FI_CLASS_DOMAIN) {
-		CXIP_WARN("Invalid FID: %p\n", fid);
-		return -FI_EINVAL;
-	}
-
-	dom = container_of(fid, struct cxip_domain,
-			   util_domain.domain_fid.fid);
-	dom->mr_match_events = enable;
-
-	return FI_SUCCESS;
-}
-
-static int cxip_domain_enable_optimized_mrs(struct fid *fid, bool enable)
-{
-	struct cxip_domain *dom;
-
-	if (fid->fclass != FI_CLASS_DOMAIN) {
-		CXIP_WARN("Invalid FID: %p\n", fid);
-		return -FI_EINVAL;
-	}
-
-	dom = container_of(fid, struct cxip_domain,
-			   util_domain.domain_fid.fid);
-	if (!dom->is_prov_key) {
-		CXIP_WARN("Requires FI_MR_PROV_KEY\n");
-		return -FI_EINVAL;
-	}
-
-	dom->optimized_mrs = enable;
 
 	return FI_SUCCESS;
 }
@@ -1434,6 +1484,7 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 
 	cxi_domain->mr_match_events = cxip_env.mr_match_events;
 	cxi_domain->optimized_mrs = cxip_env.optimized_mrs;
+	cxi_domain->prov_key_cache = cxip_env.prov_key_cache;
 	*dom = &cxi_domain->util_domain.domain_fid;
 
 	return 0;

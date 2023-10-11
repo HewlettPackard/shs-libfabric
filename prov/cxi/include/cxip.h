@@ -250,6 +250,7 @@ struct cxip_environment {
 	size_t default_cq_size;
 	size_t default_tx_size;
 	int optimized_mrs;
+	int prov_key_cache;
 	int mr_match_events;
 	int disable_eq_hugetlb;
 	int zbcoll_radix;
@@ -803,6 +804,9 @@ struct cxip_domain {
 
 	/* Provider generated RKEYs, else client */
 	bool is_prov_key;
+
+	/* Can disable caching of provider generated RKEYs */
+	bool prov_key_cache;
 
 	/* Provider generated RKEYs optimized MR disablement/enablement */
 	bool optimized_mrs;

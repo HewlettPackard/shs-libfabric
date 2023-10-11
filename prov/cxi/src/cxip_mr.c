@@ -1064,8 +1064,8 @@ int cxip_mr_enable(struct cxip_mr *mr)
 	 */
 	if (!mr->domain->is_prov_key)
 		mr->mr_util = &cxip_client_key_mr_util_ops;
-	else if (mr->md && mr->md->cached && !mr->cntr &&
-		 !mr->count_events && !mr->rma_events)
+	else if (mr->md && mr->md->cached && mr->domain->prov_key_cache &&
+		 !mr->cntr && !mr->count_events && !mr->rma_events)
 		mr->mr_util = &cxip_prov_key_cache_mr_util_ops;
 	else
 		mr->mr_util = &cxip_prov_key_mr_util_ops;
