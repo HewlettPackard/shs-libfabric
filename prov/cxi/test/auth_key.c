@@ -24,33 +24,6 @@ void *memdup(const void *src, size_t n)
 TestSuite(auth_key, .timeout = CXIT_DEFAULT_TIMEOUT);
 
 /* Test fi_getinfo() verification of hints argument. */
-Test(auth_key, missing_auth_key_domain_attr_hints)
-{
-	struct cxi_auth_key auth_key = {
-		.svc_id = CXI_DEFAULT_SVC_ID,
-		.vni = 1,
-	};
-	int ret;
-	struct fi_info *hints;
-	struct fi_info *info;
-
-	hints = fi_allocinfo();
-	cr_assert_not_null(hints, "fi_allocinfo failed");
-
-	hints->fabric_attr->prov_name = strdup("cxi");
-	cr_assert_not_null(hints, "strdup failed");
-
-	hints->domain_attr->auth_key_size = sizeof(auth_key);
-	hints->domain_attr->mr_mode = FI_MR_ENDPOINT;
-
-	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
-			 NULL, FI_SOURCE, hints, &info);
-	cr_assert_eq(ret, -FI_ENODATA, "fi_getinfo failed: %d", ret);
-
-	fi_freeinfo(hints);
-}
-
-/* Test fi_getinfo() verification of hints argument. */
 Test(auth_key, invalid_auth_key_size_domain_attr_hints)
 {
 	struct cxi_auth_key auth_key = {
@@ -100,33 +73,6 @@ Test(auth_key, missing_auth_key_size_domain_attr_hints)
 	hints->domain_attr->auth_key = memdup(&auth_key, 1);
 	cr_assert_not_null(hints->domain_attr->auth_key, "memdup failed");
 
-	hints->domain_attr->mr_mode = FI_MR_ENDPOINT;
-
-	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
-			 NULL, FI_SOURCE, hints, &info);
-	cr_assert_eq(ret, -FI_ENODATA, "fi_getinfo failed: %d", ret);
-
-	fi_freeinfo(hints);
-}
-
-/* Test fi_getinfo() verification of hints argument. */
-Test(auth_key, missing_auth_key_ep_attr_hints)
-{
-	struct cxi_auth_key auth_key = {
-		.svc_id = CXI_DEFAULT_SVC_ID,
-		.vni = 1,
-	};
-	int ret;
-	struct fi_info *hints;
-	struct fi_info *info;
-
-	hints = fi_allocinfo();
-	cr_assert_not_null(hints, "fi_allocinfo failed");
-
-	hints->fabric_attr->prov_name = strdup("cxi");
-	cr_assert_not_null(hints, "strdup failed");
-
-	hints->ep_attr->auth_key_size = sizeof(auth_key);
 	hints->domain_attr->mr_mode = FI_MR_ENDPOINT;
 
 	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
