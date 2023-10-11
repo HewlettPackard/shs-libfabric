@@ -59,46 +59,6 @@ static void cxit_set_page_size(void)
 		s_page_size = sysconf(_SC_PAGESIZE);
 }
 
-/**
- * @brief Trace function.
- *
- * Support test framework-aware code execution tracing.
- *
- * Quick summary:
- *   - build with DEBUG=1
- *   - add '#define TRACE CXIP_TRACE' in code files you want to trace
- *   - call cxip_trace_enable() to enable/disable tracing
- *
- * Function pointer cxip_trace_fn is instantiated in cxip_info.c, is declared
- * extern in cxip.h, and is initialized to NULL, which prevents any output.
- *
- * Every test framework is required to support a cxip_trace_enable() function,
- * which sets (or clears) the function pointer, thus enabling (or disabling) the
- * tracing function for that test framework.
- *
- * Every test framework is also required to support a cxip_trace_flush()
- * function, used to flush any cached output produced by the trace function.
- *
- * This is normally embedded within a code module with the following:
- *
- * -  #define TRACE CXIP_TRACE
- * -  #define TRACE CXIP_NOTRACE
- *
- * The former allows tracing in that module, while the latter disables it and
- * produces no code, allowing TRACE() calls in performance-critical code.
- *
- * ENABLE_DEBUG must be set at compile-time, otherwise CXIP_TRACE is identical
- * to CXIP_NOTRACE, and does not produce code. ENABLE_DEBUG is set using the
- * --enable-debug compiler flag. This compiler flag is never set for a
- * production build.
- *
- * The --enable-debug flag is set in the devbootstrap build by defining DEBUG=1
- * during build.
- *
- * The implementation in this framework (cxip_test_common) is for use with
- * NETSIM criterion testing, and produces output via printf() to stdout.
- */
-
 int cxit_dom_read_cntr(unsigned int cntr, uint64_t *value,
 		       struct timespec *ts, bool sync)
 {

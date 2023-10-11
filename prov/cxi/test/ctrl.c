@@ -14,8 +14,7 @@
 #include "cxip.h"
 #include "cxip_test_common.h"
 
-/* If not compiled with DEBUG=1, this is a no-op */
-#define	TRACE CXIP_NOTRACE
+#define	TRACE(fmt, ...)	CXIP_TRACE(CXIP_TRC_CTRL, fmt, ##__VA_ARGS__)
 
 TestSuite(ctrl, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
 	  .timeout = CXIT_DEFAULT_TIMEOUT);

@@ -34,7 +34,7 @@
 #define CXIP_INFO(...) _CXIP_INFO(FI_LOG_EP_CTRL, __VA_ARGS__)
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_EP_CTRL, __VA_ARGS__)
 
-#define	TRACE CXIP_NOTRACE
+#define	TRACE(fmt, ...)	CXIP_TRACE(CXIP_TRC_ZBCOLL, fmt, ##__VA_ARGS__)
 
 /* see data packing structures below */
 #define	ZB_MAP_BITS	54
@@ -969,7 +969,7 @@ static void zbsend_dn(struct cxip_zbcoll_state *zbs,
 {
 	int relidx;
 
- 	for (relidx = 1; relidx < zbs->num_relatives; relidx++) {
+	for (relidx = 1; relidx < zbs->num_relatives; relidx++) {
 		TRACE("%04x->%04x: %-10s %-10s\n",
 			zbs->grp_rank, zbs->relatives[relidx],
 			__func__, "");

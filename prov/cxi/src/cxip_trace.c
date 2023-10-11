@@ -33,54 +33,48 @@
 /**
  * @brief TRACE function for producing runtime debugging logs
  *
- * The tracing call to place inline within the code is a macro, CXIP_TRACE.
- * This is defined in cxip.h, and is enabled by the flag ENABLE_DEBUG at
- * compile time, which is triggered by having DBG=1 in the compile
- * environment.
+ * The following should be inserted at the top of a code module to trace:
+ *
+ *   #define TRACE(fmt, ...) CXIP_TRACE(<module>, fmt, ##__VA_ARGS__)
  *
  * If ENABLE_DEBUG is false at compile time, CXIP_TRACE is a syntactically
  * robust NOOP which results in no code being emitted, ensuring that these
- * trace calls do not affect performance in production.
- *
- * CXIP_TRACE can be used directly in each code module, but is usually
- * defined behind one or more TRACE* macros that are local to a code file,
- * which allows trace generation to be isolated to certain areas of code.
- *
- * This is structured to allow the trace functions to be replaced in specific
- * test environments, by simply replacing the function pointers with new
- * pointers. They are statically initialized to the functions in this module,
- * and can be overwritten at any point in the test environment to give new
- * behavior. For instance, all of the tracing functions could be replaced
- * using sockets-based telemetry code.
+ * trace calls do not affect performance in production, and none of the
+ * following comment apply.
  *
  * - cxip_trace_fn is the function that logs a trace message.
  * - cxip_trace_flush_fn can be used to flush buffered trace messages.
  * - cxip_trace_close_fn can be used to flush and close the output.
- * - cxip_trace_enable_fn is used to enable/disable tracing.
+ * - cxip_trace_enable_fn is used to enable/disable all tracing.
+ * - cxip_trace_set() is used to enable a tracing module.
+ * - cxip_trace_clr() is used to disable a tracing module.
  *
- * Note that ENABLE_DEBUG=1 with tracing disabled will still slow
- * applications slightly, since every CXIP_TRACE macro will generate a
- * test/branch on cxip_trace_enabled. For maximum performance, ENABLE_DEBUG
- * should be set to FALSE, which compiles out all of the TRACE code.
+ * Modules are defined by the list of enum cxip_trace_module values, which
+ * can be extended as needed to provide finer control over tracing.
  *
- * Global variables for rank and numranks must generally be supplied by the
- * application, and apply only to the formatted TRACE output, which helps to
- * clearly disambiguate the stream of trace messages.
+ * The initial values are set in cxip_trace_init() below, using run-time
+ * environment variables. cxip_trace_enable() can be used to dynamically
+ * enable or disable tracing. cxip_trace_set() and cxip_trace_clr() can be
+ * used to dynamically modify which traces will generate output.
  *
- * The functions in this module are intended for use in a multinode,
- * multirank test environment, where ranks generally represent independent
- * processes running on different compute nodes.
- * 
- * The normal sequence is to set cxip_trace_rank, cxip_trace_numranks, and
- * cxip_trace_append, then call cxip_trace_enable(true). This will create a
- * file named "traceN", where N is the cxip_trace_rank value. The file is
- * created using the "w" or "a" file flag, depending on cxip_trace_append,
- * and remains open throughout the test run. Output can be suspended by
- * calling cxip_trace_enable(false), and can be resumed by calling
- * cxip_trace_enable(true).
+ * Some initialization is required by the use of environment variables:
  *
- * cxip_trace_fid is exposed, and can be manipulated using the normal file
- * stream functions. Default buffering is fully buffered output, which can
+ * Specifying the environment variable CXIP_TRACE_FILENAME will deliver
+ * output to a file with the specified name, followed by the PMI_RANK value
+ * (if there is one).
+ *
+ * Specifying CXIP_TRACE_APPEND in conjunction with CXIP_TRACE_FILENAME will
+ * open the file in append mode. This is important for NETSIM tests under
+ * Criterion, since each test is run in a separate process and closes all
+ * files at completion of each test.
+ *
+ * Specifying PMI_RANK as a rank value will apply a prefix to the trace lines
+ * that identifies the rank of the trace.
+ *
+ * Specifying PMI_SIZE will expand the prefix to show the number of ranks.
+ *
+ * cxip_trace_fid is exposed, and can be manipulated using the normal stream
+ * file functions. Default buffering is fully buffered output, which can
  * result in delays in the appearance of logging information. Using
  * setlinebuf() will run slower, but will display lines more quickly.
  *
@@ -88,12 +82,6 @@
  * leaves the file open for more writing.
  *
  * cxip_trace_close() flushes all output and closes the file.
- *
- * Close is also performed automatically if the running process terminates.
- * This is the main reason for the cxip_trace_append flag, which should be
- * set to true if tracing is enabled for multiple Criterion test cases under
- * NETSIM. Each test case is run as a separate process. If cxip_trace_append
- * is false, you will only see the results of the last test performed.
  */
 #include "config.h"
 
@@ -105,11 +93,14 @@
 
 #include "cxip.h"
 
+bool cxip_trace_initialized;
 bool cxip_trace_enabled;
 bool cxip_trace_append;
 int cxip_trace_rank;
 int cxip_trace_numranks;
+char *cxip_trace_filename;
 FILE *cxip_trace_fid;
+uint64_t cxip_trace_mask;
 
 /* Static initialization of default trace functions, can be overridden */
 cxip_trace_t cxip_trace_attr cxip_trace_fn = cxip_trace;
@@ -117,8 +108,70 @@ cxip_trace_flush_t cxip_trace_flush_fn = cxip_trace_flush;
 cxip_trace_close_t cxip_trace_close_fn = cxip_trace_close;
 cxip_trace_enable_t cxip_trace_enable_fn = cxip_trace_enable;
 
+/* Get environment variable as string representation of int */
+static int getenv_int(const char *name)
+{
+	char *env;
+	int value;
+
+	value = -1;
+	env = getenv(name);
+	if (env)
+		sscanf(env, "%d", &value);
+	return value;
+}
+
+void cxip_trace_init(void)
+{
+	const char *fname;
+
+	if (cxip_trace_initialized)
+		return;
+
+	cxip_trace_initialized = true;
+	cxip_trace_enabled = !!getenv("CXIP_TRACE_ENABLE");
+	cxip_trace_append = !!getenv("CXIP_TRACE_APPEND");
+	cxip_trace_linebuf = !!getenv("CXIP_TRACE_LINEBUF");
+	cxip_trace_rank = getenv_int("PMI_RANK");
+	cxip_trace_numranks = getenv_int("PMI_SIZE");
+	cxip_trace_append = getenv("CXIP_TRACE_APPEND");
+	fname = getenv("CXIP_TRACE_FILENAME");
+
+	cxip_trace_mask = 0L;
+	if (getenv("CXIP_TRC_CTRL"))
+		cxip_trace_set(CXIP_TRC_CTRL);
+	if (getenv("CXIP_TRC_ZBCOLL"))
+		cxip_trace_set(CXIP_TRC_ZBCOLL);
+	if (getenv("CXIP_TRC_CURL"))
+		cxip_trace_set(CXIP_TRC_CURL);
+	if (getenv("CXIP_TRC_COLL_PKT"))
+		cxip_trace_set(CXIP_TRC_COLL_PKT);
+	if (getenv("CXIP_TRC_COLL_JOIN"))
+		cxip_trace_set(CXIP_TRC_COLL_JOIN);
+	if (getenv("CXIP_TRC_COLL_DEBUG"))
+		cxip_trace_set(CXIP_TRC_COLL_DEBUG);
+	if (getenv("CXIP_TRC_TEST_CODE"))
+		cxip_trace_set(CXIP_TRC_TEST_CODE);
+
+	if (!fname)
+		fname = "trace";
+	if (fname) {
+		asprintf(&cxip_trace_filename, "./%s%d",
+			 fname, cxip_trace_rank);
+		cxip_trace_fid = fopen(cxip_trace_filename,
+				       cxip_trace_append ? "a" : "w");
+		if (!cxip_trace_fid) {
+			fprintf(stderr, "open(%s) failed: %s\n",
+				cxip_trace_filename, strerror(errno));
+		}
+		if (cxip_trace_linebuf && cxip_trace_fid)
+			setlinebuf(cxip_trace_fid);
+	}
+}
+
 void cxip_trace_flush(void)
 {
+	cxip_trace_init();
 	if (cxip_trace_fid) {
 		fflush(cxip_trace_fid);
 		fsync(fileno(cxip_trace_fid));
@@ -127,10 +180,12 @@ void cxip_trace_flush(void)
 
 void cxip_trace_close(void)
 {
+	cxip_trace_init();
 	if (cxip_trace_fid) {
 		cxip_trace_flush();
 		fclose(cxip_trace_fid);
 		cxip_trace_fid = NULL;
+		cxip_trace_initialized = false;
 	}
 }
 
@@ -140,6 +195,7 @@ int cxip_trace_attr cxip_trace(const char *fmt, ...)
 	char *str;
 	int len;
 
+	cxip_trace_init();
 	if (!cxip_trace_enabled)
 		return 0;
 	va_start(args, fmt);
@@ -156,31 +212,8 @@ int cxip_trace_attr cxip_trace(const char *fmt, ...)
 bool cxip_trace_enable(bool enable)
 {
 	bool was_enabled = cxip_trace_enabled;
-	char fnam[256], *mode;
 
-	if (!cxip_trace_fn) {
-		fprintf(stderr, "cxip_trace_fn not defined\n");
-		return false;
-	}
-	if (!cxip_trace_flush_fn) {
-		fprintf(stderr, "cxip_trace_flush_fn not defined\n");
-		return false;
-	}
-	if (!enable && cxip_trace_enabled) {
-		fflush(cxip_trace_fid);
-		cxip_trace_enabled = false;
-	} else if (enable && !cxip_trace_enabled) {
-		if (!cxip_trace_fid) {
-			sprintf(fnam, "./trace%d", cxip_trace_rank);
-			mode = (cxip_trace_append) ? "a" : "w";
-			cxip_trace_fid = fopen(fnam, mode);
-			if (!cxip_trace_fid) {
-				fprintf(stderr, "open(%s) failed: %s\n",
-					fnam, strerror(errno));
-			}
-		}
-		if (cxip_trace_fid)
-			cxip_trace_enabled = true;
-	}
+	cxip_trace_init();
+	cxip_trace_enabled = enable;
 	return was_enabled;
 }

@@ -27,6 +27,8 @@
 #include <ofi.h>
 #include "multinode_frmwk.h"
 
+#define	TRACE(fmt, ...)	CXIP_TRACE(CXIP_TRC_TEST_CODE, fmt, ##__VA_ARGS__)
+
 int main(int argc, char **argv)
 {
 	fi_addr_t *fiaddr = NULL;
@@ -49,7 +51,6 @@ int main(int argc, char **argv)
 	ret = frmwk_init_libfabric();
 	if (frmwk_errmsg(ret, "frmwk_init_libfabric()\n"))
 		return ret;
-	printf("libfabric initialized\n");
 
 	ret = frmwk_populate_av(&fiaddr, &size);
 	if (frmwk_errmsg(ret, "frmwk_populate_av()\n"))
@@ -61,13 +62,13 @@ int main(int argc, char **argv)
 			fiaddr[i]);
 	}
 
-	cxip_trace_rank = frmwk_rank;
-	cxip_trace_numranks = frmwk_numranks;
 	cxip_trace_enable(true);
-	CXIP_TRACE("Trace message test %d\n", 0);
-	CXIP_TRACE("Trace message test %d\n", 1);
+	TRACE("Trace message test %d\n", 0);
+	TRACE("Trace message test %d\n", 1);
 	cxip_trace_enable(false);
-	CXIP_TRACE("This message should not appear\n");
+	TRACE("This message should not appear\n");
+	cxip_trace_enable(true);
+	TRACE("This message should appear\n");
 
 	frmwk_free_libfabric();
 	free(fiaddr);

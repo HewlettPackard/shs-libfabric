@@ -2959,6 +2959,7 @@ cxip_trace_enable_t cxip_trace_enable_fn;
 
 bool cxip_trace_enabled;	// true if tracing is enabled
 bool cxip_trace_append;		// append open for trace file
+bool cxip_trace_linebuf;	// set line buffering for trace
 int cxip_trace_rank;		// tracing rank
 int cxip_trace_numranks;	// tracing number of ranks
 FILE *cxip_trace_fid;		// trace output file descriptor
@@ -2968,12 +2969,39 @@ void cxip_trace_flush(void);
 void cxip_trace_close(void);
 bool cxip_trace_enable(bool enable);
 
-#define	CXIP_NOTRACE(fmt, ...) do {} while (0)
+/* debugging TRACE filtering control */
+enum cxip_trace_module {
+	CXIP_TRC_CTRL,
+	CXIP_TRC_ZBCOLL,
+	CXIP_TRC_CURL,
+	CXIP_TRC_COLL_PKT,
+	CXIP_TRC_COLL_JOIN,
+	CXIP_TRC_COLL_DEBUG,
+	CXIP_TRC_TEST_CODE,
+	CXIP_TRC_MAX
+};
+uint64_t cxip_trace_mask;
+
+static inline void cxip_trace_set(int mod)
+{
+	cxip_trace_mask |= (1L << mod);
+}
+
+static inline void cxip_trace_clr(int mod)
+{
+	cxip_trace_mask &= ~(1L << mod);
+}
+
+static inline bool cxip_trace_true(int mod)
+{
+	return cxip_trace_enabled && (cxip_trace_mask & (1L << mod));
+}
+
 #if ENABLE_DEBUG
-#define CXIP_TRACE(fmt, ...) \
-	do {if (cxip_trace_enabled) cxip_trace_fn(fmt, ##__VA_ARGS__);} while (0)
+#define CXIP_TRACE(mod, fmt, ...) \
+	do {if (cxip_trace_true(mod)) cxip_trace_fn(fmt, ##__VA_ARGS__);} while (0)
 #else
-#define	CXIP_TRACE CXIP_NOTRACE
+#define	CXIP_TRACE(mod, fmt, ...) do {} while (0)
 #endif
 
 /* fabric logging implementation functions */

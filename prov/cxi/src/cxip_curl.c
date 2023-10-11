@@ -15,6 +15,8 @@
 
 #include "cxip.h"
 
+#define	TRACE(fmt, ...)	CXIP_TRACE(CXIP_TRC_CURL, fmt, ##__VA_ARGS__)
+
 #define CXIP_DBG(...) _CXIP_DBG(FI_LOG_FABRIC, __VA_ARGS__)
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_FABRIC, __VA_ARGS__)
 
@@ -232,12 +234,12 @@ int cxip_curl_perform(const char *endpoint, const char *request,
 	int running;
 	int ret;
 
-	CXIP_TRACE("%s: usrptr=%p\n", __func__, usrptr);
+	TRACE("%s: usrptr=%p\n", __func__, usrptr);
 	ret = -FI_ENOMEM;
 	handle = calloc(1, sizeof(*handle));
 	if (!handle)
 		goto fail;
-	CXIP_TRACE("%s: handle=%p\n", __func__, handle);
+	TRACE("%s: handle=%p\n", __func__, handle);
 
 	/* libcurl is fussy about NULL requests */
 	handle->endpoint = strdup(endpoint);
@@ -253,8 +255,8 @@ int cxip_curl_perform(const char *endpoint, const char *request,
 	/* add user completion function and pointer */
 	handle->usrfunc = usrfunc;
 	handle->usrptr = usrptr;
-	CXIP_TRACE("%s: handle->usrfnc=%p\n", __func__, handle->usrfunc);
-	CXIP_TRACE("%s: handle->usrptr=%p\n", __func__, handle->usrptr);
+	TRACE("%s: handle->usrfnc=%p\n", __func__, handle->usrfunc);
+	TRACE("%s: handle->usrptr=%p\n", __func__, handle->usrptr);
 
 	ret = -FI_EACCES;
 	curl = curl_easy_init();
@@ -396,7 +398,7 @@ int cxip_curl_progress(struct cxip_curl_handle **handleptr)
 		return -FI_EOTHER;
 	}
 	/* handle is now valid, must eventually be freed */
-	CXIP_TRACE("%s: handle=%p\n", __func__, handle);
+	TRACE("%s: handle=%p\n", __func__, handle);
 
 	/* retrieve the status code, should not fail */
 	res = curl_easy_getinfo(msg->easy_handle,
@@ -420,11 +422,11 @@ int cxip_curl_progress(struct cxip_curl_handle **handleptr)
 	handle->status = status;
 
 	/* call the user function */
-	CXIP_TRACE("%s: handle->usrfnc=%p\n", __func__, handle->usrfunc);
-	CXIP_TRACE("%s: handle->usrptr=%p\n", __func__, handle->usrptr);
+	TRACE("%s: handle->usrfnc=%p\n", __func__, handle->usrfunc);
+	TRACE("%s: handle->usrptr=%p\n", __func__, handle->usrptr);
 	if (handle->usrfunc)
 		handle->usrfunc(handle);
-	CXIP_TRACE("%s: returned from usrfnc\n", __func__);
+	TRACE("%s: returned from usrfnc\n", __func__);
 
 	/* return the handle, or free it */
 	if (handleptr) {

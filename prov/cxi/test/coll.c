@@ -62,7 +62,7 @@
 #include "cxip_test_common.h"
 
 /* If not compiled with DEBUG=1, this is a no-op */
-#define	TRACE CXIP_NOTRACE
+#define	TRACE(fmt, ...)	CXIP_TRACE(CXIP_TRC_TEST_CODE, fmt, ##__VA_ARGS__)
 
 #define	MIN(a,b) (((a)<(b))?(a):(b))
 
@@ -218,7 +218,7 @@ void _create_netsim_collective(int count, bool discard, int exp)
 
 	/* replace the insertion/lookup model */
 	cxip_av_addr_out = insert_out;
-	
+
 	TRACE("========================\n%s: entry\n", __func__);
 	TRACE("%s: count=%d\n", __func__, count);
 	cxit_coll_mc_list.count = count;
@@ -1421,7 +1421,7 @@ int _allreduceop(enum fi_op opcode,
 				ret = 1;
 				goto done;
 			}
- 	}
+	}
 
 	/* 'parallel' wait for all to complete */
 	if (!(flags & FI_MORE)) {
@@ -1775,7 +1775,7 @@ static int _check_rc(int nodes, struct user_context *context, int rc)
 #define STDINTSETUP \
 	struct user_context *context; \
 	struct cxip_intval *data; \
- 	struct cxip_intval *rslt; \
+	struct cxip_intval *rslt; \
 	struct cxip_intval check; \
 	int i, j, ret, nodes; \
 	nodes = cxit_coll_mc_list.count; \
@@ -1786,7 +1786,7 @@ static int _check_rc(int nodes, struct user_context *context, int rc)
 #define STDILOCSETUP \
 	struct user_context *context; \
 	struct cxip_iminmax *data; \
- 	struct cxip_iminmax *rslt; \
+	struct cxip_iminmax *rslt; \
 	struct cxip_iminmax check; \
 	int i, ret, nodes; \
 	nodes = cxit_coll_mc_list.count; \

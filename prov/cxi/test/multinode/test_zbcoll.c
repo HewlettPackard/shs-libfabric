@@ -26,9 +26,7 @@
 #include <cxip.h>
 #include "multinode_frmwk.h"
 
-/* If not compiled with DEBUG=1, this is a no-op */
-/* see cxip_trace_enable() in each test framework */
-#define	TRACE CXIP_NOTRACE
+#define	TRACE(fmt, ...)	CXIP_TRACE(CXIP_TRC_TEST_CODE, fmt, ##__VA_ARGS__)
 
 /* convert delays to nsecs */
 #define	nUSEC(n)	(n * 1000L)

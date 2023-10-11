@@ -30,9 +30,12 @@
 #define _MM_GET_FLUSH_ZERO_MODE() ({0;})
 #endif
 
-#define	TRACE		CXIP_NOTRACE
-#define	TRACE_JOIN	CXIP_NOTRACE
-#define	TRACE_DEBUG	CXIP_NOTRACE
+#define	TRACE_PKT(fmt, ...)	CXIP_TRACE(CXIP_TRC_COLL_PKT, fmt, \
+					   ##__VA_ARGS__)
+#define	TRACE_JOIN(fmt, ...)	CXIP_TRACE(CXIP_TRC_COLL_JOIN, fmt, \
+					   ##__VA_ARGS__)
+#define	TRACE_DEBUG(fmt, ...)	CXIP_TRACE(CXIP_TRC_COLL_DEBUG, fmt, \
+					   ##__VA_ARGS__)
 
 // TODO regularize usage of these
 #define CXIP_DBG(...) _CXIP_DBG(FI_LOG_EP_CTRL, __VA_ARGS__)
@@ -40,9 +43,9 @@
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_EP_CTRL, __VA_ARGS__)
 
 /* must all be 0 in production code */
-#define __chk_pkts	0
-#define __trc_pkts	0
-#define __trc_data	0
+#define __chk_pkts	1
+#define __trc_pkts	1
+#define __trc_data	1
 
 #define	MAGIC		0x677d
 
@@ -194,37 +197,37 @@ void check_red_pkt(void)
 	len = sizeof(pkt);
 	exp = 49;
 	if (len != exp) {
-		TRACE("sizeof(pkt) = %ld, exp %ld\n", len, exp);
+		TRACE_PKT("sizeof(pkt) = %ld, exp %ld\n", len, exp);
 		err++;
 	}
 	len = sizeof(pkt.pad);
 	exp = 5;
 	if (len != exp) {
-		TRACE("sizeof(pkt.pad) = %ld, exp %ld\n", len, exp);
+		TRACE_PKT("sizeof(pkt.pad) = %ld, exp %ld\n", len, exp);
 		err++;
 	}
 	len = sizeof(pkt.hdr);
 	exp = 12;
 	if (len != exp) {
-		TRACE("sizeof(pkt.hdr) = %ld, exp %ld\n", len, exp);
+		TRACE_PKT("sizeof(pkt.hdr) = %ld, exp %ld\n", len, exp);
 		err++;
 	}
 	len = sizeof(pkt.data);
 	exp = 32;
 	if (len != exp) {
-		TRACE("sizeof(pkt.data) = %ld, exp %ld\n", len, exp);
+		TRACE_PKT("sizeof(pkt.data) = %ld, exp %ld\n", len, exp);
 		err++;
 	}
 	len = FLDOFFSET(pkt, hdr);
 	exp = 5;
 	if (len != exp) {
-		TRACE("offset(pkt.hdr) = %ld, exp %ld\n", len, exp);
+		TRACE_PKT("offset(pkt.hdr) = %ld, exp %ld\n", len, exp);
 		err++;
 	}
 	len = FLDOFFSET(pkt, data);
 	exp = 17;
 	if (len != exp) {
-		TRACE("offset(pkt.data) = %ld, exp %ld\n", len, exp);
+		TRACE_PKT("offset(pkt.data) = %ld, exp %ld\n", len, exp);
 		err++;
 	}
 
@@ -239,12 +242,12 @@ void check_red_pkt(void)
 	_swappkt(&pkt);
 	for (i = 0; i < sizeof(pkt); i++)
 		if (ptr[i] != i + offset) {
-			TRACE("pkt[%d] = %d, exp %d\n", i, ptr[i], i + offset);
+			TRACE_PKT("pkt[%d] = %d, exp %d\n", i, ptr[i], i + offset);
 			err++;
 		}
 
 	if (err) {
-		TRACE("*** INVALID STRUCTURE see above ***\n");
+		TRACE_PKT("*** INVALID STRUCTURE see above ***\n");
 		abort();
 	}
 #endif
@@ -258,24 +261,24 @@ void _dump_red_pkt(struct red_pkt *pkt, char *dir)
 		__attribute__((__unused__))
 	int i;
 
-	TRACE("---------------\n");
-	TRACE("Reduction packet (%s):\n", dir);
-	TRACE("  seqno        = %d\n", pkt->hdr.seqno);
-	TRACE("  arm          = %d\n", pkt->hdr.arm);
-	TRACE("  op           = %d\n", pkt->hdr.op);
-	TRACE("  redcnt       = %d\n", pkt->hdr.redcnt);
-	TRACE("  resno        = %d\n", pkt->hdr.resno);
-	TRACE("  red_rc       = %d\n", pkt->hdr.red_rc);
-	TRACE("  repsum_m     = %d\n", pkt->hdr.repsum_m);
-	TRACE("  repsum_ovflid= %d\n", pkt->hdr.repsum_ovflid);
-	TRACE("  cookie --\n");
-	TRACE("   .mcast_id   = %08x\n", pkt->hdr.cookie.mcast_id);
-	TRACE("   .red_id     = %08x\n", pkt->hdr.cookie.red_id);
-	TRACE("   .magic      = %08x\n", pkt->hdr.cookie.magic);
-	TRACE("   .retry      = %08x\n", pkt->hdr.cookie.retry);
+	TRACE_PKT("---------------\n");
+	TRACE_PKT("Reduction packet (%s):\n", dir);
+	TRACE_PKT("  seqno        = %d\n", pkt->hdr.seqno);
+	TRACE_PKT("  arm          = %d\n", pkt->hdr.arm);
+	TRACE_PKT("  op           = %d\n", pkt->hdr.op);
+	TRACE_PKT("  redcnt       = %d\n", pkt->hdr.redcnt);
+	TRACE_PKT("  resno        = %d\n", pkt->hdr.resno);
+	TRACE_PKT("  red_rc       = %d\n", pkt->hdr.red_rc);
+	TRACE_PKT("  repsum_m     = %d\n", pkt->hdr.repsum_m);
+	TRACE_PKT("  repsum_ovflid= %d\n", pkt->hdr.repsum_ovflid);
+	TRACE_PKT("  cookie --\n");
+	TRACE_PKT("   .mcast_id   = %08x\n", pkt->hdr.cookie.mcast_id);
+	TRACE_PKT("   .red_id     = %08x\n", pkt->hdr.cookie.red_id);
+	TRACE_PKT("   .magic      = %08x\n", pkt->hdr.cookie.magic);
+	TRACE_PKT("   .retry      = %08x\n", pkt->hdr.cookie.retry);
 	for (i = 0; i < 4; i++)
-		TRACE("  ival[%d]     = %016lx\n", i, data[i]);
-	TRACE("---------------\n");
+		TRACE_PKT("  ival[%d]     = %016lx\n", i, data[i]);
+	TRACE_PKT("---------------\n");
 #endif
 }
 
@@ -1397,16 +1400,16 @@ void _dump_coll_data(const char *tag, const struct cxip_coll_data *coll_data)
 #if __trc_data
 	int i;
 
-	TRACE("=== Coll data: %s\n", tag);
-	TRACE("  init    = %d\n", coll_data->initialized);
-	TRACE("  red_op  = %d\n", coll_data->red_op);
-	TRACE("  rec_rc  = %d\n", coll_data->red_rc);
-	TRACE("  red_cnt = %d\n", coll_data->red_cnt);
-	TRACE("  data:\n");
+	TRACE_PKT("=== Coll data: %s\n", tag);
+	TRACE_PKT("  init    = %d\n", coll_data->initialized);
+	TRACE_PKT("  red_op  = %d\n", coll_data->red_op);
+	TRACE_PKT("  rec_rc  = %d\n", coll_data->red_rc);
+	TRACE_PKT("  red_cnt = %d\n", coll_data->red_cnt);
+	TRACE_PKT("  data:\n");
 	for (i = 0; i < 4; i++)
-		TRACE(" %016lx\n", coll_data->intval.ival[i]);
-	TRACE("\n");
-	TRACE("===================\n");
+		TRACE_PKT(" %016lx\n", coll_data->intval.ival[i]);
+	TRACE_PKT("\n");
+	TRACE_PKT("===================\n");
 #endif
 }
 
@@ -1721,29 +1724,37 @@ bool is_hw_root(struct cxip_coll_mc *mc_obj)
 static inline
 ssize_t _send_pkt_as_root(struct cxip_coll_reduction *reduction, bool retry)
 {
-	int i, ret;
+	int i, ret, err;
 
+	err = 0;
 	for (i = 0; i < reduction->mc_obj->av_set_obj->fi_addr_cnt; i++) {
 		if (i == reduction->mc_obj->mynode_idx &&
-		    reduction->mc_obj->av_set_obj->fi_addr_cnt > 1)
+		    reduction->mc_obj->av_set_obj->fi_addr_cnt > 1) {
+			TRACE_DEBUG("root: skip=%d\n", i);
 			continue;
+		}
 		ret = cxip_coll_send(reduction, i,
 				     reduction->tx_msg,
 				     sizeof(struct red_pkt),
 				     reduction->mc_obj->reduction_md);
-		if (ret)
-			return ret;
+		TRACE_DEBUG("root: send=%d ret=%d\n", i, ret);
+		if (!err)
+			err = ret;
 	}
-	return FI_SUCCESS;
+	return err;
 }
 
 /* Simulated unicast send of single packet as leaf node to root node */
 static inline
 ssize_t _send_pkt_as_leaf(struct cxip_coll_reduction *reduction, bool retry)
 {
-	return cxip_coll_send(reduction, reduction->mc_obj->hwroot_idx,
+	int ret;
+
+	ret = cxip_coll_send(reduction, reduction->mc_obj->hwroot_idx,
 			      reduction->tx_msg, sizeof(struct red_pkt),
 			      reduction->mc_obj->reduction_md);
+	TRACE_DEBUG("leaf: send=%d ret=%d\n", 1, ret);
+	return ret;
 }
 
 /* Multicast send of single packet from root or leaf node */
@@ -1971,15 +1982,17 @@ bool _is_red_timed_out(struct cxip_coll_reduction *reduction)
 {
 	struct timespec tsnow;
 
-	if (_is_red_first_time(reduction))
+	if (_is_red_first_time(reduction)) {
+		TRACE_DEBUG("=== root first time, retry\n");
 		return true;
+	}
 	_tsget(&tsnow);
 	if (tsnow.tv_sec < reduction->tv_expires.tv_sec)
 		return false;
-	if (tsnow.tv_sec > reduction->tv_expires.tv_sec)
-		return true;
-	if (tsnow.tv_nsec < reduction->tv_expires.tv_nsec)
+	if (tsnow.tv_sec == reduction->tv_expires.tv_sec &&
+	    tsnow.tv_nsec < reduction->tv_expires.tv_nsec)
 		return false;
+	TRACE_DEBUG("=== root timeout, retry\n");
 	return true;
 }
 
@@ -2099,8 +2112,10 @@ static void _progress_leaf(struct cxip_coll_reduction *reduction,
 	/* leaves lead with sending a packet */
 	if (!reduction->pktsent) {
 		/* Avoid first-use incast, retry guaranteed */
-		if (_is_red_first_time(reduction))
+		if (_is_red_first_time(reduction)) {
+			TRACE_DEBUG("=== leaf first time, wait\n");
 			return;
+		}
 
 		/* Don't send if nothing to send yet */
 		if (!reduction->accum.initialized)
@@ -2948,7 +2963,7 @@ static void _start_bcast(void *ptr)
 	jstate->prov_errno = C_RC_INVALID_DFA_FORMAT;
 	/* presume bcast_data is valid from static initialization */
 	jstate->bcast_data.valid = true;
- 	/* at most one endpoint will have create_mcast == true */
+	/* at most one endpoint will have create_mcast == true */
 	if (jstate->create_mcast) {
 		/* first call (only) initiates CURL request */
 		if (!jstate->creating_mcast) {

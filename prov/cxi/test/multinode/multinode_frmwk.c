@@ -67,7 +67,7 @@
 #include "multinode_frmwk.h"
 
 /* If not compiled with DEBUG=1, this is a no-op */
-#define	TRACE CXIP_TRACE
+#define	TRACE(fmt, ...)	CXIP_TRACE(CXIP_TRC_TEST_CODE, fmt, ##__VA_ARGS__)
 
 #define RETURN_ERROR(ret, txt) \
 	if (ret != FI_SUCCESS) { \
