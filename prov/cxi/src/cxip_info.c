@@ -44,6 +44,7 @@ struct fi_domain_attr cxip_prov_key_domain_attr = {
 	.mr_cnt = 100,
 	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
 	.auth_key_size = sizeof(struct cxi_auth_key),
+	.max_ep_auth_key = 1,
 };
 
 /* ODP, provider specified MR keys */
@@ -70,6 +71,7 @@ struct fi_domain_attr cxip_odp_prov_key_domain_attr = {
 	.mr_cnt = 100,
 	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
 	.auth_key_size = sizeof(struct cxi_auth_key),
+	.max_ep_auth_key = 1,
 };
 
 /* No ODP, client specified MR keys */
@@ -96,6 +98,7 @@ struct fi_domain_attr cxip_client_key_domain_attr = {
 	.mr_cnt = 100,
 	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
 	.auth_key_size = sizeof(struct cxi_auth_key),
+	.max_ep_auth_key = 1,
 };
 
 /* ODP, client specified MR keys */
@@ -122,6 +125,7 @@ struct fi_domain_attr cxip_odp_client_key_domain_attr = {
 	.mr_cnt = 100,
 	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
 	.auth_key_size = sizeof(struct cxi_auth_key),
+	.max_ep_auth_key = 1,
 };
 
 struct fi_ep_attr cxip_ep_attr = {
