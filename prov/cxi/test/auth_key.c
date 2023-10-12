@@ -1286,3 +1286,121 @@ Test(auth_key, default_service_id_disabled)
 
 	cxil_close_device(dev);
 }
+
+#define DEFAULT_MAX_EP_AUTH_KEY 1
+
+Test(auth_key, max_ep_auth_key_null_hints)
+{
+	int ret;
+	struct fi_info *info;
+	struct fi_info *tmp;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 NULL, FI_SOURCE, NULL, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	tmp = info;
+	while (tmp) {
+		cr_assert_eq(tmp->domain_attr->max_ep_auth_key,
+			     DEFAULT_MAX_EP_AUTH_KEY,
+			     "Invalid max_ep_auth_key: expected=%d got=%ld",
+			     DEFAULT_MAX_EP_AUTH_KEY,
+			     tmp->domain_attr->max_ep_auth_key);
+		tmp = tmp->next;
+	}
+
+	fi_freeinfo(info);
+}
+
+/* Test fi_getinfo() verification of hints argument. */
+Test(auth_key, zero_max_ep_auth_key_null_hint)
+{
+	int ret;
+	struct fi_info *hints;
+	struct fi_info *info;
+	struct fi_info *tmp;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	hints->domain_attr->max_ep_auth_key = 0;
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 NULL, FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	tmp = info;
+	while (tmp) {
+		cr_assert_eq(tmp->domain_attr->max_ep_auth_key,
+			     DEFAULT_MAX_EP_AUTH_KEY,
+			     "Invalid max_ep_auth_key: expected=%d got=%ld",
+			     DEFAULT_MAX_EP_AUTH_KEY,
+			     tmp->domain_attr->max_ep_auth_key);
+		tmp = tmp->next;
+	}
+
+	fi_freeinfo(hints);
+	fi_freeinfo(info);
+}
+
+/* Test fi_getinfo() verification of hints argument. */
+Test(auth_key, valid_max_ep_auth_key_null_hint)
+{
+	int ret;
+	struct fi_info *hints;
+	struct fi_info *info;
+	struct fi_info *tmp;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	hints->domain_attr->max_ep_auth_key = 1;
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 NULL, FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	tmp = info;
+	while (tmp) {
+		cr_assert_eq(tmp->domain_attr->max_ep_auth_key,
+			     hints->domain_attr->max_ep_auth_key,
+			     "Invalid max_ep_auth_key: expected=%ld got=%ld",
+			     hints->domain_attr->max_ep_auth_key,
+			     tmp->domain_attr->max_ep_auth_key);
+		tmp = tmp->next;
+	}
+
+	fi_freeinfo(hints);
+	fi_freeinfo(info);
+}
+
+/* Test fi_getinfo() verification of hints argument. */
+Test(auth_key, invalid_max_ep_auth_key_null_hint)
+{
+	int ret;
+	struct fi_info *hints;
+	struct fi_info *info;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	hints->domain_attr->max_ep_auth_key = 12345678;
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 NULL, FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, -FI_ENODATA, "fi_getinfo failed: %d", ret);
+
+	fi_freeinfo(hints);
+}
