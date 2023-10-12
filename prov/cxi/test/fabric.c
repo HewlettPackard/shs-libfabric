@@ -142,6 +142,105 @@ Test(getinfo, prov_version)
 		  FI_MINOR(cxit_fi->fabric_attr->prov_version));
 }
 
+Test(getinfo, valid_av_auth_key)
+{
+	int ret;
+	struct fi_info *hints;
+	struct fi_info *info;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->caps = FI_MSG | FI_TAGGED | FI_REMOTE_COMM;
+	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 NULL, FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	fi_freeinfo(hints);
+	fi_freeinfo(info);
+}
+
+Test(getinfo, invalid_av_auth_key_not_null_domain_auth_key)
+{
+	int ret;
+	struct fi_info *hints;
+	struct fi_info *info;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->caps = FI_MSG | FI_TAGGED | FI_REMOTE_COMM;
+	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->domain_attr->auth_key = (void *)hints;
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 NULL, FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, -FI_ENODATA, "fi_getinfo failed: %d", ret);
+
+	hints->domain_attr->auth_key = NULL;
+
+	fi_freeinfo(hints);
+	fi_freeinfo(info);
+}
+
+Test(getinfo, invalid_av_auth_key_not_null_ep_auth_key)
+{
+	int ret;
+	struct fi_info *hints;
+	struct fi_info *info;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->caps = FI_MSG | FI_TAGGED | FI_REMOTE_COMM;
+	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->ep_attr->auth_key = (void *)hints;
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 NULL, FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, -FI_ENODATA, "fi_getinfo failed: %d", ret);
+
+	hints->ep_attr->auth_key = NULL;
+
+	fi_freeinfo(hints);
+	fi_freeinfo(info);
+}
+
+Test(getinfo, invalid_av_auth_key_not_zero_ep_auth_key_size)
+{
+	int ret;
+	struct fi_info *hints;
+	struct fi_info *info;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->caps = FI_MSG | FI_TAGGED | FI_REMOTE_COMM;
+	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->ep_attr->auth_key_size = 1;
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 NULL, FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, -FI_ENODATA, "fi_getinfo failed: %d", ret);
+
+	fi_freeinfo(hints);
+	fi_freeinfo(info);
+}
+
 TestSuite(getinfo_infos, .timeout = CXIT_DEFAULT_TIMEOUT);
 
 #define MAX_INFOS	8
