@@ -88,7 +88,7 @@ static int cxip_av_insert_addr(struct cxip_av *av, struct cxip_addr *addr,
 
 	CXIP_DBG("Inserting nid=%#x pid=%d\n", addr->nic, addr->pid);
 
-	HASH_FIND(hh, av->hash, addr, sizeof(*addr), entry);
+	HASH_FIND(hh, av->av_entry_hash, addr, sizeof(*addr), entry);
 	if (entry) {
 		if (fi_addr)
 			*fi_addr = ofi_buf_index(entry);
@@ -109,7 +109,7 @@ static int cxip_av_insert_addr(struct cxip_av *av, struct cxip_addr *addr,
 
 	memcpy(&entry->addr, addr, sizeof(*addr));
 	ofi_atomic_initialize32(&entry->use_cnt, 1);
-	HASH_ADD(hh, av->hash, addr, sizeof(*addr), entry);
+	HASH_ADD(hh, av->av_entry_hash, addr, sizeof(*addr), entry);
 
 	if (flags & FI_AV_USER_ID)
 		entry->fi_addr = *fi_addr;
@@ -119,7 +119,7 @@ static int cxip_av_insert_addr(struct cxip_av *av, struct cxip_addr *addr,
 	if (fi_addr)
 		*fi_addr = ofi_buf_index(entry);
 
-	ofi_atomic_inc32(&av->entry_cnt);
+	ofi_atomic_inc32(&av->av_entry_cnt);
 
 	return FI_SUCCESS;
 }
@@ -276,7 +276,7 @@ fi_addr_t cxip_av_lookup_fi_addr(struct cxip_av *av,
 
 	cxip_av_read_lock(av);
 
-	HASH_FIND(hh, av->hash, addr, sizeof(*addr), entry);
+	HASH_FIND(hh, av->av_entry_hash, addr, sizeof(*addr), entry);
 	fi_addr = entry ? entry->fi_addr : FI_ADDR_NOTAVAIL;
 
 	cxip_av_unlock(av);
@@ -350,8 +350,8 @@ static void cxip_av_remove_addr(struct cxip_av *av, fi_addr_t fi_addr)
 	CXIP_DBG("Removing nid=%#x pid=%d\n", entry->addr.nic,
 		 entry->addr.pid);
 
-	ofi_atomic_dec32(&av->entry_cnt);
-	HASH_DELETE(hh, av->hash, entry);
+	ofi_atomic_dec32(&av->av_entry_cnt);
+	HASH_DELETE(hh, av->av_entry_hash, entry);
 	ofi_ibuf_free(entry);
 }
 
@@ -389,7 +389,7 @@ static int cxip_av_close(struct fid *fid)
 	if (ofi_atomic_get32(&av->ref))
 		return -FI_EBUSY;
 
-	HASH_CLEAR(hh, av->hash);
+	HASH_CLEAR(hh, av->av_entry_hash);
 	ofi_bufpool_destroy(av->av_entry_pool);
 	free(av);
 
@@ -498,9 +498,9 @@ int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 	ofi_atomic_initialize32(&av->ref, 0);
 	av->lockless = dom->util_domain.threading == FI_THREAD_DOMAIN;
 	pthread_rwlock_init(&av->lock, NULL);
-	av->hash = NULL;
+	av->av_entry_hash = NULL;
 	av->symmetric = !!(attr->flags & FI_SYMMETRIC);
-	ofi_atomic_initialize32(&av->entry_cnt, 0);
+	ofi_atomic_initialize32(&av->av_entry_cnt, 0);
 
 	/* Only FI_AV_TABLE is implemented. */
 	av->type = attr->type == FI_AV_UNSPEC ? FI_AV_TABLE : attr->type;

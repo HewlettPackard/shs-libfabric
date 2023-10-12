@@ -2190,9 +2190,9 @@ struct cxip_av {
 	 * 1. ibuf pool for O(1) lookup on the data path
 	 * 2. hash table for O(1) on the receive path
 	 */
-	struct cxip_av_entry *hash;
+	struct cxip_av_entry *av_entry_hash;
 	struct ofi_bufpool *av_entry_pool;
-	ofi_atomic32_t entry_cnt;
+	ofi_atomic32_t av_entry_cnt;
 
 	/* Single lock is used to protect entire AV. With domain level
 	 * threading, this lock is not used.
@@ -2222,7 +2222,7 @@ int cxip_av_bind_ep(struct cxip_av *av, struct cxip_ep *ep);
 void cxip_av_unbind_ep(struct cxip_av *av, struct cxip_ep *ep);
 static inline int cxip_av_entry_count(struct cxip_av *av)
 {
-	return ofi_atomic_get32(&av->entry_cnt);
+	return ofi_atomic_get32(&av->av_entry_cnt);
 }
 
 /*
