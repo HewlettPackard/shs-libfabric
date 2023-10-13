@@ -26,6 +26,7 @@ static int cxip_do_map(struct ofi_mr_cache *cache, struct ofi_mr_entry *entry)
 	void *ze_handle;
 	void *ze_base_addr;
 	size_t ze_base_size;
+	uint64_t hmem_flags = (uintptr_t)entry->info.ipc_mapped_addr;
 
 	dom = container_of(cache, struct cxip_domain, iomm);
 
@@ -101,7 +102,12 @@ static int cxip_do_map(struct ofi_mr_cache *cache, struct ofi_mr_entry *entry)
 		goto err;
 	}
 
-	if (cxip_env.disable_hmem_dev_register)
+	/* zeHostMalloc() returns FI_HMEM_ZE but this cannot currently be
+	 * registered with ofi_hmem_dev_register(). Thus skip it.
+	 */
+	if (cxip_env.disable_hmem_dev_register ||
+	    ((entry->info.iface == FI_HMEM_ZE) &&
+	      (hmem_flags & FI_HMEM_HOST_ALLOC)))
 		ret = -FI_ENOSYS;
 	else
 		ret = ofi_hmem_dev_register(entry->info.iface,
@@ -354,7 +360,7 @@ static int cxip_map_cache(struct cxip_domain *dom, struct ofi_mr_info *info,
 }
 
 static int cxip_map_nocache(struct cxip_domain *dom, struct fi_mr_attr *attr,
-			    struct cxip_md **md)
+			    uint64_t hmem_flags, struct cxip_md **md)
 {
 	struct cxip_md *uncached_md;
 	uint32_t map_flags;
@@ -438,7 +444,11 @@ static int cxip_map_nocache(struct cxip_domain *dom, struct fi_mr_attr *attr,
 		goto err_free_uncached_md;
 	}
 
-	if (cxip_env.disable_hmem_dev_register)
+	/* zeHostMalloc() returns FI_HMEM_ZE but this cannot currently be
+	 * registered with ofi_hmem_dev_register(). Thus skip it.
+	 */
+	if (cxip_env.disable_hmem_dev_register ||
+	    ((attr->iface == FI_HMEM_ZE) && (hmem_flags & FI_HMEM_HOST_ALLOC)))
 		ret = -FI_ENOSYS;
 	else
 		ret = ofi_hmem_dev_register(attr->iface,
@@ -515,7 +525,7 @@ int cxip_map(struct cxip_domain *dom, const void *buf, unsigned long len,
 		.mr_iov = &iov,
 	};
 	struct ofi_mr_info mr_info = {};
-	uint64_t hmem_flags;
+	uint64_t hmem_flags = 0;
 	struct ofi_mr_entry *entry;
 	bool cache = !(flags & OFI_MR_NOCACHE);
 
@@ -555,10 +565,13 @@ int cxip_map(struct cxip_domain *dom, const void *buf, unsigned long len,
 		mr_info.iface = attr.iface;
 		mr_info.iov = iov;
 
+		/* Overload IPC addr to pass in HMEM flags. */
+		mr_info.ipc_mapped_addr = (void *)hmem_flags;
+
 		return cxip_map_cache(dom, &mr_info, md);
 	}
 
-	return cxip_map_nocache(dom, &attr, md);
+	return cxip_map_nocache(dom, &attr, flags, md);
 }
 
 static void cxip_unmap_cache(struct cxip_md *md)
