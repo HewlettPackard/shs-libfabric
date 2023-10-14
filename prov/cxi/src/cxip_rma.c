@@ -597,11 +597,12 @@ static bool cxip_rma_is_unrestricted(struct cxip_txc *txc, uint64_t key,
 	if (!cxip_generic_is_mr_key_opt(key))
 		return true;
 
-	/* If FI_RMA_EVENTS are requested, it is assumed that the user will bind
-	 * remote MRs to a counter or support remote RMA events. If this is the
-	 * case, unrestircted must always been used.
+	/* If MR indicates remote events are required unrestricted must be
+	 * used. If the MR is a client key, we assume if FI_RMA_EVENTS are
+	 * requested, the remote client key MR is attached to a counter or
+	 * requires RMA events, so unrestricted is used.
 	 */
-	if (txc->ep_obj->caps & FI_RMA_EVENT)
+	if (cxip_generic_is_mr_key_events(txc->ep_obj->caps, key))
 		return true;
 
 	/* If the operation is an RMA write and the user has requested fabric

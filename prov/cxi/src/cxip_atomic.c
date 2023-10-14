@@ -519,7 +519,7 @@ static int cxip_amo_emit_idc(struct cxip_txc *txc,
 			     enum cxip_amo_req_type req_type,
 			     const struct fi_msg_atomic *msg, void *buf,
 			     void *compare, void *result,
-			     struct cxip_mr *result_mr,
+			     struct cxip_mr *result_mr, uint64_t key,
 			     uint64_t remote_offset, union c_fab_addr *dfa,
 			     uint8_t *idx_ext, uint16_t vni,
 			     enum c_atomic_op atomic_op,
@@ -544,13 +544,15 @@ static int cxip_amo_emit_idc(struct cxip_txc *txc,
 	enum cxi_traffic_class_type tc_type;
 	uint64_t hmem_buf;
 	uint64_t hmem_compare;
+	bool tgt_events = cxip_generic_is_mr_key_events(txc->ep_obj->caps,
+							key);
 
 	/* MR desc cannot be value unless hybrid MR desc is enabled. */
 	if (!dom->hybrid_mr_desc)
 		result_mr = NULL;
 
 	/* Restricted AMOs must target optimized MRs without target events */
-	if (restricted && (txc->ep_obj->caps & FI_RMA_EVENT)) {
+	if (restricted && tgt_events) {
 		TXC_WARN(txc,
 			 "Restricted AMOs with FI_RMA_EVENT not supported\n");
 		return -FI_EINVAL;
@@ -566,7 +568,7 @@ static int cxip_amo_emit_idc(struct cxip_txc *txc,
 	 * FI_RMA_EVENT is enabled, this would results in two remote MR counter
 	 * increments. Thus, this functionality cannot be supported.
 	 */
-	if (fetching_amo_flush && txc->ep_obj->caps & FI_RMA_EVENT) {
+	if (fetching_amo_flush && tgt_events) {
 		TXC_WARN(txc,
 			 "Fetching AMO with FI_DELIVERY_COMPLETE not supported with FI_RMA_EVENT\n");
 		return -FI_EINVAL;
@@ -1083,11 +1085,12 @@ static int cxip_amo_emit_dma(struct cxip_txc *txc,
 		result_mr = NULL;
 	}
 
-	/* Since fetching AMO with flush results in two commands, if
-	 * FI_RMA_EVENT is enabled, this would results in two remote MR counter
+	/* Since fetching AMO with flush results in two commands, if the
+	 * target MR needs events, this would results in two remote MR counter
 	 * increments. Thus, this functionality cannot be supported.
 	 */
-	if (fetching_amo_flush && txc->ep_obj->caps & FI_RMA_EVENT) {
+	if (fetching_amo_flush &&
+	    cxip_generic_is_mr_key_events(txc->ep_obj->caps, key)) {
 		TXC_WARN(txc,
 			 "Fetching AMO with FI_DELIVERY_COMPLETE not supported with FI_RMA_EVENT\n");
 		return -FI_EINVAL;
@@ -1546,10 +1549,10 @@ int cxip_amo_common(enum cxip_amo_req_type req_type, struct cxip_txc *txc,
 		      &idx_ext);
 	if (idc)
 		ret = cxip_amo_emit_idc(txc, req_type, msg, buf, compare,
-					result, result_mr, remote_offset, &dfa,
-					&idx_ext, vni, atomic_op, cswap_op,
-					atomic_type, atomic_type_len, flags,
-					tclass);
+					result, result_mr, key, remote_offset,
+					&dfa, &idx_ext, vni, atomic_op,
+					cswap_op, atomic_type, atomic_type_len,
+					flags, tclass);
 	else
 		ret = cxip_amo_emit_dma(txc, req_type, msg, buf, compare,
 					result, buf_mr, result_mr, key,

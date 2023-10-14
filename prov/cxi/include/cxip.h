@@ -438,13 +438,14 @@ struct cxip_mr_key {
 		struct {
 			/* Non-cached key consists of unique MR ID and sequence
 			 * number. The same MR ID can be used with sequence
-			 * number to create 2^45 unique keys. That is, a
+			 * number to create 2^44 unique keys. That is, a
 			 * single standard MR repeatedly created and destroyed
-			 * every micro-second, would take over a year before
+			 * every micro-second, would take months before
 			 * it repeated.
 			 */
 			uint64_t id     : 16;  /* Unique - 64K MR */
-			uint64_t seqnum : 45;  /* Sequence with random seed */
+			uint64_t seqnum : 44;  /* Sequence with random seed */
+			uint64_t events : 1;   /* Requires event generation */
 			uint64_t unused3: 2;
 			uint64_t is_prov: 1;
 			/* Overloads CXIP_CTRL_LE_TYPE_MR and must be cleared
@@ -503,6 +504,7 @@ uint64_t cxip_adjust_remote_offset(uint64_t *addr, uint64_t key)
 int cxip_generic_mr_key_to_ptl_idx(struct cxip_domain *dom,
 				   uint64_t key, bool write);
 bool cxip_generic_is_mr_key_opt(uint64_t key);
+bool cxip_generic_is_mr_key_events(uint64_t caps, uint64_t key);
 bool cxip_generic_is_valid_mr_key(uint64_t key);
 
 /* Messaging Match Bit layout */

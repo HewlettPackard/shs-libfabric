@@ -369,6 +369,9 @@ Test(mr_event, counts)
 	struct fi_ioc result_ioc;
 	struct fi_rma_ioc rma_ioc;
 
+	/* Need remote counters */
+	cxit_create_rem_cntrs();
+
 	src_buf = malloc(src_len);
 	cr_assert_not_null(src_buf, "src_buf alloc failed");
 
@@ -386,6 +389,7 @@ Test(mr_event, counts)
 	ret = fi_mr_bind(mr, &cxit_ep->fid, 0);
 	cr_assert(ret == FI_SUCCESS);
 
+	cr_assert(cxit_rem_cntr != NULL);
 	ret = fi_mr_bind(mr, &cxit_rem_cntr->fid, FI_REMOTE_WRITE);
 	cr_assert(ret == FI_SUCCESS);
 

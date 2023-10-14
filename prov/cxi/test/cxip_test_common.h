@@ -58,6 +58,8 @@ void cxit_destroy_eq(void);
 void cxit_create_cqs(void);
 void cxit_destroy_cqs(void);
 void cxit_bind_cqs(void);
+void cxit_create_local_cntrs(void);
+void cxit_create_rem_cntrs(void);
 void cxit_create_cntrs(void);
 void cxit_destroy_cntrs(void);
 void cxit_bind_cntrs(void);

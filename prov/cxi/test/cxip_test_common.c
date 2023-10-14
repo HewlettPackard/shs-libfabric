@@ -314,7 +314,15 @@ void cxit_bind_cqs(void)
 	cr_assert(!ret, "fi_ep_bind RX CQ");
 }
 
-void cxit_create_cntrs(void)
+void cxit_create_rem_cntrs(void)
+{
+	int ret;
+
+	ret = fi_cntr_open(cxit_domain, NULL, &cxit_rem_cntr, NULL);
+	cr_assert(ret == FI_SUCCESS, "fi_cntr_open (rem)");
+}
+
+void cxit_create_local_cntrs(void)
 {
 	int ret;
 
@@ -333,51 +341,72 @@ void cxit_create_cntrs(void)
 	ret = fi_cntr_open(cxit_domain, NULL, &cxit_write_cntr,
 			   NULL);
 	cr_assert(ret == FI_SUCCESS, "fi_cntr_open (write)");
+}
 
-	ret = fi_cntr_open(cxit_domain, NULL, &cxit_rem_cntr, NULL);
-	cr_assert(ret == FI_SUCCESS, "fi_cntr_open (rem)");
+void cxit_create_cntrs(void)
+{
+	cxit_create_local_cntrs();
+	cxit_create_rem_cntrs();
 }
 
 void cxit_destroy_cntrs(void)
 {
 	int ret;
 
-	ret = fi_close(&cxit_send_cntr->fid);
-	cr_assert(ret == FI_SUCCESS, "fi_close send_cntr");
-	cxit_send_cntr = NULL;
+	if (cxit_send_cntr) {
+		ret = fi_close(&cxit_send_cntr->fid);
+		cr_assert(ret == FI_SUCCESS, "fi_close send_cntr");
+		cxit_send_cntr = NULL;
+	}
 
-	ret = fi_close(&cxit_recv_cntr->fid);
-	cr_assert(ret == FI_SUCCESS, "fi_close recv_cntr");
-	cxit_recv_cntr = NULL;
+	if (cxit_recv_cntr) {
+		ret = fi_close(&cxit_recv_cntr->fid);
+		cr_assert(ret == FI_SUCCESS, "fi_close recv_cntr");
+		cxit_recv_cntr = NULL;
+	}
 
-	ret = fi_close(&cxit_read_cntr->fid);
-	cr_assert(ret == FI_SUCCESS, "fi_close read_cntr");
-	cxit_read_cntr = NULL;
+	if (cxit_read_cntr) {
+		ret = fi_close(&cxit_read_cntr->fid);
+		cr_assert(ret == FI_SUCCESS, "fi_close read_cntr");
+		cxit_read_cntr = NULL;
+	}
 
-	ret = fi_close(&cxit_write_cntr->fid);
-	cr_assert(ret == FI_SUCCESS, "fi_close write_cntr");
-	cxit_write_cntr = NULL;
+	if (cxit_write_cntr) {
+		ret = fi_close(&cxit_write_cntr->fid);
+		cr_assert(ret == FI_SUCCESS, "fi_close write_cntr");
+		cxit_write_cntr = NULL;
+	}
 
-	ret = fi_close(&cxit_rem_cntr->fid);
-	cr_assert(ret == FI_SUCCESS, "fi_close rem_cntr");
-	cxit_rem_cntr = NULL;
+	if (cxit_rem_cntr) {
+		ret = fi_close(&cxit_rem_cntr->fid);
+		cr_assert(ret == FI_SUCCESS, "fi_close rem_cntr");
+		cxit_rem_cntr = NULL;
+	}
 }
 
 void cxit_bind_cntrs(void)
 {
 	int ret;
 
-	ret = fi_ep_bind(cxit_ep, &cxit_send_cntr->fid, FI_SEND);
-	cr_assert(!ret, "fi_ep_bind send_cntr");
+	if (cxit_send_cntr) {
+		ret = fi_ep_bind(cxit_ep, &cxit_send_cntr->fid, FI_SEND);
+		cr_assert(!ret, "fi_ep_bind send_cntr");
+	}
 
-	ret = fi_ep_bind(cxit_ep, &cxit_recv_cntr->fid, FI_RECV);
-	cr_assert(!ret, "fi_ep_bind recv_cntr");
+	if (cxit_recv_cntr) {
+		ret = fi_ep_bind(cxit_ep, &cxit_recv_cntr->fid, FI_RECV);
+		cr_assert(!ret, "fi_ep_bind recv_cntr");
+	}
 
-	ret = fi_ep_bind(cxit_ep, &cxit_read_cntr->fid, FI_READ);
-	cr_assert(!ret, "fi_ep_bind read_cntr");
+	if (cxit_read_cntr) {
+		ret = fi_ep_bind(cxit_ep, &cxit_read_cntr->fid, FI_READ);
+		cr_assert(!ret, "fi_ep_bind read_cntr");
+	}
 
-	ret = fi_ep_bind(cxit_ep, &cxit_write_cntr->fid, FI_WRITE);
-	cr_assert(!ret, "fi_ep_bind write_cntr");
+	if (cxit_write_cntr) {
+		ret = fi_ep_bind(cxit_ep, &cxit_write_cntr->fid, FI_WRITE);
+		cr_assert(!ret, "fi_ep_bind write_cntr");
+	}
 }
 
 void cxit_create_av(void)
@@ -536,8 +565,11 @@ void cxit_setup_enabled_ep_disable_fi_rma_event(void)
 	cxit_bind_eq();
 	cxit_create_cqs();
 	cxit_bind_cqs();
-	cxit_create_cntrs();
+
+	/* No FI_RMA_EVENT, don't create/bind remote counters */
+	cxit_create_local_cntrs();
 	cxit_bind_cntrs();
+
 	cxit_create_av();
 	cxit_bind_av();
 
@@ -584,8 +616,11 @@ void cxit_setup_enabled_ep_mr_events(void)
 	cxit_bind_eq();
 	cxit_create_cqs();
 	cxit_bind_cqs();
-	cxit_create_cntrs();
+
+	/* No FI_RMA_EVENT, so only create local counters */
+	cxit_create_local_cntrs();
 	cxit_bind_cntrs();
+
 	cxit_create_av();
 	cxit_bind_av();
 
@@ -694,6 +729,7 @@ void cxit_setup_rma_mr_events(void)
 {
 	int ret;
 	struct cxip_addr fake_addr = {.nic = 0xad, .pid = 0xbc};
+	bool disable = false;
 
 	cxit_setup_enabled_ep_mr_events();
 
@@ -705,6 +741,9 @@ void cxit_setup_rma_mr_events(void)
 	ret = fi_av_insert(cxit_av, (void *)&cxit_ep_addr, 1, &cxit_ep_fi_addr,
 			   0, NULL);
 	cr_assert(ret == 1);
+
+	/* Ensure if FI_MR_PROV_KEY cache will not be used */
+	fi_control(&cxit_domain->fid, FI_OPT_CXI_SET_PROV_KEY_CACHE, &disable);
 }
 
 void cxit_bind_cqs_hybrid_mr_desc(void)
@@ -780,8 +819,11 @@ void cxit_setup_enabled_ep_hybrid_mr_desc(void)
 	cxit_bind_eq();
 	cxit_create_cqs();
 	cxit_bind_cqs_hybrid_mr_desc();
-	cxit_create_cntrs();
+
+	/* No FI_RMA_EVENT, don't create/bind remote counters */
+	cxit_create_local_cntrs();
 	cxit_bind_cntrs();
+
 	cxit_create_av();
 	cxit_bind_av();
 

@@ -796,6 +796,8 @@ static int cxip_prov_init_mr_key(struct cxip_mr *mr, uint64_t req_key)
 /*
  * cxip_prov_cache_init_mr_key() - Generate a provider key for
  * a cached MR.
+ *
+ * Note cached MR do not support counters or target events.
  */
 static int cxip_prov_cache_init_mr_key(struct cxip_mr *mr,
 				       uint64_t req_key)
@@ -884,6 +886,40 @@ bool cxip_generic_is_mr_key_opt(uint64_t key)
 		return cxip_prov_mr_key_opt(key);
 
 	return cxip_mr_key_opt(key);
+}
+
+static bool cxip_prov_mr_key_events(uint64_t key)
+{
+	struct cxip_mr_key cxip_key = {
+		.raw = key,
+	};
+
+	/* Cached keys can not be bound to counters or require RMA events,
+	 * the "events" field is not defined.
+	 */
+	if (cxip_key.cached)
+		return false;
+
+	if (cxip_key.events)
+		return true;
+
+	return false;
+}
+
+/* If CAPs or MR Key indicate events are required at the target */
+bool cxip_generic_is_mr_key_events(uint64_t caps, uint64_t key)
+{
+	struct cxip_mr_key cxip_key = {
+		.raw = key,
+	};
+
+	if (cxip_key.is_prov)
+		return cxip_prov_mr_key_events(key);
+
+	/* Client keys cannot indicate if they require events and
+	 * rely on FI_RMA_EVENT being set on source and target.
+	 */
+	return !!(caps & FI_RMA_EVENT);
 }
 
 /*

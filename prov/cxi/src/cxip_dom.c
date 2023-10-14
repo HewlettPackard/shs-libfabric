@@ -87,6 +87,12 @@ int cxip_domain_prov_mr_id_alloc(struct cxip_domain *dom,
 	key.is_prov = 1;
 	key.id = buffer_id;
 	key.seqnum = ++dom->prov_key_seqnum;
+
+	/* Let the source know events are required and it should use
+	 * unrestricted operations.
+	 */
+	key.events = mr->count_events || mr->rma_events || mr->cntr;
+
 	key.opt = cxip_env.optimized_mrs &&
 			key.id < CXIP_PTL_IDX_PROV_MR_OPT_CNT;
 	mr->key = key.raw;

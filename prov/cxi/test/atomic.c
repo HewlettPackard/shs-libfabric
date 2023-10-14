@@ -39,8 +39,11 @@ static void *_cxit_create_mr(struct mem_region *mr, uint64_t *key)
 	ret = fi_mr_bind(mr->mr, &cxit_ep->fid, 0);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind(ep) failed %d", ret);
 
-	ret = fi_mr_bind(mr->mr, &cxit_rem_cntr->fid, FI_REMOTE_WRITE);
-	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind(cntr) failed %d", ret);
+	if (cxit_rem_cntr) {
+		ret = fi_mr_bind(mr->mr, &cxit_rem_cntr->fid, FI_REMOTE_WRITE);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind(cntr) failed %d",
+			     ret);
+	}
 
 	ret = fi_mr_enable(mr->mr);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_enable failed %d", ret);
@@ -2287,6 +2290,11 @@ Test(atomic_flush, fetch_flush)
 	uint64_t flushes_start;
 	uint64_t flushes_end;
 	uint64_t key = RMA_WIN_KEY;
+	bool enable = false;
+
+	/* If FI_MR_PROV_KEY disable the remote provider key cache */
+	fi_control(&cxit_domain->fid, FI_OPT_CXI_SET_PROV_KEY_CACHE,
+		   &enable);
 
 	ret = cxit_dom_read_cntr(C_CNTR_IXE_DMAWR_FLUSH_REQS,
 				 &flushes_start, NULL, true);
@@ -2356,6 +2364,11 @@ Test(atomic_flush, fetch_flush_bounds_err)
 	struct fi_ioc result_ioc = { .count = 1, .addr = &result };
 	uint64_t key = RMA_WIN_KEY;
 	int ret;
+	bool enable = false;
+
+	/* If FI_MR_PROV_KEY disable the remote provider key cache */
+	fi_control(&cxit_domain->fid, FI_OPT_CXI_SET_PROV_KEY_CACHE,
+		   &enable);
 
 	rma = _cxit_create_mr(&mr, &key);
 	cr_assert_not_null(rma);
