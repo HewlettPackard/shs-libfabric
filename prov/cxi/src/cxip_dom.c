@@ -1391,6 +1391,7 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 		cxi_domain->tclass = FI_TC_BEST_EFFORT;
 	}
 
+	cxi_domain->auth_key_entry_max = info->domain_attr->max_ep_auth_key;
 	cxi_domain->util_domain.domain_fid.fid.ops = &cxip_dom_fi_ops;
 	cxi_domain->util_domain.domain_fid.ops = &cxip_dom_ops;
 	cxi_domain->util_domain.domain_fid.mr = &cxip_dom_mr_ops;

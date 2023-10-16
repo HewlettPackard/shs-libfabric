@@ -355,22 +355,54 @@ static void cxip_av_remove_addr(struct cxip_av *av, fi_addr_t fi_addr)
 	ofi_ibuf_free(entry);
 }
 
+static void cxip_av_remove_auth_key(struct cxip_av *av, fi_addr_t fi_addr)
+{
+	struct cxip_av_auth_key_entry *entry;
+	int use_cnt;
+
+	entry = ofi_bufpool_get_ibuf(av->auth_key_entry_pool, fi_addr);
+	if (!entry) {
+		CXIP_WARN("Invalid fi_addr: %#lx\n", fi_addr);
+		return;
+	}
+
+	use_cnt = ofi_atomic_dec32(&entry->use_cnt);
+	if (use_cnt)
+		return;
+
+	CXIP_DBG("vni=%d\n", entry->key.vni);
+
+	ofi_atomic_dec32(&av->auth_key_entry_cnt);
+	dlist_remove(&entry->entry);
+	HASH_DELETE(hh, av->auth_key_entry_hash, entry);
+	ofi_ibuf_free(entry);
+}
+
+#define AV_REMOVE_VALID_FLAGS FI_AUTH_KEY
+
 static int cxip_av_remove(struct fid_av *fid, fi_addr_t *fi_addr,
 			  size_t count, uint64_t flags)
 {
 	struct cxip_av *av = container_of(fid, struct cxip_av, av_fid.fid);
+	uint64_t unsupported_flags = flags & ~AV_REMOVE_VALID_FLAGS;
 	size_t i;
 
-	if (flags) {
-		CXIP_WARN("Unsupported flags: %#lx\n", flags);
+	if (unsupported_flags) {
+		CXIP_WARN("Unsupported flags: %#lx\n", unsupported_flags);
 		return -FI_EINVAL;
 	}
 
+
+	cxip_av_write_lock(av);
+
 	for (i = 0; i < count; i++) {
-		cxip_av_write_lock(av);
-		cxip_av_remove_addr(av, fi_addr[i]);
-		cxip_av_unlock(av);
+		if (flags & FI_AUTH_KEY)
+			cxip_av_remove_auth_key(av, fi_addr[i]);
+		else
+			cxip_av_remove_addr(av, fi_addr[i]);
 	}
+
+	cxip_av_unlock(av);
 
 	return FI_SUCCESS;
 }
@@ -389,11 +421,106 @@ static int cxip_av_close(struct fid *fid)
 	if (ofi_atomic_get32(&av->ref))
 		return -FI_EBUSY;
 
+	HASH_CLEAR(hh, av->auth_key_entry_hash);
+	ofi_bufpool_destroy(av->auth_key_entry_pool);
 	HASH_CLEAR(hh, av->av_entry_hash);
 	ofi_bufpool_destroy(av->av_entry_pool);
 	free(av);
 
 	ofi_atomic_dec32(&dom->ref);
+
+	return FI_SUCCESS;
+}
+
+static int cxip_av_insert_auth_key_validate_args(struct cxip_av *cxi_av,
+						 const void *auth_key,
+						 size_t auth_key_size,
+						 fi_addr_t *fi_addr,
+						 uint64_t flags)
+{
+	if (!cxi_av->av_auth_key) {
+		CXIP_WARN("Domain not configured with FI_AV_AUTH_KEY\n");
+		return -FI_EINVAL;
+	}
+
+	if (!auth_key) {
+		CXIP_WARN("NULL auth_key\n");
+		return -FI_EINVAL;
+	}
+
+	if (auth_key_size != sizeof(struct cxi_auth_key)) {
+		CXIP_WARN("Bad auth_key_size\n");
+		return -FI_EINVAL;
+	}
+
+	if (!fi_addr) {
+		CXIP_WARN("NULL fi_addr\n");
+		return -FI_EINVAL;
+	}
+
+	if (flags) {
+		CXIP_WARN("Invalid flags\n");
+		return -FI_EINVAL;
+	}
+
+	if (ofi_atomic_get32(&cxi_av->auth_key_entry_cnt) >=
+	    cxi_av->auth_key_entry_max) {
+		CXIP_WARN("AV EP max auth key count limit reached\n");
+		return -FI_ENOSPC;
+	}
+
+	return FI_SUCCESS;
+}
+
+static int cxip_av_insert_auth_key(struct fid_av *av, const void *auth_key,
+				   size_t auth_key_size, fi_addr_t *fi_addr,
+				   uint64_t flags)
+{
+	struct cxip_av *cxi_av = container_of(av, struct cxip_av, av_fid);
+	struct cxip_av_auth_key_entry *entry;
+	struct cxi_auth_key key;
+	int ret;
+
+	ret = cxip_av_insert_auth_key_validate_args(cxi_av, auth_key,
+						    auth_key_size, fi_addr,
+						    flags);
+	if (ret != FI_SUCCESS)
+		return ret;
+
+	/* Use a bounce buffer for authorization key to clear the service field.
+	 * The service field is not needed for this AV auth key.
+	 */
+	memcpy(&key, auth_key, sizeof(key));
+	key.svc_id = 0;
+
+	CXIP_DBG("Inserting VNI=%d\n", key.vni);
+
+	cxip_av_write_lock(cxi_av);
+
+	HASH_FIND(hh, cxi_av->auth_key_entry_hash, &key, sizeof(key), entry);
+	if (entry) {
+		*fi_addr = ofi_buf_index(entry);
+		if (ofi_atomic_inc32(&entry->use_cnt) > 1)
+			CXIP_WARN("vni=%d inserted multiple times\n", key.vni);
+
+		return FI_SUCCESS;
+	}
+
+	entry = ofi_ibuf_alloc(cxi_av->auth_key_entry_pool);
+	if (!entry) {
+		CXIP_WARN("Failed to allocated AV auth key entry memory\n");
+		return -FI_ENOMEM;
+	}
+
+	memcpy(&entry->key, &key, sizeof(key));
+	ofi_atomic_initialize32(&entry->use_cnt, 1);
+	HASH_ADD(hh, cxi_av->auth_key_entry_hash, key, sizeof(key), entry);
+	dlist_insert_tail(&entry->entry, &cxi_av->auth_key_entry_list);
+	ofi_atomic_inc32(&cxi_av->auth_key_entry_cnt);
+
+	*fi_addr = ofi_buf_index(entry);
+
+	cxip_av_unlock(cxi_av);
 
 	return FI_SUCCESS;
 }
@@ -407,6 +534,7 @@ static struct fi_ops_av cxip_av_fid_ops = {
 	.lookup = cxip_av_lookup,
 	.straddr = cxip_av_straddr,
 	.av_set = cxip_av_set,
+	.insert_auth_key = cxip_av_insert_auth_key,
 };
 
 static struct fi_ops cxip_av_fi_ops = {
@@ -502,6 +630,10 @@ int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 	av->symmetric = !!(attr->flags & FI_SYMMETRIC);
 	ofi_atomic_initialize32(&av->av_entry_cnt, 0);
 	av->av_auth_key = dom->av_auth_key;
+	av->auth_key_entry_hash = NULL;
+	dlist_init(&av->auth_key_entry_list);
+	ofi_atomic_initialize32(&av->auth_key_entry_cnt, 0);
+	av->auth_key_entry_max = dom->auth_key_entry_max;
 
 	/* Only FI_AV_TABLE is implemented. */
 	av->type = attr->type == FI_AV_UNSPEC ? FI_AV_TABLE : attr->type;
@@ -512,8 +644,16 @@ int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 	pool_attr.chunk_cnt = orig_size;
 	ret = ofi_bufpool_create_attr(&pool_attr, &av->av_entry_pool);
 	if (ret) {
-		CXIP_WARN("Faild to allocate buffer pool: %d\n", ret);
+		CXIP_WARN("Failed to allocate buffer pool: %d\n", ret);
 		goto err_free_av;
+	}
+
+	pool_attr.size = sizeof(struct cxip_av_auth_key_entry);
+	pool_attr.chunk_cnt = av->auth_key_entry_max;
+	ret = ofi_bufpool_create_attr(&pool_attr, &av->auth_key_entry_pool);
+	if (ret) {
+		CXIP_WARN("Failed to allocate buffer pool: %d\n", ret);
+		goto err_free_av_buf_pool;
 	}
 
 	ofi_atomic_inc32(&dom->ref);
@@ -522,6 +662,8 @@ int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 
 	return FI_SUCCESS;
 
+err_free_av_buf_pool:
+	ofi_bufpool_destroy(av->av_entry_pool);
 err_free_av:
 	free(av);
 err:

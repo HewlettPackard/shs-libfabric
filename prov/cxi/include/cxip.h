@@ -870,6 +870,9 @@ struct cxip_domain {
 
 	/* This is only valid if FI_AV_AUTH_KEY is false. */
 	struct cxi_auth_key auth_key;
+
+	/* Maximum number of auth keys requested by user. */
+	size_t auth_key_entry_max;
 };
 
 static inline bool cxip_domain_mr_cache_enabled(struct cxip_domain *dom)
@@ -2187,6 +2190,13 @@ struct cxip_av_entry {
 	fi_addr_t fi_addr;
 };
 
+struct cxip_av_auth_key_entry {
+	ofi_atomic32_t use_cnt;
+	UT_hash_handle hh;
+	struct dlist_entry entry;
+	struct cxi_auth_key key;
+};
+
 struct cxip_av {
 	struct fid_av av_fid;
 	struct cxip_domain *domain;
@@ -2204,6 +2214,18 @@ struct cxip_av {
 	struct cxip_av_entry *av_entry_hash;
 	struct ofi_bufpool *av_entry_pool;
 	ofi_atomic32_t av_entry_cnt;
+
+	/* Memory used to support AV authorization key. Three data structures
+	 * are needed.
+	 * 1. ibuf pool for memory allocation and lookup O(1) access.
+	 * 2. hash table for O(1) reverse lookup
+	 * 3. List for iterating
+	 */
+	struct cxip_av_auth_key_entry *auth_key_entry_hash;
+	struct ofi_bufpool *auth_key_entry_pool;
+	struct dlist_entry auth_key_entry_list;
+	ofi_atomic32_t auth_key_entry_cnt;
+	size_t auth_key_entry_max;
 
 	/* Single lock is used to protect entire AV. With domain level
 	 * threading, this lock is not used.
