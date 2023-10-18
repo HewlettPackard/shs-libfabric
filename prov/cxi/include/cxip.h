@@ -3206,4 +3206,7 @@ cxip_txc_copy_from_hmem(struct cxip_txc *txc, struct cxip_md *hmem_md,
 size_t cxip_ep_get_unexp_msgs(struct fid_ep *fid_ep,
 			      struct fi_cq_tagged_entry *entry, size_t count,
 			      fi_addr_t *src_addr, size_t *ux_count);
+
+int cxip_nic_alloc(struct cxip_if *nic_if, struct fid_nic **fid_nic);
+
 #endif
