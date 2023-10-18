@@ -9,6 +9,36 @@
 #ifndef _FI_CXI_EXT_H_
 #define _FI_CXI_EXT_H_
 
+/* CXI provider specific NIC attributes. This information is returned in
+ * fi_info::nid::prov_attr.
+
+ * Users can optionally modify some fields. Depending on the field adjusted,
+ * this can impact fi_domain() or other endpoint allocation behavior.
+ */
+
+#define FI_CXI_NIC_ATTR_VER 1U
+
+struct cxip_nic_attr {
+	/* Version of NIC attr. Must remain at the top of this struct. */
+	uint32_t version;
+
+	/* NIC address. Should never be modified. */
+	const unsigned int addr;
+
+	/* On output from fi_getinfo(), rgroup_id will be set in the following
+	 * order:
+	 * 1. Resource group ID returned from SLINGSHOT_SVC_ID environment
+	 * variable
+	 * 2. First resource group ID with matching UID
+	 * 3. First resource group ID with matching GID
+	 * 4. First resource group ID with open permissions
+	 */
+	const unsigned int default_rgroup_id;
+
+	/* Default VNI used with the rgroup ID. */
+	const unsigned int default_vni;
+};
+
 /*
  * TODO: The following should be integrated into the include/rdma/fi_ext.h
  * and are use for provider specific fi_control() operations.
@@ -18,6 +48,9 @@
 enum {
 	FI_OPT_CXI_SET_TCLASS = -FI_PROV_SPECIFIC_CXI,	/* uint32_t */
 	FI_OPT_CXI_SET_MSG_ORDER,			/* uint64_t */
+
+	/* fid_nic control operation to refresh NIC attributes. */
+	FI_OPT_CXI_NIC_REFRESH_ATTR,
 };
 
 /*

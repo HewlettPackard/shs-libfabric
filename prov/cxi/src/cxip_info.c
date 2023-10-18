@@ -282,6 +282,7 @@ err:
 static int cxip_info_init(void)
 {
 	struct slist_entry *entry, *prev __attribute__ ((unused));
+	struct cxip_if *tmp;
 	struct cxip_if *nic_if;
 	struct fi_info **fi_list = (void *)&cxip_util_prov.info;
 	struct fi_info *fi;
@@ -289,7 +290,14 @@ static int cxip_info_init(void)
 	int ret;
 
 	slist_foreach(&cxip_if_list, entry, prev) {
-		nic_if = container_of(entry, struct cxip_if, if_entry);
+		/* Bit hacky... but use cxip_if list entry as input to
+		 * cxip_get_if(). cxip_get_if() will init a cxil_dev which is
+		 * used to build a NIC info.
+		 */
+		tmp = container_of(entry, struct cxip_if, if_entry);
+		ret = cxip_get_if(tmp->info->nic_addr, &nic_if);
+		if (ret != FI_SUCCESS)
+			continue;
 
 		/* TODO: Remove check before pushing upstream. This is a
 		 * CXI provider helper to not export the new constants if
@@ -302,9 +310,11 @@ static int cxip_info_init(void)
 		for (ndx = 0; ndx < ARRAY_SIZE(cxip_infos); ndx++) {
 			ret = cxip_info_alloc(nic_if, ndx, &fi);
 			if (ret == -FI_ENODATA)
-				continue;
-			if (ret != FI_SUCCESS)
+				continue;;
+			if (ret != FI_SUCCESS) {
+				cxip_put_if(nic_if);
 				goto free_info;
+			}
 
 			CXIP_DBG("%s info created\n",
 				 nic_if->info->device_name);
@@ -317,16 +327,20 @@ static int cxip_info_init(void)
 		 * to handle client usage of old values for FI_ADDR_CXI and
 		 * FI_PROTO_CXI.
 		 */
-		if (!ofi_cxi_compat)
+		if (!ofi_cxi_compat) {
+			cxip_put_if(nic_if);
 			continue;
+		}
 
 add_compat:
 		for (ndx = 0; ndx < ARRAY_SIZE(cxip_infos); ndx++) {
 			ret = cxip_info_alloc(nic_if, ndx, &fi);
 			if (ret == -FI_ENODATA)
 				continue;
-			if (ret != FI_SUCCESS)
+			if (ret != FI_SUCCESS) {
+				cxip_put_if(nic_if);
 				goto free_info;
+			}
 
 			fi->addr_format = FI_ADDR_OPX;
 			fi->ep_attr->protocol = FI_PROTO_OPX;
@@ -336,6 +350,8 @@ add_compat:
 			*fi_list = fi;
 			fi_list = &(fi->next);
 		}
+
+		cxip_put_if(nic_if);
 	}
 
 	return FI_SUCCESS;
@@ -1099,6 +1115,8 @@ static void cxip_alter_info(struct fi_info *info, const struct fi_info *hints,
 			    uint32_t api_version)
 {
 	for (; info; info = info->next) {
+		fi_control(&info->nic->fid, FI_OPT_CXI_NIC_REFRESH_ATTR, NULL);
+
 		cxip_alter_caps(info, hints);
 		cxip_alter_tx_attr(info->tx_attr, hints ? hints->tx_attr : NULL,
 				   info->caps);
@@ -1191,265 +1209,9 @@ static int cxip_alter_auth_key_validate(struct fi_info **info)
 	return FI_SUCCESS;
 }
 
-static int cxip_gen_auth_key_ss_env_get_vni(void)
-{
-	char *vni_str;
-	char *vni_str_dup;
-	char *token;
-	int vni = -FI_EINVAL;
-
-	vni_str = getenv("SLINGSHOT_VNIS");
-	if (!vni_str) {
-		CXIP_INFO("SLINGSHOT_VNIS not found\n");
-		return -FI_ENOSYS;
-	}
-
-	vni_str_dup = strdup(vni_str);
-	if (!vni_str_dup)
-		return -FI_ENOMEM;
-
-	/* Index/token zero is the per job-step VNI. Only use this value. Index
-	 * one is the inter-job-step VNI. Ignore this one.
-	 */
-	token = strtok(vni_str_dup, ",");
-	if (token)
-		vni = (uint16_t)atoi(token);
-	else
-		CXIP_WARN("VNI not found in SLINGSHOT_VNIS: %s\n", vni_str);
-
-	free(vni_str_dup);
-
-	return vni;
-}
-
-static int cxip_gen_auth_key_ss_env_get_svc_id(struct fi_info *info)
-{
-	char *svc_id_str;
-	char *dev_str;
-	char *svc_id_str_dup;
-	char *dev_str_dup;
-	int device_index;
-	char *token;
-	bool found;
-	int svc_id;
-
-	if (!info->domain_attr->name) {
-		CXIP_WARN("Domain attr name is NULL\n");
-		return -FI_EINVAL;
-	}
-
-	svc_id_str = getenv("SLINGSHOT_SVC_IDS");
-	if (!svc_id_str) {
-		CXIP_INFO("SLINGSHOT_SVC_IDS not found\n");
-		return -FI_ENOSYS;
-	}
-
-	dev_str = getenv("SLINGSHOT_DEVICES");
-	if (!dev_str) {
-		CXIP_INFO("SLINGSHOT_DEVICES not found\n");
-		return -FI_ENOSYS;
-	}
-
-	dev_str_dup = strdup(dev_str);
-	if (!dev_str_dup)
-		return -FI_ENOMEM;
-
-	found = false;
-	device_index = 0;
-	token = strtok(dev_str_dup, ",");
-	while (token != NULL) {
-		if (strcmp(token, info->domain_attr->name) == 0) {
-			found = true;
-			break;
-		}
-
-		device_index++;
-		token = strtok(NULL, ",");
-	}
-
-	free(dev_str_dup);
-
-	if (!found) {
-		CXIP_WARN("Failed to find %s in SLINGSHOT_DEVICES: %s\n",
-			  info->domain_attr->name, dev_str);
-		return -FI_ENOSYS;
-	}
-
-	svc_id_str_dup = strdup(svc_id_str);
-	if (!svc_id_str_dup)
-		return -FI_ENOMEM;
-
-	found = false;
-	token = strtok(svc_id_str_dup, ",");
-	while (token != NULL) {
-		if (device_index == 0) {
-			svc_id = atoi(token);
-			found = true;
-			break;
-		}
-
-		device_index--;
-		token = strtok(NULL, ",");
-	}
-
-	free(svc_id_str_dup);
-
-	if (!found) {
-		CXIP_WARN("Failed to find service ID in SLINGSHOT_SVC_IDS: %s\n",
-			  svc_id_str);
-		return -FI_EINVAL;
-	}
-
-	return svc_id;
-}
-
-static int cxip_gen_auth_key_ss_env(struct fi_info *info,
-				    struct cxi_auth_key *key)
-{
-	int ret;
-	uint16_t vni;
-
-	ret = cxip_gen_auth_key_ss_env_get_vni();
-	if (ret < 0)
-		return ret;
-
-	vni = ret;
-
-	ret = cxip_gen_auth_key_ss_env_get_svc_id(info);
-	if (ret < 0)
-		return ret;
-
-	key->vni = vni;
-	key->svc_id = ret;
-
-	CXIP_INFO("Generated auth key (%u:%u) for %s\n", ret, vni,
-		  info->domain_attr->name);
-
-	return FI_SUCCESS;
-}
-
-static int cxip_gen_auth_key_best_svc_id(struct fi_info *info,
-					 struct cxi_auth_key *key)
-{
-	int ret;
-	struct cxi_auth_key auth_key;
-	struct cxip_addr *src_addr;
-	struct cxip_if *iface;
-	struct cxil_svc_list *svc_list;
-	uid_t uid;
-	gid_t gid;
-	int i;
-	int j;
-	struct cxi_svc_desc *desc;
-	int found_uid;
-	int found_gid;
-	int found_unrestricted;
-
-	uid = geteuid();
-	gid = getegid();
-
-	src_addr = (struct cxip_addr *)info->src_addr;
-	if (!src_addr) {
-		CXIP_WARN("NULL src_addr in fi_info\n");
-		return -FI_EINVAL;
-	}
-
-	ret = cxip_get_if(src_addr->nic, &iface);
-	if (ret) {
-		CXIP_WARN("cxip_get_if with NIC %#x failed: %d:%s\n",
-			  src_addr->nic, ret, fi_strerror(-ret));
-		return ret;
-	}
-
-	ret = cxil_get_svc_list(iface->dev, &svc_list);
-	if (ret) {
-		CXIP_WARN("cxil_get_svc_list failed: %d:%s\n", ret,
-			  strerror(-ret));
-		cxip_put_if(iface);
-		return ret;
-	}
-
-	/* Find the service indexes which can be used by this process. These are
-	 * services which are unrestricted, have a matching UID, or have a
-	 * matching GID. If there are multiple service IDs which could match
-	 * unrestricted, UID, and GID, only the first one found is selected.
-	 */
-	found_uid = -1;
-	found_gid = -1;
-	found_unrestricted = -1;
-
-	for (i = 0; i < svc_list->count; i++) {
-		desc = svc_list->descs + i;
-
-		if (!desc->enable || desc->is_system_svc)
-			continue;
-
-		if (!desc->restricted_members) {
-			if (found_unrestricted == -1)
-				found_unrestricted = i;
-			continue;
-		}
-
-		for (j = 0; j < CXI_SVC_MAX_MEMBERS; j++) {
-			if (desc->members[j].type == CXI_SVC_MEMBER_UID &&
-			    desc->members[j].svc_member.uid == uid &&
-			    found_uid == -1)
-				found_uid = i;
-			else if (desc->members[j].type == CXI_SVC_MEMBER_GID &&
-				 desc->members[j].svc_member.gid == gid &&
-				 found_gid == -1)
-				found_gid = i;
-		}
-	}
-
-	/* Prioritized list for matching service ID. */
-	if (found_uid != -1)
-		i = found_uid;
-	else if (found_gid != -1) {
-		i = found_gid;
-	} else if (found_unrestricted != -1) {
-		i = found_unrestricted;
-	} else {
-		cxil_free_svc_list(svc_list);
-		cxip_put_if(iface);
-		return -FI_ENOSYS;
-	}
-
-	/* Generate auth_key using matched service ID. */
-	desc = svc_list->descs + i;
-
-	if (desc->restricted_vnis) {
-		if (desc->num_vld_vnis == 0) {
-			CXIP_WARN("No valid VNIs for %s service ID %u\n",
-				  info->domain_attr->name, i);
-
-			cxil_free_svc_list(svc_list);
-			cxip_put_if(iface);
-
-			return -FI_EINVAL;
-		}
-
-		auth_key.vni = (uint16_t)desc->vnis[0];
-	} else {
-		auth_key.vni = (uint16_t)cxip_env.default_vni;
-	}
-
-	auth_key.svc_id = desc->svc_id;
-
-	cxil_free_svc_list(svc_list);
-	cxip_put_if(iface);
-
-	*key = auth_key;
-
-	CXIP_INFO("Generated auth key (%u:%u) for %s\n", auth_key.svc_id,
-		  auth_key.vni, info->domain_attr->name);
-
-	return FI_SUCCESS;
-}
-
 int cxip_gen_auth_key(struct fi_info *info, struct cxi_auth_key *key)
 {
-	int ret;
+	struct cxip_nic_attr *nic_attr;
 
 	memset(key, 0, sizeof(*key));
 
@@ -1458,11 +1220,19 @@ int cxip_gen_auth_key(struct fi_info *info, struct cxi_auth_key *key)
 		return -FI_EINVAL;
 	}
 
-	ret = cxip_gen_auth_key_ss_env(info, key);
-	if (ret == FI_SUCCESS)
-		return FI_SUCCESS;
+	if (!info->nic || !info->nic->prov_attr) {
+		CXIP_WARN("Missing NIC provider attributes\n");
+		return -FI_EINVAL;
+	}
 
-	return cxip_gen_auth_key_best_svc_id(info, key);
+	nic_attr = (struct cxip_nic_attr *)info->nic->prov_attr;
+	if (nic_attr->default_rgroup_id == 0)
+		return -FI_ENOSYS;
+
+	key->svc_id = nic_attr->default_rgroup_id;
+	key->vni = nic_attr->default_vni;
+
+	return FI_SUCCESS;
 }
 
 static int cxip_alter_auth_key(struct fi_info **info)
