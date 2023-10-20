@@ -525,6 +525,59 @@ static int cxip_av_insert_auth_key(struct fid_av *av, const void *auth_key,
 	return FI_SUCCESS;
 }
 
+static int cxip_av_lookup_auth_key_validate_args(struct cxip_av *cxi_av,
+						 fi_addr_t addr, void *auth_key,
+						 size_t *auth_key_size)
+{
+	if (!cxi_av->av_auth_key) {
+		CXIP_WARN("Domain not configured with FI_AV_AUTH_KEY\n");
+		return -FI_EINVAL;
+	}
+
+	if (!auth_key) {
+		CXIP_WARN("NULL auth_key\n");
+		return -FI_EINVAL;
+	}
+
+	if (!auth_key_size) {
+		CXIP_WARN("NULL auth_key_size\n");
+		return -FI_EINVAL;
+	}
+
+	return FI_SUCCESS;
+}
+
+static int cxip_av_lookup_auth_key(struct fid_av *av, fi_addr_t addr,
+				   void *auth_key, size_t *auth_key_size)
+{
+	struct cxip_av *cxi_av = container_of(av, struct cxip_av, av_fid);
+	struct cxip_av_auth_key_entry *entry;
+	int ret;
+
+	ret = cxip_av_lookup_auth_key_validate_args(cxi_av, addr, auth_key,
+						    auth_key_size);
+	if (ret != FI_SUCCESS)
+		return ret;
+
+	cxip_av_read_lock(cxi_av);
+
+	entry = ofi_bufpool_get_ibuf(cxi_av->auth_key_entry_pool, addr);
+	if (entry) {
+		*auth_key_size = MIN(sizeof(entry->key), *auth_key_size);
+		memcpy(auth_key, &entry->key, *auth_key_size);
+		*auth_key_size = sizeof(entry->key);
+	}
+
+	cxip_av_unlock(cxi_av);
+
+	if (entry)
+		return FI_SUCCESS;
+
+	CXIP_WARN("Invalid fi_addr %#lx\n", addr);
+
+	return -FI_EINVAL;
+}
+
 static struct fi_ops_av cxip_av_fid_ops = {
 	.size = sizeof(struct fi_ops_av),
 	.insert = cxip_av_insert,
@@ -535,6 +588,7 @@ static struct fi_ops_av cxip_av_fid_ops = {
 	.straddr = cxip_av_straddr,
 	.av_set = cxip_av_set,
 	.insert_auth_key = cxip_av_insert_auth_key,
+	.lookup_auth_key = cxip_av_lookup_auth_key,
 };
 
 static struct fi_ops cxip_av_fi_ops = {
