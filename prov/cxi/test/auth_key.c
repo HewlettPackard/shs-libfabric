@@ -703,6 +703,7 @@ Test(auth_key, ss_plugin_env_vars_single_entry)
 	char svc_id_str[256];
 	struct fid_fabric *fab;
 	struct fid_domain *dom;
+	struct cxip_nic_attr *nic_attr;
 
 	/* Need to allocate a service to be used by libfabric. */
 	ret = cxil_open_device(0, &dev);
@@ -732,10 +733,14 @@ Test(auth_key, ss_plugin_env_vars_single_entry)
 			 NULL, FI_SOURCE, NULL, &info);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
 
-	ret = memcmp(&auth_key, info->domain_attr->auth_key,
-		     info->domain_attr->auth_key_size);
-	cr_assert_eq(ret, 0, "fi_getinfo returned auth_key does not match Slingshot env vars");
-	cr_assert_eq(info->domain_attr->auth_key_size, sizeof(auth_key));
+	cr_assert_eq(info->domain_attr->auth_key, NULL);
+	cr_assert_eq(info->domain_attr->auth_key_size, 0);
+
+	nic_attr = info->nic->prov_attr;
+	cr_assert_eq(nic_attr->default_rgroup_id, auth_key.svc_id,
+		     "fi_getinfo returned auth_key does not match Slingshot env vars");
+	cr_assert_eq(nic_attr->default_vni, auth_key.vni,
+		     "fi_getinfo returned auth_key does not match Slingshot env vars");
 
 	ret = fi_fabric(info->fabric_attr, &fab, NULL);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_fabric failed: %d", ret);
@@ -767,6 +772,7 @@ Test(auth_key, ss_plugin_env_vars_multiple_entries)
 	char svc_id_str[256];
 	struct fid_fabric *fab;
 	struct fid_domain *dom;
+	struct cxip_nic_attr *nic_attr;
 
 	/* Need to allocate a service to be used by libfabric. */
 	ret = cxil_open_device(0, &dev);
@@ -796,10 +802,14 @@ Test(auth_key, ss_plugin_env_vars_multiple_entries)
 			 NULL, FI_SOURCE, NULL, &info);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
 
-	ret = memcmp(&auth_key, info->domain_attr->auth_key,
-		     info->domain_attr->auth_key_size);
-	cr_assert_eq(ret, 0, "fi_getinfo returned auth_key does not match Slingshot env vars");
-	cr_assert_eq(info->domain_attr->auth_key_size, sizeof(auth_key));
+	cr_assert_eq(info->domain_attr->auth_key, NULL);
+	cr_assert_eq(info->domain_attr->auth_key_size, 0);
+
+	nic_attr = info->nic->prov_attr;
+	cr_assert_eq(nic_attr->default_rgroup_id, auth_key.svc_id,
+		     "fi_getinfo returned auth_key does not match Slingshot env vars");
+	cr_assert_eq(nic_attr->default_vni, auth_key.vni,
+		     "fi_getinfo returned auth_key does not match Slingshot env vars");
 
 	ret = fi_fabric(info->fabric_attr, &fab, NULL);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_fabric failed: %d", ret);
@@ -824,7 +834,7 @@ Test(auth_key, ss_plugin_env_vars_no_nic)
 {
 	struct fi_info *info;
 	int ret;
-	struct cxi_auth_key *auth_key;
+	struct cxip_nic_attr *nic_attr;
 
 	ret = setenv("SLINGSHOT_VNIS", "288,999", 1);
 	cr_assert_eq(ret, 0, "setenv failed: %d", errno);
@@ -839,10 +849,12 @@ Test(auth_key, ss_plugin_env_vars_no_nic)
 			 NULL, FI_SOURCE, NULL, &info);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
 
-	auth_key = (struct cxi_auth_key *)info->domain_attr->auth_key;
-	cr_assert_eq(info->domain_attr->auth_key_size, sizeof(auth_key));
-	cr_assert_eq(auth_key->svc_id, DEFAULT_SERVICE_ID,
-		     "Unexpected svc_id: %d", auth_key->svc_id);
+	cr_assert_eq(info->domain_attr->auth_key, NULL);
+	cr_assert_eq(info->domain_attr->auth_key_size, 0);
+
+	nic_attr = info->nic->prov_attr;
+	cr_assert_eq(nic_attr->default_rgroup_id, DEFAULT_SERVICE_ID,
+		     "Unexpected svc_id: %d", nic_attr->default_rgroup_id);
 
 	fi_freeinfo(info);
 }
@@ -939,6 +951,7 @@ Test(auth_key, uid_valid_service)
 	uid_t test_uid = 65530;
 	uint64_t test_vni = 12345;
 	struct cxi_auth_key auth_key = {};
+	struct cxip_nic_attr *nic_attr;
 
 	/* Need to allocate a service to be used by libfabric. */
 	ret = cxil_open_device(0, &dev);
@@ -965,12 +978,16 @@ Test(auth_key, uid_valid_service)
 
 	/* Ensure that returned auth_key does not contain allocated service ID
 	 * since this is restricted to specific UID.
+	 *
+	 * Return auth_key hint should be NULL. NIC attr should not contain the
+	 * service ID and VNI.
 	 */
-	ret = memcmp(&auth_key, info->domain_attr->auth_key,
-		     info->domain_attr->auth_key_size);
-	cr_assert_neq(ret, 0,
-		      "Matching auth_key should not have been returned");
-	cr_assert_eq(info->domain_attr->auth_key_size, sizeof(auth_key));
+	cr_assert_eq(info->domain_attr->auth_key, NULL);
+	cr_assert_eq(info->domain_attr->auth_key_size, 0);
+
+	nic_attr = info->nic->prov_attr;
+	cr_assert_neq(nic_attr->default_rgroup_id, auth_key.svc_id);
+	cr_assert_neq(nic_attr->default_vni, auth_key.vni);
 
 	fi_freeinfo(info);
 
@@ -981,13 +998,18 @@ Test(auth_key, uid_valid_service)
 			 NULL, FI_SOURCE, NULL, &info);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
 
-	/* Ensure that returned auth_key does contain allocated service ID
+	/* Ensure that returned auth_key does not contain allocated service ID
 	 * since this is restricted to specific UID.
+	 *
+	 * Return auth_key hint should be NULL. NIC attr should not contain the
+	 * service ID and VNI.
 	 */
-	ret = memcmp(&auth_key, info->domain_attr->auth_key,
-		     info->domain_attr->auth_key_size);
-	cr_assert_eq(ret, 0, "Invalid auth_key returned");
-	cr_assert_eq(info->domain_attr->auth_key_size, sizeof(auth_key));
+	cr_assert_eq(info->domain_attr->auth_key, NULL);
+	cr_assert_eq(info->domain_attr->auth_key_size, 0);
+
+	nic_attr = info->nic->prov_attr;
+	cr_assert_eq(nic_attr->default_rgroup_id, auth_key.svc_id);
+	cr_assert_eq(nic_attr->default_vni, auth_key.vni);
 
 	ret = fi_fabric(info->fabric_attr, &fab, NULL);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_fabric failed: %d", ret);
@@ -1024,6 +1046,7 @@ Test(auth_key, gid_valid_service)
 	uid_t test_gid = 32766;
 	uint64_t test_vni = 12345;
 	struct cxi_auth_key auth_key = {};
+	struct cxip_nic_attr *nic_attr;
 
 	/* Need to allocate a service to be used by libfabric. */
 	ret = cxil_open_device(0, &dev);
@@ -1050,12 +1073,16 @@ Test(auth_key, gid_valid_service)
 
 	/* Ensure that returned auth_key does not contain allocated service ID
 	 * since this is restricted to specific UID.
+	 *
+	 * Return auth_key hint should be NULL. NIC attr should not contain the
+	 * service ID and VNI.
 	 */
-	ret = memcmp(&auth_key, info->domain_attr->auth_key,
-		     info->domain_attr->auth_key_size);
-	cr_assert_neq(ret, 0,
-		      "Matching auth_key should not have been returned");
-	cr_assert_eq(info->domain_attr->auth_key_size, sizeof(auth_key));
+	cr_assert_eq(info->domain_attr->auth_key, NULL);
+	cr_assert_eq(info->domain_attr->auth_key_size, 0);
+
+	nic_attr = info->nic->prov_attr;
+	cr_assert_neq(nic_attr->default_rgroup_id, auth_key.svc_id);
+	cr_assert_neq(nic_attr->default_vni, auth_key.vni);
 
 	fi_freeinfo(info);
 
@@ -1068,11 +1095,16 @@ Test(auth_key, gid_valid_service)
 
 	/* Ensure that returned auth_key does contain allocated service ID
 	 * since this is restricted to specific UID.
+	 *
+	 * Return auth_key hint should be NULL. NIC attr should contain the
+	 * service ID and VNI.
 	 */
-	ret = memcmp(&auth_key, info->domain_attr->auth_key,
-		     info->domain_attr->auth_key_size);
-	cr_assert_eq(ret, 0, "Invalid auth_key returned");
-	cr_assert_eq(info->domain_attr->auth_key_size, sizeof(auth_key));
+	cr_assert_eq(info->domain_attr->auth_key, NULL);
+	cr_assert_eq(info->domain_attr->auth_key_size, 0);
+
+	nic_attr = info->nic->prov_attr;
+	cr_assert_eq(nic_attr->default_rgroup_id, auth_key.svc_id);
+	cr_assert_eq(nic_attr->default_vni, auth_key.vni);
 
 	ret = fi_fabric(info->fabric_attr, &fab, NULL);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_fabric failed: %d", ret);
@@ -1107,7 +1139,7 @@ Test(auth_key, uid_gid_default_service_id_priority)
 	uint64_t test_gid_vni = 12344;
 	struct cxi_auth_key uid_auth_key = {};
 	struct cxi_auth_key gid_auth_key = {};
-	struct cxi_auth_key *auth_key;
+	struct cxip_nic_attr *nic_attr;
 
 	/* Need to allocate a service to be used by libfabric. */
 	ret = cxil_open_device(0, &dev);
@@ -1144,11 +1176,13 @@ Test(auth_key, uid_gid_default_service_id_priority)
 			 NULL, FI_SOURCE, NULL, &info);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
 
-	auth_key = (struct cxi_auth_key *)info->domain_attr->auth_key;
-	cr_assert_eq(info->domain_attr->auth_key_size, sizeof(auth_key));
-	cr_assert_eq(auth_key->svc_id, DEFAULT_SERVICE_ID,
+	cr_assert_eq(info->domain_attr->auth_key, NULL);
+	cr_assert_eq(info->domain_attr->auth_key_size, 0);
+
+	nic_attr = info->nic->prov_attr;
+	cr_assert_eq(nic_attr->default_rgroup_id, DEFAULT_SERVICE_ID,
 		     "Default service ID was not returned: svc_id=%d",
-		     auth_key->svc_id);
+		     nic_attr->default_rgroup_id);
 
 	fi_freeinfo(info);
 
@@ -1160,10 +1194,12 @@ Test(auth_key, uid_gid_default_service_id_priority)
 			 NULL, FI_SOURCE, NULL, &info);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
 
-	cr_assert_eq(info->domain_attr->auth_key_size, sizeof(auth_key));
-	ret = memcmp(&gid_auth_key, info->domain_attr->auth_key,
-		     info->domain_attr->auth_key_size);
-	cr_assert_eq(ret, 0, "Invalid GID based auth_key returned");
+	cr_assert_eq(info->domain_attr->auth_key, NULL);
+	cr_assert_eq(info->domain_attr->auth_key_size, 0);
+
+	nic_attr = info->nic->prov_attr;
+	cr_assert_eq(nic_attr->default_rgroup_id, gid_auth_key.svc_id);
+	cr_assert_eq(nic_attr->default_vni, gid_auth_key.vni);
 
 	fi_freeinfo(info);
 
@@ -1175,10 +1211,12 @@ Test(auth_key, uid_gid_default_service_id_priority)
 			 NULL, FI_SOURCE, NULL, &info);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
 
-	cr_assert_eq(info->domain_attr->auth_key_size, sizeof(auth_key));
-	ret = memcmp(&uid_auth_key, info->domain_attr->auth_key,
-		     info->domain_attr->auth_key_size);
-	cr_assert_eq(ret, 0, "Invalid UID based auth_key returned");
+	cr_assert_eq(info->domain_attr->auth_key, NULL);
+	cr_assert_eq(info->domain_attr->auth_key_size, 0);
+
+	nic_attr = info->nic->prov_attr;
+	cr_assert_eq(nic_attr->default_rgroup_id, uid_auth_key.svc_id);
+	cr_assert_eq(nic_attr->default_vni, uid_auth_key.vni);
 
 	fi_freeinfo(info);
 

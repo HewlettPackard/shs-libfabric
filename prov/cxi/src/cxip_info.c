@@ -1238,37 +1238,12 @@ int cxip_gen_auth_key(struct fi_info *info, struct cxi_auth_key *key)
 static int cxip_alter_auth_key(struct fi_info **info)
 {
 	int ret;
-	struct cxi_auth_key auth_key;
-	struct fi_info *fi_ptr;
 
 	ret = cxip_alter_auth_key_align_domain_ep(info);
 	if (ret)
 		return ret;
 
 	cxip_alter_auth_key_scrub_auth_key_size(info);
-
-	/* For any domain with a NULL auth_key, attempt to generate an auth_key.
-	 */
-	for (fi_ptr = *info; fi_ptr; fi_ptr = fi_ptr->next) {
-		if (fi_ptr->domain_attr->auth_key)
-			continue;
-
-		ret = cxip_gen_auth_key(fi_ptr, &auth_key);
-		if (ret == -FI_ENOSYS)
-			continue;
-		else if (ret)
-			return ret;
-
-		fi_ptr->domain_attr->auth_key =
-			mem_dup(&auth_key, sizeof(auth_key));
-		if (!fi_ptr->domain_attr->auth_key)
-			return -FI_ENOMEM;
-
-		fi_ptr->domain_attr->auth_key_size = sizeof(auth_key);
-
-		CXIP_INFO("Assigned auth key (%u:%u) to %s\n", auth_key.svc_id,
-			  auth_key.vni, fi_ptr->domain_attr->name);
-	}
 
 	return cxip_alter_auth_key_validate(info);
 }
