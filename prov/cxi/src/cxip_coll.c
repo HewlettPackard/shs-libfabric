@@ -3059,9 +3059,6 @@ static void _finish_getgroup(void *ptr)
 	struct cxip_join_state *jstate = ptr;
 	struct cxip_zbcoll_obj *zb = jstate->zb;
 
-	/* end serialization of fi_join_collective over zbcoll */
-	ofi_atomic_dec32(&jstate->ep_obj->coll_ref);
-
 	TRACE_JOIN("%s on %d: entry\n", __func__, jstate->mynode_idx);
 	_append_sched(zb, jstate);	// _start_bcast
 }
@@ -3179,6 +3176,7 @@ static void _start_cleanup(void *ptr)
 		if (ret < 0)
 			CXIP_INFO("FATAL ERROR: cannot post to EQ\n");
 		cxip_zbcoll_free(jstate->zb);
+		jstate->ep_obj->coll.join_busy = false;
 	}
 	free(jstate);
 }
@@ -3409,14 +3407,16 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 
 	ep_obj = cxip_ep->ep_obj;
 
-	/* join must be serialized over zbcoll getgroup operation */
-	ret = ofi_atomic_inc32(&ep_obj->coll_ref);
-	TRACE_JOIN("join overlap = %d\n", ret);
-	if (av_set_obj->comm_key.keytype != COMM_KEY_RANK && ret > 1) {
-		TRACE_JOIN("operation blocked on zb getgroup\n");
-		ret = -FI_EAGAIN;
-		goto fail;
+	/* join must be serialized through to completion */
+	ofi_genlock_lock(&ep_obj->lock);
+	if (ep_obj->coll.join_busy) {
+		ofi_genlock_unlock(&ep_obj->lock);
+		return -FI_EAGAIN;
 	}
+	/* SHORT-TERM HACK see NETCASSINI-5771 */
+	if (av_set_obj->comm_key.keytype != COMM_KEY_RANK)
+		ep_obj->coll.join_busy = true;
+	ofi_genlock_unlock(&ep_obj->lock);
 
 	/* allocate state to pass arguments through callbacks */
 	jstate = calloc(1, sizeof(*jstate));
@@ -3592,7 +3592,7 @@ fail:
 	TRACE_JOIN("cxip_join_collective, ret=%d\n", ret);
 	cxip_zbcoll_free(zb);
 	free(jstate);
-	ofi_atomic_dec32(&ep_obj->coll_ref);
+	ep_obj->coll.join_busy = false;
 
 	return ret;
 }

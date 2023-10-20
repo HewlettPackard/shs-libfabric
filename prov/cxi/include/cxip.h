@@ -1433,6 +1433,7 @@ struct cxip_ep_coll_obj {
 	size_t min_multi_recv;		// trigger value to rotate bufs
 	size_t buffer_size;		// size of receive buffers
 	size_t buffer_count;		// count of receive buffers
+	bool join_busy;			// serialize joins on a node
 	bool enabled;			// enabled
 };
 
@@ -2050,9 +2051,6 @@ struct cxip_ep_obj {
 	struct cxip_cmdq *tgq;
 	ofi_atomic32_t tgq_ref;
 	struct cxip_cmdq *rx_txq;
-
-	/* zbcoll getgroup must be serialized */
-	ofi_atomic32_t coll_ref;
 
 	/* Portals flow-control recovery messaging uses a credit
 	 * scheme to avoid over-running the associated event queue.
