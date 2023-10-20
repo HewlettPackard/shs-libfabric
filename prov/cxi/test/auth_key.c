@@ -593,6 +593,14 @@ Test(auth_key, valid_user_defined_svc_id_valid_vni_verify_vni_enforcement)
 	struct fi_cq_tagged_entry event;
 	struct fi_cq_err_entry error;
 
+	/* Allocate infos for RDMA test. Default_info users the provider
+	 * assigned default auth_key where user_info uses the user defined
+	 * auth_key.
+	 */
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 "0", FI_SOURCE, NULL, &default_info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
 	/* Need to allocate a service to be used by libfabric. */
 	ret = cxil_open_device(0, &dev);
 	cr_assert_eq(ret, 0, "cxil_open_device failed: %d", ret);
@@ -605,14 +613,6 @@ Test(auth_key, valid_user_defined_svc_id_valid_vni_verify_vni_enforcement)
 	ret = cxil_alloc_svc(dev, &svc_desc, &fail_info);
 	cr_assert_gt(ret, 0, "cxil_alloc_svc failed: %d", ret);
 	svc_desc.svc_id = ret;
-
-	/* Allocate infos for RDMA test. Default_info users the provider
-	 * assigned default auth_key where user_info uses the user defined
-	 * auth_key.
-	 */
-	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
-			 "0", FI_SOURCE, NULL, &default_info);
-	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
 
 	hints = fi_allocinfo();
 	cr_assert_not_null(hints, "fi_allocinfo failed");
