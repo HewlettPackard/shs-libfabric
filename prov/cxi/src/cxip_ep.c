@@ -1151,16 +1151,6 @@ int cxip_alloc_endpoint(struct cxip_domain *cxip_dom, struct fi_info *hints,
 			ret = -FI_EINVAL;
 			goto err;
 		}
-
-		/* All EPs that share a Domain must use the same VNI. This is a
-		 * simplification due to Cassini requiring triggered op TXQs to
-		 * use CP 0.
-		 */
-		if (ep_obj->auth_key.vni != cxip_dom->auth_key.vni) {
-			CXIP_WARN("Invalid VNI: %u\n", ep_obj->auth_key.vni);
-			ret = -FI_EINVAL;
-			goto err;
-		}
 	} else {
 		/* Inherit auth_key from Domain. */
 		ep_obj->auth_key = cxip_dom->auth_key;

@@ -620,6 +620,64 @@ static int cxip_dom_trig_op_get_in_use(struct cxip_domain *dom)
 
 #define DWQ_SEMAPHORE_TIMEOUT 10U
 
+static int cxip_dom_dwq_queue_work_validate(struct cxip_domain *dom,
+					    struct fi_deferred_work *work)
+{
+	struct cxip_ep *ep;
+
+	if (!work->triggering_cntr)
+		return -FI_EINVAL;
+
+	switch (work->op_type) {
+	case FI_OP_SEND:
+	case FI_OP_RECV:
+		ep = container_of(work->op.msg->ep, struct cxip_ep, ep);
+		break;
+
+	case FI_OP_TSEND:
+	case FI_OP_TRECV:
+		ep = container_of(work->op.tagged->ep, struct cxip_ep, ep);
+		break;
+
+	case FI_OP_READ:
+	case FI_OP_WRITE:
+		ep = container_of(work->op.rma->ep, struct cxip_ep, ep);
+		break;
+
+	case FI_OP_ATOMIC:
+		ep = container_of(work->op.atomic->ep, struct cxip_ep, ep);
+		break;
+
+	case FI_OP_FETCH_ATOMIC:
+		ep = container_of(work->op.fetch_atomic->ep, struct cxip_ep,
+				  ep);
+		break;
+
+	case FI_OP_COMPARE_ATOMIC:
+		ep = container_of(work->op.compare_atomic->ep, struct cxip_ep,
+				  ep);
+		break;
+
+	case FI_OP_CNTR_SET:
+	case FI_OP_CNTR_ADD:
+		return FI_SUCCESS;
+
+	default:
+		return -FI_EINVAL;
+	}
+
+	/* All EPs that share a Domain must use the same VNI. This is a
+	 * simplification due to Cassini requiring triggered op TXQs to
+	 * use CP 0.
+	 */
+	if (ep->ep_obj->auth_key.vni != dom->auth_key.vni) {
+		CXIP_WARN("Invalid VNI: %u\n", ep->ep_obj->auth_key.vni);
+		return -FI_EINVAL;
+	}
+
+	return FI_SUCCESS;
+}
+
 static int cxip_dom_dwq_queue_work(struct cxip_domain *dom,
 				   struct fi_deferred_work *work)
 {
@@ -632,8 +690,9 @@ static int cxip_dom_dwq_queue_work(struct cxip_domain *dom,
 	struct timespec ts;
 	bool again;
 
-	if (!work->triggering_cntr)
-		return -FI_EINVAL;
+	ret = cxip_dom_dwq_queue_work_validate(dom, work);
+	if (ret != FI_SUCCESS)
+		return ret;
 
 	comp_cntr = work->completion_cntr ?
 		container_of(work->completion_cntr, struct cxip_cntr,
