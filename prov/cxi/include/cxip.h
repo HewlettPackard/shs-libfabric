@@ -779,7 +779,6 @@ struct cxip_domain {
 	ofi_spin_t lock;
 	ofi_atomic32_t ref;
 
-	struct cxi_auth_key auth_key;
 	uint32_t tclass;
 
 	struct cxip_eq *eq; //unused
@@ -865,6 +864,12 @@ struct cxip_domain {
 	 */
 	int max_trig_op_in_use;
 	sem_t *trig_op_lock;
+
+	/* Domain has been configured with FI_AV_AUTH_KEY. */
+	bool av_auth_key;
+
+	/* This is only valid if FI_AV_AUTH_KEY is false. */
+	struct cxi_auth_key auth_key;
 };
 
 static inline bool cxip_domain_mr_cache_enabled(struct cxip_domain *dom)
@@ -2026,7 +2031,13 @@ struct cxip_ep_obj {
 	struct ofi_genlock lock;
 	struct cxip_domain *domain;
 	struct cxip_av *av;
+
+	/* Domain has been configured with FI_AV_AUTH_KEY. */
+	bool av_auth_key;
+
+	/* This is only valid if FI_AV_AUTH_KEY is false. */
 	struct cxi_auth_key auth_key;
+
 	bool enabled;
 
 	struct cxil_wait_obj *ctrl_wait;
@@ -2207,6 +2218,9 @@ struct cxip_av {
 
 	/* Address vector type. */
 	enum fi_av_type type;
+
+	/* Whether or not the AV is operating in FI_AV_AUTH_KEY mode. */
+	bool av_auth_key;
 };
 
 struct cxip_addr *(*cxip_av_addr_in)(const void *addr);

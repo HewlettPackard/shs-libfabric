@@ -451,6 +451,11 @@ static int cxip_ep_enable(struct fid_ep *fid_ep)
 	struct cxip_ep_obj *ep_obj = ep->ep_obj;
 	int ret = FI_SUCCESS;
 
+	if (ep_obj->av_auth_key) {
+		CXIP_WARN("AV auth key configuration not supported\n");
+		return -FI_EINVAL;
+	}
+
 	ofi_genlock_lock(&ep_obj->lock);
 	if (ep_obj->enabled)
 		goto unlock;
@@ -1152,9 +1157,13 @@ int cxip_alloc_endpoint(struct cxip_domain *cxip_dom, struct fi_info *hints,
 			goto err;
 		}
 	} else {
-		/* Inherit auth_key from Domain. */
-		ep_obj->auth_key = cxip_dom->auth_key;
-		CXIP_DBG("Inherited domain auth_key\n");
+		if (cxip_dom->av_auth_key) {
+			ep_obj->av_auth_key = true;
+		} else {
+			/* Inherit auth_key from Domain. */
+			ep_obj->auth_key = cxip_dom->auth_key;
+			CXIP_DBG("Inherited domain auth_key\n");
+		}
 	}
 
 	if (cxip_set_tclass(ep_obj->tx_attr.tclass,

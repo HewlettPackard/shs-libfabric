@@ -501,6 +501,7 @@ int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 	av->av_entry_hash = NULL;
 	av->symmetric = !!(attr->flags & FI_SYMMETRIC);
 	ofi_atomic_initialize32(&av->av_entry_cnt, 0);
+	av->av_auth_key = dom->av_auth_key;
 
 	/* Only FI_AV_TABLE is implemented. */
 	av->type = attr->type == FI_AV_UNSPEC ? FI_AV_TABLE : attr->type;

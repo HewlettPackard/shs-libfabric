@@ -1366,11 +1366,15 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 		memcpy(&cxi_domain->auth_key, info->domain_attr->auth_key,
 		       sizeof(struct cxi_auth_key));
 	} else {
-		ret = cxip_gen_auth_key(info, &cxi_domain->auth_key);
-		if (ret) {
-			CXIP_WARN("cxip_gen_auth_key failed: %d:%s", ret,
-				  fi_strerror(-ret));
-			return ret;
+		if (info->domain_attr->auth_key_size == FI_AV_AUTH_KEY) {
+			cxi_domain->av_auth_key = true;
+		} else {
+			ret = cxip_gen_auth_key(info, &cxi_domain->auth_key);
+			if (ret) {
+				CXIP_WARN("cxip_gen_auth_key failed: %d:%s",
+					  ret, fi_strerror(-ret));
+				return ret;
+			}
 		}
 	}
 

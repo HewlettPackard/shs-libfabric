@@ -1161,13 +1161,19 @@ static int cxip_alter_auth_key_align_domain_ep(struct fi_info **info)
 	return FI_SUCCESS;
 }
 
-static void cxip_alter_auth_key_scrub_auth_key_size(struct fi_info **info)
+static void cxip_alter_auth_key_scrub_auth_key_size(const struct fi_info *hints,
+						    struct fi_info **info)
 {
 	struct fi_info *fi_ptr;
+	bool av_auth_key = false;
+
+	if (hints && hints->domain_attr)
+		av_auth_key =
+			hints->domain_attr->auth_key_size == FI_AV_AUTH_KEY;
 
 	/* Zero the auth_key_size for any NULL auth_key. */
 	for (fi_ptr = *info; fi_ptr; fi_ptr = fi_ptr->next) {
-		if (!fi_ptr->domain_attr->auth_key)
+		if (!fi_ptr->domain_attr->auth_key && !av_auth_key)
 			fi_ptr->domain_attr->auth_key_size = 0;
 
 		if (!fi_ptr->ep_attr->auth_key)
@@ -1239,7 +1245,8 @@ int cxip_gen_auth_key(struct fi_info *info, struct cxi_auth_key *key)
 	return FI_SUCCESS;
 }
 
-static int cxip_alter_auth_key(struct fi_info **info)
+static int cxip_alter_auth_key(const struct fi_info *hints,
+			       struct fi_info **info)
 {
 	int ret;
 
@@ -1247,7 +1254,7 @@ static int cxip_alter_auth_key(struct fi_info **info)
 	if (ret)
 		return ret;
 
-	cxip_alter_auth_key_scrub_auth_key_size(info);
+	cxip_alter_auth_key_scrub_auth_key_size(hints, info);
 
 	return cxip_alter_auth_key_validate(info);
 }
@@ -1580,7 +1587,7 @@ cxip_getinfo(uint32_t version, const char *node, const char *service,
 		}
 	}
 
-	ret = cxip_alter_auth_key(info);
+	ret = cxip_alter_auth_key(hints, info);
 	if (ret)
 		goto freeinfo;
 
