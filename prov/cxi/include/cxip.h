@@ -886,6 +886,8 @@ static inline bool cxip_domain_mr_cache_iface_enabled(struct cxip_domain *dom,
 	return cxip_domain_mr_cache_enabled(dom) && dom->iomm.monitors[iface];
 }
 
+int cxip_domain_valid_vni(struct cxip_domain *dom, unsigned int vni);
+
 /* This structure implies knowledge about the breakdown of the NIC address,
  * which is taken from the AMA, that the provider does not know in a flexible
  * way. However, the domain fi_open_ops() API includes a topology function
@@ -2587,6 +2589,8 @@ struct cxip_if *cxip_if_lookup_addr(uint32_t nic_addr);
 struct cxip_if *cxip_if_lookup_name(const char *name);
 int cxip_get_if(uint32_t nic_addr, struct cxip_if **dev_if);
 void cxip_put_if(struct cxip_if *dev_if);
+int cxip_if_valid_rgroup_vni(struct cxip_if *iface, unsigned int rgroup_id,
+			     unsigned int vni);
 int cxip_alloc_lni(struct cxip_if *iface, uint32_t svc_id,
 		   struct cxip_lni **if_lni);
 void cxip_free_lni(struct cxip_lni *lni);

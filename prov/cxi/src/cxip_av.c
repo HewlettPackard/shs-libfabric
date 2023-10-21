@@ -438,6 +438,8 @@ static int cxip_av_insert_auth_key_validate_args(struct cxip_av *cxi_av,
 						 fi_addr_t *fi_addr,
 						 uint64_t flags)
 {
+	struct cxi_auth_key *key = (struct cxi_auth_key *)auth_key;
+
 	if (!cxi_av->av_auth_key) {
 		CXIP_WARN("Domain not configured with FI_AV_AUTH_KEY\n");
 		return -FI_EINVAL;
@@ -469,7 +471,7 @@ static int cxip_av_insert_auth_key_validate_args(struct cxip_av *cxi_av,
 		return -FI_ENOSPC;
 	}
 
-	return FI_SUCCESS;
+	return cxip_domain_valid_vni(cxi_av->domain, key->vni);
 }
 
 static int cxip_av_insert_auth_key(struct fid_av *av, const void *auth_key,

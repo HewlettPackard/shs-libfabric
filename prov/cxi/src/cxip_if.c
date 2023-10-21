@@ -190,6 +190,41 @@ void cxip_put_if(struct cxip_if *iface)
 	ofi_spin_unlock(&iface->lock);
 }
 
+int cxip_if_valid_rgroup_vni(struct cxip_if *iface, unsigned int rgroup_id,
+			     unsigned int vni)
+{
+	struct cxi_svc_desc svc_desc;
+	bool vni_found = false;
+	int ret;
+	int i;
+
+	ret = cxil_get_svc(iface->dev, rgroup_id, &svc_desc);
+	if (ret) {
+		CXIP_WARN("cxil_get_svc with %s and rgroup_id %d failed: %d:%s\n",
+			  iface->dev->info.device_name, rgroup_id, ret,
+			  strerror(-ret));
+		return -FI_EINVAL;
+	}
+
+	if (svc_desc.restricted_vnis) {
+		for (i = 0; i < svc_desc.num_vld_vnis; i++) {
+			if (vni == svc_desc.vnis[i]) {
+				vni_found = true;
+				break;
+			}
+		}
+
+		if (!vni_found) {
+			CXIP_WARN("Invalid VNI %d for %s and svc_id %d\n",
+				  vni, iface->dev->info.device_name,
+				  rgroup_id);
+			return -FI_EINVAL;
+		}
+	}
+
+	return FI_SUCCESS;
+}
+
 /*
  * cxip_alloc_lni() - Allocate an LNI
  */

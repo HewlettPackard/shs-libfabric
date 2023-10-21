@@ -1366,16 +1366,20 @@ int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,
 		memcpy(&cxi_domain->auth_key, info->domain_attr->auth_key,
 		       sizeof(struct cxi_auth_key));
 	} else {
-		if (info->domain_attr->auth_key_size == FI_AV_AUTH_KEY) {
-			cxi_domain->av_auth_key = true;
-		} else {
-			ret = cxip_gen_auth_key(info, &cxi_domain->auth_key);
-			if (ret) {
-				CXIP_WARN("cxip_gen_auth_key failed: %d:%s",
-					  ret, fi_strerror(-ret));
-				return ret;
-			}
+		ret = cxip_gen_auth_key(info, &cxi_domain->auth_key);
+		if (ret) {
+			CXIP_WARN("cxip_gen_auth_key failed: %d:%s", ret,
+				  fi_strerror(-ret));
+			return ret;
 		}
+
+		/* If FI_AV_AUTH_KEY is used, the auth_key.vni value will never
+		 * be used. Thus, set it to zero which is invalid.
+		 */
+		cxi_domain->av_auth_key =
+			info->domain_attr->auth_key_size == FI_AV_AUTH_KEY;
+		if (cxi_domain->av_auth_key)
+			cxi_domain->auth_key.vni = 0;
 	}
 
 	if (info->domain_attr->tclass != FI_TC_UNSPEC) {
@@ -1439,4 +1443,11 @@ close_util_dom:
 free_dom:
 	free(cxi_domain);
 	return -FI_EINVAL;
+}
+
+int cxip_domain_valid_vni(struct cxip_domain *dom, unsigned int vni)
+{
+	/* Currently the auth_key.svc_id field contains the resource group ID.
+	*/
+	return cxip_if_valid_rgroup_vni(dom->iface, dom->auth_key.svc_id, vni);
 }

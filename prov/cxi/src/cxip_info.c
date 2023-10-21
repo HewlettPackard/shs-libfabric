@@ -1262,39 +1262,10 @@ static int cxip_alter_auth_key(const struct fi_info *hints,
 static int cxip_validate_iface_auth_key(struct cxip_if *iface,
 					struct cxi_auth_key *auth_key)
 {
-	struct cxi_svc_desc svc_desc;
-	int ret;
-	int i;
-	bool vni_found = false;
-
 	if (!auth_key)
 		return FI_SUCCESS;
 
-	ret = cxil_get_svc(iface->dev, auth_key->svc_id, &svc_desc);
-	if (ret) {
-		CXIP_WARN("cxil_get_svc with %s and svc_id %d failed: %d:%s\n",
-			  iface->dev->info.device_name, auth_key->svc_id, ret,
-			  strerror(-ret));
-		return -FI_EINVAL;
-	}
-
-	if (svc_desc.restricted_vnis) {
-		for (i = 0; i < svc_desc.num_vld_vnis; i++) {
-			if (auth_key->vni == svc_desc.vnis[i]) {
-				vni_found = true;
-				break;
-			}
-		}
-
-		if (!vni_found) {
-			CXIP_WARN("Invalidate VNI %d for %s and svc_id %d\n",
-				  auth_key->vni, iface->dev->info.device_name,
-				  auth_key->svc_id);
-			return -FI_EINVAL;
-		}
-	}
-
-	return FI_SUCCESS;
+	return cxip_if_valid_rgroup_vni(iface, auth_key->svc_id, auth_key->vni);
 }
 
 int cxip_check_auth_key_info(struct fi_info *info)
