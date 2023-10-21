@@ -243,12 +243,13 @@ Test(getinfo, invalid_av_auth_key_not_zero_ep_auth_key_size)
 
 TestSuite(getinfo_infos, .timeout = CXIT_DEFAULT_TIMEOUT);
 
-#define MAX_INFOS	8
+#define MAX_INFOS	16
 #define FI_ADDR_CXI_COMPAT FI_ADDR_OPX
 
 struct info_check {
 	int mr_mode;
 	uint32_t format;
+	size_t max_ep_auth_key;
 };
 
 Test(getinfo_infos, nohints)
@@ -261,6 +262,7 @@ Test(getinfo_infos, nohints)
 	char *odp;
 	char *compat;
 	struct info_check infos[MAX_INFOS];
+	size_t max_ep_auth_key;
 
 	cxit_init();
 	cr_assert(!cxit_fi_hints, "hints not NULL");
@@ -274,27 +276,38 @@ Test(getinfo_infos, nohints)
 	}
 
 	/* By default when no hints are specified, each interface
-	 * should have 2 fi_info.
+	 * should have 4 fi_info.
 	 */
-	infos[info_per_if].mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED |
-				     FI_MR_PROV_KEY;
-	infos[info_per_if].format = FI_ADDR_CXI;
-	info_per_if++;
+	for (i = 0; i < 2; i++) {
+		if (i < 1)
+			max_ep_auth_key = 1;
+		else
+			max_ep_auth_key = 4;
 
-	infos[info_per_if].mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
-	infos[info_per_if].format = FI_ADDR_CXI;
-	info_per_if++;
-
-	/* Add ODP versions if enabled */
-	odp = getenv("FI_CXI_ODP");
-	if (odp && strtol(odp, NULL, 10)) {
+		infos[info_per_if].mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED |
+					FI_MR_PROV_KEY;
 		infos[info_per_if].format = FI_ADDR_CXI;
-		infos[info_per_if].mr_mode = FI_MR_ENDPOINT | FI_MR_PROV_KEY;
+		infos[info_per_if].max_ep_auth_key = max_ep_auth_key;
 		info_per_if++;
 
+		infos[info_per_if].mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
 		infos[info_per_if].format = FI_ADDR_CXI;
-		infos[info_per_if].mr_mode = FI_MR_ENDPOINT;
+		infos[info_per_if].max_ep_auth_key = max_ep_auth_key;
 		info_per_if++;
+
+		/* Add ODP versions if enabled */
+		odp = getenv("FI_CXI_ODP");
+		if (odp && strtol(odp, NULL, 10)) {
+			infos[info_per_if].format = FI_ADDR_CXI;
+			infos[info_per_if].mr_mode = FI_MR_ENDPOINT | FI_MR_PROV_KEY;
+			infos[info_per_if].max_ep_auth_key = max_ep_auth_key;
+			info_per_if++;
+
+			infos[info_per_if].format = FI_ADDR_CXI;
+			infos[info_per_if].mr_mode = FI_MR_ENDPOINT;
+			infos[info_per_if].max_ep_auth_key = max_ep_auth_key;
+			info_per_if++;
+		}
 	}
 
 	/* If we are supporting compatibility with old constants,
@@ -307,6 +320,8 @@ Test(getinfo_infos, nohints)
 				infos[i].mr_mode;
 			infos[info_per_if + i].format =
 				FI_ADDR_CXI_COMPAT;
+			infos[info_per_if + i].max_ep_auth_key =
+				infos[i].max_ep_auth_key;
 		}
 		info_per_if += i;
 	}

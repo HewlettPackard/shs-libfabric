@@ -128,6 +128,122 @@ struct fi_domain_attr cxip_odp_client_key_domain_attr = {
 	.max_ep_auth_key = 1,
 };
 
+/* No ODP, provider specified MR keys */
+struct fi_domain_attr cxip_prov_key_multi_auth_key_domain_attr = {
+	.name = NULL,
+	.threading = FI_THREAD_SAFE,
+	.control_progress = FI_PROGRESS_MANUAL,
+	.data_progress = FI_PROGRESS_MANUAL,
+	.resource_mgmt = FI_RM_ENABLED,
+	.av_type = FI_AV_UNSPEC,
+	.mr_mode = FI_MR_PROV_KEY | FI_MR_ALLOCATED | FI_MR_ENDPOINT,
+	.mr_key_size = CXIP_MR_PROV_KEY_SIZE,
+	.cq_data_size = CXIP_REMOTE_CQ_DATA_SZ,
+	.cq_cnt = 32,
+	.ep_cnt = 128,
+	.tx_ctx_cnt = CXIP_EP_MAX_TX_CNT,
+	.rx_ctx_cnt = CXIP_EP_MAX_RX_CNT,
+	.max_ep_tx_ctx = CXIP_EP_MAX_TX_CNT,
+	.max_ep_rx_ctx = CXIP_EP_MAX_RX_CNT,
+	.max_ep_stx_ctx = 0,
+	.max_ep_srx_ctx = 0,
+	.cntr_cnt = 16,
+	.mr_iov_limit = 1,
+	.mr_cnt = 100,
+	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.auth_key_size = sizeof(struct cxi_auth_key),
+
+	/* Set to the number of VNIs supported by a single CXI service. */
+	.max_ep_auth_key = 4,
+};
+
+/* ODP, provider specified MR keys */
+struct fi_domain_attr cxip_odp_prov_key_multi_auth_key_domain_attr = {
+	.name = NULL,
+	.threading = FI_THREAD_SAFE,
+	.control_progress = FI_PROGRESS_MANUAL,
+	.data_progress = FI_PROGRESS_MANUAL,
+	.resource_mgmt = FI_RM_ENABLED,
+	.av_type = FI_AV_UNSPEC,
+	.mr_mode = FI_MR_PROV_KEY | FI_MR_ENDPOINT,
+	.mr_key_size = CXIP_MR_PROV_KEY_SIZE,
+	.cq_data_size = CXIP_REMOTE_CQ_DATA_SZ,
+	.cq_cnt = 32,
+	.ep_cnt = 128,
+	.tx_ctx_cnt = CXIP_EP_MAX_TX_CNT,
+	.rx_ctx_cnt = CXIP_EP_MAX_RX_CNT,
+	.max_ep_tx_ctx = CXIP_EP_MAX_TX_CNT,
+	.max_ep_rx_ctx = CXIP_EP_MAX_RX_CNT,
+	.max_ep_stx_ctx = 0,
+	.max_ep_srx_ctx = 0,
+	.cntr_cnt = 16,
+	.mr_iov_limit = 1,
+	.mr_cnt = 100,
+	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.auth_key_size = sizeof(struct cxi_auth_key),
+
+	/* Set to the number of VNIs supported by a single CXI service. */
+	.max_ep_auth_key = 4,
+};
+
+/* No ODP, client specified MR keys */
+struct fi_domain_attr cxip_client_key_multi_auth_key_domain_attr = {
+	.name = NULL,
+	.threading = FI_THREAD_SAFE,
+	.control_progress = FI_PROGRESS_MANUAL,
+	.data_progress = FI_PROGRESS_MANUAL,
+	.resource_mgmt = FI_RM_ENABLED,
+	.av_type = FI_AV_UNSPEC,
+	.mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED,
+	.mr_key_size = CXIP_MR_KEY_SIZE,
+	.cq_data_size = CXIP_REMOTE_CQ_DATA_SZ,
+	.cq_cnt = 32,
+	.ep_cnt = 128,
+	.tx_ctx_cnt = CXIP_EP_MAX_TX_CNT,
+	.rx_ctx_cnt = CXIP_EP_MAX_RX_CNT,
+	.max_ep_tx_ctx = CXIP_EP_MAX_TX_CNT,
+	.max_ep_rx_ctx = CXIP_EP_MAX_RX_CNT,
+	.max_ep_stx_ctx = 0,
+	.max_ep_srx_ctx = 0,
+	.cntr_cnt = 16,
+	.mr_iov_limit = 1,
+	.mr_cnt = 100,
+	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.auth_key_size = sizeof(struct cxi_auth_key),
+
+	/* Set to the number of VNIs supported by a single CXI service. */
+	.max_ep_auth_key = 4,
+};
+
+/* ODP, client specified MR keys */
+struct fi_domain_attr cxip_odp_client_key_multi_auth_key_domain_attr = {
+	.name = NULL,
+	.threading = FI_THREAD_SAFE,
+	.control_progress = FI_PROGRESS_MANUAL,
+	.data_progress = FI_PROGRESS_MANUAL,
+	.resource_mgmt = FI_RM_ENABLED,
+	.av_type = FI_AV_UNSPEC,
+	.mr_mode = FI_MR_ENDPOINT,
+	.mr_key_size = CXIP_MR_KEY_SIZE,
+	.cq_data_size = CXIP_REMOTE_CQ_DATA_SZ,
+	.cq_cnt = 32,
+	.ep_cnt = 128,
+	.tx_ctx_cnt = CXIP_EP_MAX_TX_CNT,
+	.rx_ctx_cnt = CXIP_EP_MAX_RX_CNT,
+	.max_ep_tx_ctx = CXIP_EP_MAX_TX_CNT,
+	.max_ep_rx_ctx = CXIP_EP_MAX_RX_CNT,
+	.max_ep_stx_ctx = 0,
+	.max_ep_srx_ctx = 0,
+	.cntr_cnt = 16,
+	.mr_iov_limit = 1,
+	.mr_cnt = 100,
+	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.auth_key_size = sizeof(struct cxi_auth_key),
+
+	/* Set to the number of VNIs supported by a single CXI service. */
+	.max_ep_auth_key = 4,
+};
+
 struct fi_ep_attr cxip_ep_attr = {
 	.type = FI_EP_RDM,
 	.protocol = FI_PROTO_CXI,
@@ -152,6 +268,26 @@ struct fi_tx_attr cxip_tx_attr = {
 
 struct fi_rx_attr cxip_rx_attr = {
 	.caps = CXIP_EP_CAPS & ~OFI_IGNORED_RX_CAPS,
+	.op_flags = CXIP_RX_OP_FLAGS,
+	.msg_order = CXIP_MSG_ORDER,
+	.comp_order = FI_ORDER_NONE,
+	.total_buffered_recv = CXIP_UX_BUFFER_SIZE,
+	.size = 1024, /* 64k / 64b */
+	.iov_limit = 1,
+};
+
+struct fi_tx_attr cxip_multi_auth_key_tx_attr = {
+	.caps = CXIP_EP_CAPS & ~OFI_IGNORED_TX_CAPS & ~FI_DIRECTED_RECV,
+	.op_flags = CXIP_TX_OP_FLAGS,
+	.msg_order = CXIP_MSG_ORDER,
+	.inject_size = CXIP_INJECT_SIZE,
+	.size = CXIP_MAX_TX_SIZE,
+	.iov_limit = 1,
+	.rma_iov_limit = 1,
+};
+
+struct fi_rx_attr cxip_multi_auth_key_rx_attr = {
+	.caps = CXIP_EP_CAPS & ~OFI_IGNORED_RX_CAPS & ~FI_DIRECTED_RECV,
 	.op_flags = CXIP_RX_OP_FLAGS,
 	.msg_order = CXIP_MSG_ORDER,
 	.comp_order = FI_ORDER_NONE,
@@ -206,6 +342,42 @@ struct fi_info cxip_infos[] = {
 		.rx_attr = &cxip_rx_attr,
 		.ep_attr = &cxip_ep_attr,
 		.domain_attr = &cxip_odp_client_key_domain_attr,
+		.fabric_attr = &cxip_fabric_attr,
+	},
+	{
+		.caps = CXIP_EP_CAPS & ~FI_DIRECTED_RECV,
+		.addr_format = FI_ADDR_CXI,
+		.tx_attr = &cxip_multi_auth_key_tx_attr,
+		.rx_attr = &cxip_multi_auth_key_rx_attr,
+		.ep_attr = &cxip_ep_attr,
+		.domain_attr = &cxip_prov_key_multi_auth_key_domain_attr,
+		.fabric_attr = &cxip_fabric_attr,
+	},
+	{
+		.caps = CXIP_EP_CAPS & ~FI_DIRECTED_RECV,
+		.addr_format = FI_ADDR_CXI,
+		.tx_attr = &cxip_multi_auth_key_tx_attr,
+		.rx_attr = &cxip_multi_auth_key_rx_attr,
+		.ep_attr = &cxip_ep_attr,
+		.domain_attr = &cxip_client_key_multi_auth_key_domain_attr,
+		.fabric_attr = &cxip_fabric_attr,
+	},
+	{
+		.caps = CXIP_EP_CAPS & ~FI_DIRECTED_RECV,
+		.addr_format = FI_ADDR_CXI,
+		.tx_attr = &cxip_multi_auth_key_tx_attr,
+		.rx_attr = &cxip_multi_auth_key_rx_attr,
+		.ep_attr = &cxip_ep_attr,
+		.domain_attr = &cxip_odp_prov_key_multi_auth_key_domain_attr,
+		.fabric_attr = &cxip_fabric_attr,
+	},
+	{
+		.caps = CXIP_EP_CAPS & ~FI_DIRECTED_RECV,
+		.addr_format = FI_ADDR_CXI,
+		.tx_attr = &cxip_multi_auth_key_tx_attr,
+		.rx_attr = &cxip_multi_auth_key_rx_attr,
+		.ep_attr = &cxip_ep_attr,
+		.domain_attr = &cxip_odp_client_key_multi_auth_key_domain_attr,
 		.fabric_attr = &cxip_fabric_attr,
 	},
 };

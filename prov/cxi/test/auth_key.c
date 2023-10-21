@@ -1287,13 +1287,18 @@ Test(auth_key, default_service_id_disabled)
 	cxil_close_device(dev);
 }
 
-#define DEFAULT_MAX_EP_AUTH_KEY 1
+#define DEFAULT_MAX_EP_AUTH_KEY 4
 
 Test(auth_key, max_ep_auth_key_null_hints)
 {
 	int ret;
 	struct fi_info *info;
 	struct fi_info *tmp;
+	int i = 0;
+	size_t expected_ep_auth_key;
+
+	ret = setenv("FI_CXI_COMPAT", "0", 1);
+	cr_assert(ret == 0);
 
 	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
 			 NULL, FI_SOURCE, NULL, &info);
@@ -1301,12 +1306,19 @@ Test(auth_key, max_ep_auth_key_null_hints)
 
 	tmp = info;
 	while (tmp) {
+		/* The first 2 fi_info's should have max_ep_auth_key == 1*/
+		if (i < 2)
+			expected_ep_auth_key = 1;
+		else
+			expected_ep_auth_key = DEFAULT_MAX_EP_AUTH_KEY;
+
 		cr_assert_eq(tmp->domain_attr->max_ep_auth_key,
-			     DEFAULT_MAX_EP_AUTH_KEY,
-			     "Invalid max_ep_auth_key: expected=%d got=%ld",
-			     DEFAULT_MAX_EP_AUTH_KEY,
-			     tmp->domain_attr->max_ep_auth_key);
+			     expected_ep_auth_key,
+			     "Invalid max_ep_auth_key: expected=%ld got=%ld info_count=%d",
+			     expected_ep_auth_key,
+			     tmp->domain_attr->max_ep_auth_key, i);
 		tmp = tmp->next;
+		i++;
 	}
 
 	fi_freeinfo(info);
@@ -1319,6 +1331,11 @@ Test(auth_key, zero_max_ep_auth_key_null_hint)
 	struct fi_info *hints;
 	struct fi_info *info;
 	struct fi_info *tmp;
+	int i = 0;
+	size_t expected_ep_auth_key;
+
+	ret = setenv("FI_CXI_COMPAT", "0", 1);
+	cr_assert(ret == 0);
 
 	hints = fi_allocinfo();
 	cr_assert_not_null(hints, "fi_allocinfo failed");
@@ -1335,12 +1352,19 @@ Test(auth_key, zero_max_ep_auth_key_null_hint)
 
 	tmp = info;
 	while (tmp) {
+		/* The first 2 fi_info's should have max_ep_auth_key == 1*/
+		if (i < 2)
+			expected_ep_auth_key = 1;
+		else
+			expected_ep_auth_key = DEFAULT_MAX_EP_AUTH_KEY;
+
 		cr_assert_eq(tmp->domain_attr->max_ep_auth_key,
-			     DEFAULT_MAX_EP_AUTH_KEY,
-			     "Invalid max_ep_auth_key: expected=%d got=%ld",
-			     DEFAULT_MAX_EP_AUTH_KEY,
-			     tmp->domain_attr->max_ep_auth_key);
+			     expected_ep_auth_key,
+			     "Invalid max_ep_auth_key: expected=%ld got=%ld info_count=%d",
+			     expected_ep_auth_key,
+			     tmp->domain_attr->max_ep_auth_key, i);
 		tmp = tmp->next;
+		i++;
 	}
 
 	fi_freeinfo(hints);
