@@ -320,6 +320,7 @@ static int cxip_av_lookup(struct fid_av *fid, fi_addr_t fi_addr, void *addr_out,
 		return ret;
 
 	memcpy(addr_out, &addr, MIN(*addrlen, sizeof(addr)));
+	*addrlen = sizeof(addr);
 
 	return FI_SUCCESS;
 }
