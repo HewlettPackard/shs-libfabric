@@ -451,11 +451,6 @@ static int cxip_ep_enable(struct fid_ep *fid_ep)
 	struct cxip_ep_obj *ep_obj = ep->ep_obj;
 	int ret = FI_SUCCESS;
 
-	if (ep_obj->av_auth_key) {
-		CXIP_WARN("AV auth key configuration not supported\n");
-		return -FI_EINVAL;
-	}
-
 	ofi_genlock_lock(&ep_obj->lock);
 	if (ep_obj->enabled)
 		goto unlock;
@@ -469,14 +464,38 @@ static int cxip_ep_enable(struct fid_ep *fid_ep)
 	assert(ep_obj->domain->enabled);
 
 	/* src_addr.pid may be C_PID_ANY at this point. */
-	ret = cxip_portals_table_alloc(ep_obj->domain->lni,
-				       &ep_obj->auth_key.vni, 1,
-				       ep_obj->src_addr.pid,
-				       &ep_obj->ptable);
-	if (ret != FI_SUCCESS) {
-		CXIP_WARN("Failed to allocate portabs table: %d\n", ret);
-		goto unlock;
+	if (ep_obj->av_auth_key) {
+		ret = cxip_av_auth_key_get_vnis(ep_obj->av, &ep_obj->vnis,
+						&ep_obj->vni_count);
+		if (ret)
+			goto unlock;
+
+		ret = cxip_portals_table_alloc(ep_obj->domain->lni,
+					       ep_obj->vnis, ep_obj->vni_count,
+					       ep_obj->src_addr.pid,
+					       &ep_obj->ptable);
+		if (ret != FI_SUCCESS) {
+			CXIP_WARN("Failed to allocate auth key ring portals table: %d\n",
+				  ret);
+			goto free_vnis;
+		}
+
+		/* This is unfortunately needed to allocate a command queue.
+		 * But, this can be changed later.
+		 */
+		ep_obj->auth_key.vni = ep_obj->vnis[0];
+	} else {
+		ret = cxip_portals_table_alloc(ep_obj->domain->lni,
+					       &ep_obj->auth_key.vni, 1,
+					       ep_obj->src_addr.pid,
+					       &ep_obj->ptable);
+		if (ret != FI_SUCCESS) {
+			CXIP_WARN("Failed to allocate portals table: %d\n",
+				  ret);
+			goto unlock;
+		}
 	}
+
 	ep_obj->src_addr.pid = ep_obj->ptable->pid;
 
 	ret = cxip_ep_ctrl_init(ep_obj);
@@ -551,6 +570,12 @@ free_ep_ctrl:
 free_portals_table:
 	cxip_portals_table_free(ep_obj->ptable);
 	ep_obj->ptable = NULL;
+free_vnis:
+	if (ep_obj->vnis) {
+		cxip_av_auth_key_put_vnis(ep_obj->av, ep_obj->vnis,
+					  ep_obj->vni_count);
+		ep_obj->vnis = NULL;
+	}
 unlock:
 	ofi_genlock_unlock(&ep_obj->lock);
 
@@ -567,6 +592,11 @@ static void cxip_ep_disable(struct cxip_ep_obj *ep_obj)
 		cxip_zbcoll_fini(ep_obj);
 		cxip_ep_ctrl_fini(ep_obj);
 		cxip_portals_table_free(ep_obj->ptable);
+		if (ep_obj->vnis) {
+			cxip_av_auth_key_put_vnis(ep_obj->av, ep_obj->vnis,
+						  ep_obj->vni_count);
+			ep_obj->vnis = NULL;
+		}
 		ep_obj->ptable = NULL;
 		ep_obj->enabled = false;
 	}
@@ -1106,6 +1136,13 @@ int cxip_alloc_endpoint(struct cxip_domain *cxip_dom, struct fi_info *hints,
 	ret = ofi_prov_check_info(&cxip_util_prov, CXIP_FI_VERSION, hints);
 	if (ret != FI_SUCCESS)
 		return -FI_EINVAL;
+
+	if (cxip_dom->auth_key_entry_max > 1 &&
+	    ((hints->caps & FI_DIRECTED_RECV) ||
+	     (hints->rx_attr->caps & FI_DIRECTED_RECV))) {
+		CXIP_WARN("FI_DIRECTED_RECV not supported with multiple auth key per EP\n");
+		return -FI_EINVAL;
+	}
 
 	ret = cxip_check_auth_key_info(hints);
 	if (ret)

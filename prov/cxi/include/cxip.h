@@ -2045,6 +2045,10 @@ struct cxip_ep_obj {
 	/* This is only valid if FI_AV_AUTH_KEY is false. */
 	struct cxi_auth_key auth_key;
 
+	/* Array of VNIs if FI_AV_AUTH_KEY is true. */
+	uint16_t *vnis;
+	size_t vni_count;
+
 	bool enabled;
 
 	struct cxil_wait_obj *ctrl_wait;
