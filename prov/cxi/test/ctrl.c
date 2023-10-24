@@ -150,7 +150,7 @@ Test(ctrl, zb_config)
 	cr_assert(fiaddrs);
 
 	for (i = 0; i < num_addrs; i++)
-		caddrs[i].raw = ep_obj->src_addr.raw;
+		caddrs[i] = ep_obj->src_addr;
 	ret = fi_av_insert(&ep_obj->av->av_fid, caddrs, num_addrs, fiaddrs,
 			   0L, NULL);
 	cr_assert(ret == num_addrs);
@@ -164,7 +164,7 @@ Test(ctrl, zb_config)
 		  "no tree: simcnt=%d\n", zb->simcount);
 	cr_assert(zb->num_caddrs == 1,
 		  "no_tree: num_caddrs=%d\n", zb->num_caddrs);
-	cr_assert(zb->caddrs[0].raw == ep_obj->src_addr.raw);
+	cr_assert(memcmp(&zb->caddrs[0], &ep_obj->src_addr, sizeof(ep_obj->src_addr)) == 0);
 	cxip_zbcoll_free(zb);
 
 	/* request simulation */
