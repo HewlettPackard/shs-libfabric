@@ -58,6 +58,18 @@ int cxip_cq_req_complete_addr(struct cxip_req *req, fi_addr_t src)
 }
 
 /*
+ * proverr2errno() - Match NIC errno to Linux errno.
+ */
+int proverr2errno(int err)
+{
+	if (err == C_RC_UNDELIVERABLE)
+		return FI_EHOSTUNREACH;
+	else if (err == C_RC_VNI_NOT_FOUND)
+		return FI_ENOTCONN;
+	return FI_EIO;
+}
+
+/*
  * cxip_cq_req_error() - Generate an error event for the request.
  */
 int cxip_cq_req_error(struct cxip_req *req, size_t olen,

@@ -382,7 +382,8 @@ static void recv_req_report(struct cxip_req *req)
 			RXC_DBG(rxc, "Peek request not found: %p (err: %d)\n",
 				req, err);
 		} else {
-			err = FI_EIO;
+			err = proverr2errno(req->recv.rc);
+
 			RXC_WARN(rxc, "Request error: %p (err: %d, %s)\n", req,
 				 err, cxi_rc_to_str(req->recv.rc));
 		}
@@ -4292,6 +4293,7 @@ static uint32_t cxip_msg_match_id(struct cxip_txc *txc)
 static void report_send_completion(struct cxip_req *req, bool sw_cntr)
 {
 	int ret;
+	int ret_err;
 	int success_event = (req->flags & FI_COMPLETION);
 	struct cxip_txc *txc = req->send.txc;
 
@@ -4315,13 +4317,14 @@ static void report_send_completion(struct cxip_req *req, bool sw_cntr)
 					 ret);
 		}
 	} else {
-		TXC_WARN(txc, "Request dest_addr: %ld caddr.nic: %#X caddr.pid:"
-			 " %u error: %p (err: %d, %s)\n",
+		ret_err = proverr2errno(req->send.rc);
+		TXC_WARN(txc, "Request dest_addr: %ld caddr.nic: %#X caddr.pid: %u error: %p (err: %d, %s)\n",
 			 req->send.dest_addr, req->send.caddr.nic,
-			 req->send.caddr.pid, req, FI_EIO,
+			 req->send.caddr.pid, req, ret_err,
 			 cxi_rc_to_str(req->send.rc));
 
-		ret = cxip_cq_req_error(req, 0, FI_EIO, req->send.rc, NULL, 0);
+		ret = cxip_cq_req_error(req, 0, ret_err,
+					req->send.rc, NULL, 0);
 		if (ret != FI_SUCCESS)
 			TXC_WARN(txc, "Failed to report error: %d\n", ret);
 

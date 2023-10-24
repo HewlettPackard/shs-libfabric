@@ -281,7 +281,14 @@ static int cxip_amo_inject_cb(struct cxip_req *req, const union c_event *event)
 		return FI_SUCCESS;
 	}
 
-	return cxip_cq_req_error(req, 0, FI_EIO, cxi_event_rc(event), NULL, 0);
+	int event_rc;
+
+	event_rc = cxi_init_event_rc(event);
+	int ret_err;
+
+	ret_err = proverr2errno(event_rc);
+	return cxip_cq_req_error(req, 0, ret_err,
+				 cxi_event_rc(event), NULL, 0);
 }
 
 /*
@@ -361,6 +368,7 @@ static int _cxip_amo_cb(struct cxip_req *req, const union c_event *event)
 {
 	int ret;
 	int event_rc;
+	int ret_err;
 	int success_event = (req->flags & FI_COMPLETION);
 	struct cxip_txc *txc = req->amo.txc;
 
@@ -430,7 +438,11 @@ static int _cxip_amo_cb(struct cxip_req *req, const union c_event *event)
 					     "Failed to report completion\n");
 		}
 	} else {
-		ret = cxip_cq_req_error(req, 0, FI_EIO, event_rc, NULL, 0);
+		ret_err = proverr2errno(event_rc);
+
+		ret = cxip_cq_req_error(req, 0, ret_err,
+					event_rc, NULL, 0);
+
 		if (ret != FI_SUCCESS)
 			TXC_WARN_RET(txc, ret, "Failed to report error\n");
 	}

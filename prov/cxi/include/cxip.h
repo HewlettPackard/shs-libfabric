@@ -2666,6 +2666,7 @@ int cxip_cq_req_complete_addr(struct cxip_req *req, fi_addr_t src);
 int cxip_cq_req_error(struct cxip_req *req, size_t olen,
 		      int err, int prov_errno, void *err_data,
 		      size_t err_data_size);
+int proverr2errno(int err);
 struct cxip_req *cxip_evtq_req_alloc(struct cxip_evtq *evtq,
 				     int remap, void *req_ctx);
 void cxip_evtq_req_free(struct cxip_req *req);

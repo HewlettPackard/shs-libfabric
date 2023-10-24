@@ -801,7 +801,7 @@ static void _coll_rx_req_report(struct cxip_req *req)
 		/* failure */
 		if (req->coll.cxi_rc != C_RC_OK) {
 			/* real network error of some sort */
-			err = FI_EIO;
+			err = proverr2errno(req->coll.cxi_rc);
 			CXIP_WARN("Request error: %p (err: %d, %s)\n",
 				  req, err, cxi_rc_to_str(err));
 		} else if (overflow) {
