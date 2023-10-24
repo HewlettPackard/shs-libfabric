@@ -85,10 +85,28 @@ static int cxip_av_insert_addr(struct cxip_av *av, struct cxip_addr *addr,
 			       fi_addr_t *fi_addr, uint64_t flags)
 {
 	struct cxip_av_entry *entry;
+	struct cxip_av_auth_key_entry *auth_key_entry = NULL;
+	struct cxip_addr auth_key_addr = {
+		.nic = addr->nic,
+		.pid = addr->pid
+	};
 
-	CXIP_DBG("Inserting nid=%#x pid=%d\n", addr->nic, addr->pid);
+	if (flags & FI_AUTH_KEY) {
+		auth_key_entry =
+			ofi_bufpool_get_ibuf(av->auth_key_entry_pool, *fi_addr);
+		if (!auth_key_entry) {
+			CXIP_WARN("Failed to find auth_key entry\n");
+			return -FI_EINVAL;
+		}
 
-	HASH_FIND(hh, av->av_entry_hash, addr, sizeof(*addr), entry);
+		auth_key_addr.vni = auth_key_entry->key.vni;
+	}
+
+	CXIP_DBG("Inserting nid=%#x pid=%d vni=%d\n", auth_key_addr.nic,
+		 auth_key_addr.pid, auth_key_addr.vni);
+
+	HASH_FIND(hh, av->av_entry_hash, &auth_key_addr, sizeof(auth_key_addr),
+		  entry);
 	if (entry) {
 		if (fi_addr)
 			*fi_addr = ofi_buf_index(entry);
@@ -107,9 +125,9 @@ static int cxip_av_insert_addr(struct cxip_av *av, struct cxip_addr *addr,
 		return -FI_ENOMEM;
 	}
 
-	memcpy(&entry->addr, addr, sizeof(*addr));
+	memcpy(&entry->addr, &auth_key_addr, sizeof(auth_key_addr));
 	ofi_atomic_initialize32(&entry->use_cnt, 1);
-	HASH_ADD(hh, av->av_entry_hash, addr, sizeof(*addr), entry);
+	HASH_ADD(hh, av->av_entry_hash, addr, sizeof(entry->addr), entry);
 
 	if (flags & FI_AV_USER_ID)
 		entry->fi_addr = *fi_addr;
@@ -119,12 +137,17 @@ static int cxip_av_insert_addr(struct cxip_av *av, struct cxip_addr *addr,
 	if (fi_addr)
 		*fi_addr = ofi_buf_index(entry);
 
+	if (auth_key_entry) {
+		entry->auth_key = auth_key_entry;
+		ofi_atomic_inc32(&auth_key_entry->ref_cnt);
+	}
+
 	ofi_atomic_inc32(&av->av_entry_cnt);
 
 	return FI_SUCCESS;
 }
 
-#define AV_INSERT_VALID_FLAGS (FI_MORE | FI_AV_USER_ID)
+#define AV_INSERT_VALID_FLAGS (FI_MORE | FI_AV_USER_ID | FI_AUTH_KEY)
 
 static int cxip_av_insert_validate_args(struct fid_av *fid, const void *addr_in,
 					size_t count, fi_addr_t *fi_addr,
@@ -155,6 +178,26 @@ static int cxip_av_insert_validate_args(struct fid_av *fid, const void *addr_in,
 
 	if (!fi_addr && (flags & FI_AV_USER_ID)) {
 		CXIP_WARN("NULL fi_addr with FI_AV_USER_ID\n");
+		return -FI_EINVAL;
+	}
+
+	if (!av->av_auth_key && (flags & FI_AUTH_KEY)) {
+		CXIP_WARN("FI_AUTH_KEY requested without FI_AV_AUTH_KEY domain config\n");
+		return -FI_EINVAL;
+	}
+
+	if (av->av_auth_key && !(flags & FI_AUTH_KEY)) {
+		CXIP_WARN("FI_AUTH_KEY must be used for AVs configured with FI_AV_AUTH_KEY\n");
+		return -FI_EINVAL;
+	}
+
+	if ((flags & FI_AUTH_KEY) && (flags & FI_AV_USER_ID)) {
+		CXIP_WARN("FI_AUTH_KEY and FI_AV_USER_ID are not supported together\n");
+		return -FI_EINVAL;
+	}
+
+	if ((flags & FI_AUTH_KEY) && !fi_addr) {
+		CXIP_WARN("NULL fi_addr array used with FI_AUTH_KEY\n");
 		return -FI_EINVAL;
 	}
 
@@ -272,11 +315,19 @@ fi_addr_t cxip_av_lookup_fi_addr(struct cxip_av *av,
 				 const struct cxip_addr *addr)
 {
 	struct cxip_av_entry *entry;
+	struct cxip_addr lookup_addr = *addr;
 	fi_addr_t fi_addr;
+
+	/* Non-zero VNIs being inserted into the auth_key is ONLY supported with
+	 * FI_AV_AUTH_KEY.
+	 */
+	if (!av->av_auth_key)
+		lookup_addr.vni = 0;
 
 	cxip_av_read_lock(av);
 
-	HASH_FIND(hh, av->av_entry_hash, addr, sizeof(*addr), entry);
+	HASH_FIND(hh, av->av_entry_hash, &lookup_addr, sizeof(lookup_addr),
+		  entry);
 	fi_addr = entry ? entry->fi_addr : FI_ADDR_NOTAVAIL;
 
 	cxip_av_unlock(av);
@@ -350,12 +401,15 @@ static void cxip_av_remove_addr(struct cxip_av *av, fi_addr_t fi_addr)
 	CXIP_DBG("Removing nid=%#x pid=%d\n", entry->addr.nic,
 		 entry->addr.pid);
 
+	if (entry->auth_key)
+		ofi_atomic_dec32(&entry->auth_key->ref_cnt);
+
 	ofi_atomic_dec32(&av->av_entry_cnt);
 	HASH_DELETE(hh, av->av_entry_hash, entry);
 	ofi_ibuf_free(entry);
 }
 
-static void cxip_av_remove_auth_key(struct cxip_av *av, fi_addr_t fi_addr)
+static int cxip_av_remove_auth_key(struct cxip_av *av, fi_addr_t fi_addr)
 {
 	struct cxip_av_auth_key_entry *entry;
 	int use_cnt;
@@ -363,12 +417,17 @@ static void cxip_av_remove_auth_key(struct cxip_av *av, fi_addr_t fi_addr)
 	entry = ofi_bufpool_get_ibuf(av->auth_key_entry_pool, fi_addr);
 	if (!entry) {
 		CXIP_WARN("Invalid fi_addr: %#lx\n", fi_addr);
-		return;
+		return -FI_EINVAL;
+	}
+
+	if (ofi_atomic_get32(&entry->ref_cnt)) {
+		CXIP_WARN("AV auth key still in use\n");
+		return -FI_EBUSY;
 	}
 
 	use_cnt = ofi_atomic_dec32(&entry->use_cnt);
 	if (use_cnt)
-		return;
+		return FI_SUCCESS;
 
 	CXIP_DBG("vni=%d\n", entry->key.vni);
 
@@ -376,6 +435,8 @@ static void cxip_av_remove_auth_key(struct cxip_av *av, fi_addr_t fi_addr)
 	dlist_remove(&entry->entry);
 	HASH_DELETE(hh, av->auth_key_entry_hash, entry);
 	ofi_ibuf_free(entry);
+
+	return FI_SUCCESS;
 }
 
 #define AV_REMOVE_VALID_FLAGS FI_AUTH_KEY
@@ -386,20 +447,23 @@ static int cxip_av_remove(struct fid_av *fid, fi_addr_t *fi_addr,
 	struct cxip_av *av = container_of(fid, struct cxip_av, av_fid.fid);
 	uint64_t unsupported_flags = flags & ~AV_REMOVE_VALID_FLAGS;
 	size_t i;
+	int ret;
 
 	if (unsupported_flags) {
 		CXIP_WARN("Unsupported flags: %#lx\n", unsupported_flags);
 		return -FI_EINVAL;
 	}
 
-
 	cxip_av_write_lock(av);
 
 	for (i = 0; i < count; i++) {
-		if (flags & FI_AUTH_KEY)
-			cxip_av_remove_auth_key(av, fi_addr[i]);
-		else
+		if (flags & FI_AUTH_KEY) {
+			ret = cxip_av_remove_auth_key(av, fi_addr[i]);
+			if (ret != FI_SUCCESS)
+				return ret;
+		} else {
 			cxip_av_remove_addr(av, fi_addr[i]);
+		}
 	}
 
 	cxip_av_unlock(av);
@@ -516,6 +580,7 @@ static int cxip_av_insert_auth_key(struct fid_av *av, const void *auth_key,
 
 	memcpy(&entry->key, &key, sizeof(key));
 	ofi_atomic_initialize32(&entry->use_cnt, 1);
+	ofi_atomic_initialize32(&entry->ref_cnt, 0);
 	HASH_ADD(hh, cxi_av->auth_key_entry_hash, key, sizeof(key), entry);
 	dlist_insert_tail(&entry->entry, &cxi_av->auth_key_entry_list);
 	ofi_atomic_inc32(&cxi_av->auth_key_entry_cnt);
@@ -690,6 +755,10 @@ int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 	dlist_init(&av->auth_key_entry_list);
 	ofi_atomic_initialize32(&av->auth_key_entry_cnt, 0);
 	av->auth_key_entry_max = dom->auth_key_entry_max;
+
+	/* Cannot support symmetric with AV auth key. */
+	if (av->av_auth_key)
+		av->symmetric = 0;
 
 	/* Only FI_AV_TABLE is implemented. */
 	av->type = attr->type == FI_AV_UNSPEC ? FI_AV_TABLE : attr->type;

@@ -306,6 +306,7 @@ static inline bool cxip_software_pte_allowed(void)
 struct cxip_addr {
 	uint32_t pid		: C_DFA_PID_BITS_MAX;
 	uint32_t nic		: C_DFA_NIC_BITS;
+	uint16_t vni;
 };
 
 #define CXIP_ADDR_EQUAL(a, b) ((a).nic == (b).nic && (a).pid == (b).pid)
@@ -1015,6 +1016,7 @@ struct cxip_req_recv {
 	int rc;				// DMA return code
 	uint32_t rlen;			// Send length
 	uint64_t oflow_start;		// Overflow buffer address
+	uint16_t vni;			// VNI operation came in on
 	uint32_t initiator;		// DMA initiator address
 	uint32_t rdzv_id;		// DMA initiator rendezvous ID
 	uint8_t rdzv_lac;		// Rendezvous source LAC
@@ -2185,18 +2187,20 @@ struct cxip_mr {
 	struct dlist_entry mr_domain_entry;
 };
 
+struct cxip_av_auth_key_entry {
+	ofi_atomic32_t use_cnt;
+	ofi_atomic32_t ref_cnt;
+	UT_hash_handle hh;
+	struct dlist_entry entry;
+	struct cxi_auth_key key;
+};
+
 struct cxip_av_entry {
 	ofi_atomic32_t use_cnt;
 	UT_hash_handle hh;
 	struct cxip_addr addr;
 	fi_addr_t fi_addr;
-};
-
-struct cxip_av_auth_key_entry {
-	ofi_atomic32_t use_cnt;
-	UT_hash_handle hh;
-	struct dlist_entry entry;
-	struct cxi_auth_key key;
+	struct cxip_av_auth_key_entry *auth_key;
 };
 
 struct cxip_av {
