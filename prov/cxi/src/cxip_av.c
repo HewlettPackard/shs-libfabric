@@ -666,6 +666,73 @@ fi_addr_t cxip_av_lookup_auth_key_fi_addr(struct cxip_av *av, unsigned int vni)
 	return addr;
 }
 
+int cxip_av_auth_key_get_vnis(struct cxip_av *av, uint16_t **vni,
+			      size_t *vni_count)
+{
+	uint16_t *vnis;
+	size_t count;
+	struct cxip_av_auth_key_entry *entry;
+	int i;
+	int ret = FI_SUCCESS;
+
+	cxip_av_read_lock(av);
+
+	count = ofi_atomic_get32(&av->auth_key_entry_cnt);
+	if (count == 0) {
+		CXIP_WARN("AV auth key empty\n");
+		ret = -FI_EINVAL;
+		goto unlock_out;
+	}
+
+	vnis = calloc(count, sizeof(*vnis));
+	if (!vnis) {
+		CXIP_WARN("Failed to allocate auth key VNI memory\n");
+		ret = -FI_ENOMEM;;
+		goto unlock_out;
+	}
+
+	i = 0;
+	dlist_foreach_container(&av->auth_key_entry_list,
+				struct cxip_av_auth_key_entry, entry, entry) {
+		ofi_atomic_inc32(&entry->ref_cnt);
+		vnis[i] = entry->key.vni;
+		i++;
+	}
+
+	assert(count == i);
+
+	*vni_count = count;
+	*vni = vnis;
+
+unlock_out:
+	cxip_av_unlock(av);
+
+	return ret;
+}
+
+void cxip_av_auth_key_put_vnis(struct cxip_av *av, uint16_t *vni,
+			       size_t vni_count)
+{
+	size_t i;
+	struct cxip_av_auth_key_entry *entry;
+
+	cxip_av_read_lock(av);
+
+	for (i = 0; i < vni_count; i++) {
+		dlist_foreach_container(&av->auth_key_entry_list,
+					struct cxip_av_auth_key_entry, entry, entry) {
+			if (entry->key.vni == vni[i]) {
+				ofi_atomic_dec32(&entry->ref_cnt);
+				break;
+			}
+		}
+	}
+
+	cxip_av_unlock(av);
+
+	free(vni);
+}
+
 static struct fi_ops_av cxip_av_fid_ops = {
 	.size = sizeof(struct fi_ops_av),
 	.insert = cxip_av_insert,

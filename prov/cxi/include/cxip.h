@@ -2251,6 +2251,10 @@ struct cxip_av {
 	bool av_auth_key;
 };
 
+int cxip_av_auth_key_get_vnis(struct cxip_av *av, uint16_t **vni,
+			      size_t *vni_count);
+void cxip_av_auth_key_put_vnis(struct cxip_av *av, uint16_t *vni,
+			       size_t vni_count);
 struct cxip_addr *(*cxip_av_addr_in)(const void *addr);
 void (*cxip_av_addr_out)(struct cxip_addr *addr_out,
 			 struct cxip_addr *addr);
