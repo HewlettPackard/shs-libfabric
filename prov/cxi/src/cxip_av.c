@@ -645,6 +645,27 @@ static int cxip_av_lookup_auth_key(struct fid_av *av, fi_addr_t addr,
 	return -FI_EINVAL;
 }
 
+fi_addr_t cxip_av_lookup_auth_key_fi_addr(struct cxip_av *av, unsigned int vni)
+{
+	struct cxip_av_auth_key_entry *entry;
+	struct cxi_auth_key lookup = {
+		.vni = vni,
+	};
+	fi_addr_t addr;
+
+	if (!av->av_auth_key)
+		return FI_ADDR_NOTAVAIL;
+
+	cxip_av_read_lock(av);
+
+	HASH_FIND(hh, av->auth_key_entry_hash, &lookup, sizeof(lookup), entry);
+	addr = entry ? ofi_buf_index(entry) : FI_ADDR_NOTAVAIL;
+
+	cxip_av_unlock(av);
+
+	return addr;
+}
+
 static struct fi_ops_av cxip_av_fid_ops = {
 	.size = sizeof(struct fi_ops_av),
 	.insert = cxip_av_insert,

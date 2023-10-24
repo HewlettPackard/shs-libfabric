@@ -2258,6 +2258,7 @@ int cxip_av_lookup_addr(struct cxip_av *av, fi_addr_t fi_addr,
 			struct cxip_addr *addr);
 fi_addr_t cxip_av_lookup_fi_addr(struct cxip_av *av,
 				 const struct cxip_addr *addr);
+fi_addr_t cxip_av_lookup_auth_key_fi_addr(struct cxip_av *av, unsigned int vni);
 int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 		 struct fid_av **av, void *context);
 int cxip_av_bind_ep(struct cxip_av *av, struct cxip_ep *ep);
