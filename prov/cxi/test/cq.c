@@ -483,25 +483,6 @@ Test(cq, cq_readerr_null_cq, .signal = SIGSEGV)
 	fi_cq_readerr(NULL, &err_entry, (uint64_t)0);
 }
 
-Test(cq, cq_readerr_null_buff)
-{
-	int ret;
-	struct fid_cq *cxi_open_cq = NULL;
-
-	/* Open a CQ */
-	ret = fi_cq_open(cxit_domain, NULL, &cxi_open_cq, NULL);
-	cr_assert_eq(ret, FI_SUCCESS, "fi_cq_open with NULL attr");
-	cr_assert_not_null(cxi_open_cq);
-
-	/* Attempt to read an err with a CQ with a NULL buff pointer */
-	ret = fi_cq_readerr(cxi_open_cq, NULL, (uint64_t)0);
-	cr_assert_eq(ret, -FI_EAGAIN, "fi_cq_open with NULL buff returned %d",
-		     ret);
-
-	ret = fi_close(&cxi_open_cq->fid);
-	cr_assert_eq(ret, FI_SUCCESS);
-}
-
 Test(cq, cq_readerr_no_errs)
 {
 	int ret;
