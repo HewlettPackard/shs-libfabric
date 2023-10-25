@@ -289,6 +289,8 @@ static inline int recv_req_event_success(struct cxip_rxc *rxc,
 					     req->recv.initiator);
 		ret = cxip_cq_req_error(req, 0, FI_EADDRNOTAVAIL, req->recv.rc,
 					addr, sizeof(*addr));
+
+		free(addr);
 	} else {
 		ret = cxip_cq_req_complete(req);
 	}
