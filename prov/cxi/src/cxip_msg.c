@@ -186,6 +186,7 @@ static fi_addr_t recv_req_src_addr(struct cxip_req *req)
 
 		addr.nic = CXI_MATCH_ID_EP(rxc->pid_bits, req->recv.initiator);
 		addr.pid = CXI_MATCH_ID_PID(rxc->pid_bits, req->recv.initiator);
+		addr.vni = req->recv.vni;
 
 		return cxip_av_lookup_fi_addr(rxc->ep_obj->av, &addr);
 	}
@@ -287,8 +288,12 @@ static inline int recv_req_event_success(struct cxip_rxc *rxc,
 		addr->nic = CXI_MATCH_ID_EP(rxc->pid_bits, req->recv.initiator);
 		addr->pid = CXI_MATCH_ID_PID(rxc->pid_bits,
 					     req->recv.initiator);
+
+		src_addr = cxip_av_lookup_auth_key_fi_addr(rxc->ep_obj->av,
+							   req->recv.vni);
+
 		ret = cxip_cq_req_error(req, 0, FI_EADDRNOTAVAIL, req->recv.rc,
-					addr, sizeof(*addr), FI_ADDR_UNSPEC);
+					addr, sizeof(*addr), src_addr);
 
 		free(addr);
 	} else {
@@ -448,6 +453,9 @@ recv_req_tgt_event(struct cxip_req *req, const union c_event *event)
 	if (req->recv.tgt_event)
 		return;
 	req->recv.tgt_event = true;
+
+	/* VNI is needed to support FI_AV_AUTH_KEY. */
+	req->recv.vni = event->tgt_long.vni;
 
 	/* rlen is used to detect truncation. */
 	req->recv.rlen = event->tgt_long.rlength;
@@ -4499,9 +4507,15 @@ static inline int cxip_send_prep_cmdq(struct cxip_cmdq *cmdq,
 {
 	struct cxip_txc *txc = req->send.txc;
 	int ret;
+	uint16_t vni;
 
 	if (!req->triggered) {
-		ret = cxip_txq_cp_set(cmdq, txc->ep_obj->auth_key.vni,
+		if (txc->ep_obj->av_auth_key)
+			vni = req->send.caddr.vni;
+		else
+			vni = txc->ep_obj->auth_key.vni;
+
+		ret = cxip_txq_cp_set(cmdq, vni,
 				      cxip_ofi_to_cxi_tc(txc->tclass),
 				      CXI_TC_TYPE_DEFAULT);
 		if (ret != FI_SUCCESS)
