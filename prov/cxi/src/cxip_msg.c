@@ -288,7 +288,7 @@ static inline int recv_req_event_success(struct cxip_rxc *rxc,
 		addr->pid = CXI_MATCH_ID_PID(rxc->pid_bits,
 					     req->recv.initiator);
 		ret = cxip_cq_req_error(req, 0, FI_EADDRNOTAVAIL, req->recv.rc,
-					addr, sizeof(*addr));
+					addr, sizeof(*addr), FI_ADDR_UNSPEC);
 
 		free(addr);
 	} else {
@@ -389,7 +389,7 @@ static void recv_req_report(struct cxip_req *req)
 		}
 
 		ret = cxip_cq_req_error(req, truncated, err, req->recv.rc,
-					NULL, 0);
+					NULL, 0, FI_ADDR_UNSPEC);
 		if (ret != FI_SUCCESS)
 			RXC_WARN(rxc, "Failed to report error: %d\n", ret);
 
@@ -4320,7 +4320,8 @@ static void report_send_completion(struct cxip_req *req, bool sw_cntr)
 			 cxi_rc_to_str(req->send.rc));
 
 		ret = cxip_cq_req_error(req, 0, ret_err,
-					req->send.rc, NULL, 0);
+					req->send.rc, NULL, 0,
+					FI_ADDR_UNSPEC);
 		if (ret != FI_SUCCESS)
 			TXC_WARN(txc, "Failed to report error: %d\n", ret);
 

@@ -47,7 +47,8 @@ int cxip_rma_selective_completion_cb(struct cxip_req *req,
 
 	ret_err = proverr2errno(event_rc);
 	return cxip_cq_req_error(req, 0, ret_err,
-				 cxi_event_rc(event), NULL, 0);
+				 cxi_event_rc(event), NULL, 0,
+				 FI_ADDR_UNSPEC);
 }
 
 /*
@@ -145,7 +146,7 @@ static int cxip_rma_cb(struct cxip_req *req, const union c_event *event)
 	} else {
 		ret_err = proverr2errno(event_rc);
 		ret = cxip_cq_req_error(req, 0, ret_err, event_rc,
-					NULL, 0);
+					NULL, 0, FI_ADDR_UNSPEC);
 		if (ret != FI_SUCCESS)
 			TXC_WARN(txc, "Failed to report error: %d\n", ret);
 	}

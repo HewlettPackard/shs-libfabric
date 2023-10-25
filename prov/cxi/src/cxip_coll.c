@@ -819,7 +819,7 @@ static void _coll_rx_req_report(struct cxip_req *req)
 		/* failure means progression is hung */
 		ret = cxip_cq_req_error(req, overflow, err,
 					req->coll.cxi_rc,
-					NULL, 0);
+					NULL, 0, FI_ADDR_UNSPEC);
 		if (ret)
 			CXIP_FATAL("cxip_cq_req_error: %d\n", ret);
 
@@ -1864,7 +1864,7 @@ static void _post_coll_complete(struct cxip_coll_reduction *reduction)
 	} else {
 		ret = cxip_cq_req_error(req, 0,
 			_cxip_rc_to_cxi_rc[reduction->accum.red_rc],
-			reduction->accum.red_rc, NULL, 0);
+			reduction->accum.red_rc, NULL, 0, FI_ADDR_UNSPEC);
 	}
 	if (ret) {
 		/* Is this possible? The only error is -FI_ENOMEM. It looks like

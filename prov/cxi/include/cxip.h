@@ -2708,7 +2708,7 @@ int cxip_cq_req_complete(struct cxip_req *req);
 int cxip_cq_req_complete_addr(struct cxip_req *req, fi_addr_t src);
 int cxip_cq_req_error(struct cxip_req *req, size_t olen,
 		      int err, int prov_errno, void *err_data,
-		      size_t err_data_size);
+		      size_t err_data_size, fi_addr_t src_addr);
 int proverr2errno(int err);
 struct cxip_req *cxip_evtq_req_alloc(struct cxip_evtq *evtq,
 				     int remap, void *req_ctx);

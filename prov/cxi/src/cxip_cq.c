@@ -74,7 +74,7 @@ int proverr2errno(int err)
  */
 int cxip_cq_req_error(struct cxip_req *req, size_t olen,
 		      int err, int prov_errno, void *err_data,
-		      size_t err_data_size)
+		      size_t err_data_size, fi_addr_t src_addr)
 {
 	struct fi_cq_err_entry err_entry;
 
@@ -94,6 +94,7 @@ int cxip_cq_req_error(struct cxip_req *req, size_t olen,
 	err_entry.tag = req->tag;
 	err_entry.op_context = (void *)(uintptr_t)req->context;
 	err_entry.buf = (void *)(uintptr_t)req->buf;
+	err_entry.src_addr = src_addr;
 
 	return ofi_cq_write_error(&req->cq->util_cq, &err_entry);
 }

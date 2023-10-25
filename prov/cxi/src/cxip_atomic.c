@@ -288,7 +288,8 @@ static int cxip_amo_inject_cb(struct cxip_req *req, const union c_event *event)
 
 	ret_err = proverr2errno(event_rc);
 	return cxip_cq_req_error(req, 0, ret_err,
-				 cxi_event_rc(event), NULL, 0);
+				 cxi_event_rc(event), NULL, 0,
+				 FI_ADDR_UNSPEC);
 }
 
 /*
@@ -441,7 +442,8 @@ static int _cxip_amo_cb(struct cxip_req *req, const union c_event *event)
 		ret_err = proverr2errno(event_rc);
 
 		ret = cxip_cq_req_error(req, 0, ret_err,
-					event_rc, NULL, 0);
+					event_rc, NULL, 0,
+					FI_ADDR_UNSPEC);
 
 		if (ret != FI_SUCCESS)
 			TXC_WARN_RET(txc, ret, "Failed to report error\n");

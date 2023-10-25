@@ -590,7 +590,7 @@ Test(cq, cq_readerr_reperr)
 
 	/* Add an error to the CQ's error ringbuffer */
 	ret = cxip_cq_req_error(&req, olen, err, prov_errno,
-				err_data, err_data_size);
+				err_data, err_data_size, FI_ADDR_UNSPEC);
 	cr_assert_eq(ret, 0, "cxip_cq_report_error() error %d", ret);
 
 	/* Attempt to read an err with a CQ with a NULL buff pointer */
