@@ -625,7 +625,7 @@ Test(cq, cq_readerr_reperr)
 	cr_assert_eq(err_entry.data, req.data);
 	cr_assert_eq(err_entry.tag, req.tag);
 	cr_assert_eq(err_entry.op_context, (void *)(uintptr_t)req.context);
-	cr_assert_eq(err_entry.err_data, err_data);
+	cr_assert_eq(memcmp(err_entry.err_data, err_data, err_data_size), 0);
 	cr_assert_leq(err_entry.err_data_size, err_data_size,
 		      "Size mismatch. %zd, %zd",
 		      err_entry.err_data_size, err_data_size);
