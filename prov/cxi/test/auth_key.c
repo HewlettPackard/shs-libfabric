@@ -2152,3 +2152,519 @@ Test(av_auth_key, null_auth_key_addr)
 	fi_freeinfo(info);
 	fi_freeinfo(hints);
 }
+
+Test(av_auth_key, invalid_multiple_auth_keys_per_ep_with_directed_recv_cap)
+{
+	struct fi_info *hints;
+	struct fi_info *info;
+	int ret;
+	struct fid_fabric *fab;
+	struct fid_domain *dom;
+	struct fid_av *av;
+	struct fid_ep *ep;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
+	hints->domain_attr->max_ep_auth_key = 2;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 "255", FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	open_av_auth_key(info, &fab, &dom, &av);
+
+	info->caps |= FI_DIRECTED_RECV;
+	ret = fi_endpoint(dom, info, &ep, NULL);
+	cr_assert_eq(ret, -FI_EINVAL, "fi_endpoint failed: %d", ret);
+
+	close_av_auth_key(fab, dom, av);
+
+	fi_freeinfo(info);
+	fi_freeinfo(hints);
+}
+
+Test(av_auth_key, invalid_multiple_auth_keys_per_ep_with_directed_recv_rx_cap)
+{
+	struct fi_info *hints;
+	struct fi_info *info;
+	int ret;
+	struct fid_fabric *fab;
+	struct fid_domain *dom;
+	struct fid_av *av;
+	struct fid_ep *ep;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
+	hints->domain_attr->max_ep_auth_key = 2;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 "255", FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	open_av_auth_key(info, &fab, &dom, &av);
+
+	info->rx_attr->caps |= FI_DIRECTED_RECV;
+	ret = fi_endpoint(dom, info, &ep, NULL);
+	cr_assert_eq(ret, -FI_EINVAL, "fi_endpoint failed: %d", ret);
+
+	close_av_auth_key(fab, dom, av);
+
+	fi_freeinfo(info);
+	fi_freeinfo(hints);
+}
+
+#define NUM_VNIS 4U
+#define NUM_TX_EPS NUM_VNIS
+
+static struct cxil_dev *dev;
+static struct cxi_svc_desc svc_desc = {
+	.restricted_vnis = 1,
+	.enable = 1,
+	.num_vld_vnis = NUM_VNIS,
+	.vnis = {1234, 1235, 1236, 1237},
+};
+
+static struct fid_fabric *fab;
+static struct fid_domain *dom;
+static struct fid_cq *cq;
+static struct fid_av *av;
+static struct fid_ep *rx_ep;
+static fi_addr_t auth_keys[NUM_VNIS];
+static fi_addr_t init_addrs[NUM_TX_EPS];
+
+static char *rx_ep_pid = "0";
+static char *tx_ep_pids[] = {"128", "129", "130", "131"};
+static unsigned int nic_addr;
+
+static struct fid_domain *tx_dom;
+static struct fid_cq *tx_cq;
+static struct fid_av *tx_av;
+static struct fid_ep *tx_ep[NUM_TX_EPS];
+static fi_addr_t target_addr;
+
+static void av_auth_key_test_tx_ep_init(unsigned int num_vnis)
+{
+	struct fi_info *hints;
+	static struct fi_info *info;
+	int ret;
+	struct fi_cq_attr cq_attr = {
+		.format = FI_CQ_FORMAT_TAGGED,
+	};
+	struct fi_av_attr av_attr = {
+		.type = FI_AV_TABLE,
+	};
+	int i;
+	struct cxi_auth_key key = {};
+	char node[64];
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->caps |= FI_SOURCE | FI_SOURCE_ERR | FI_MSG | FI_SEND | FI_RECV;
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints->fabric_attr->prov_name, "strdup failed");
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 NULL, FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	ret = fi_domain(fab, info, &tx_dom, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_domain failed: %d", ret);
+
+	fi_freeinfo(info);
+
+	ret = fi_cq_open(tx_dom, &cq_attr, &tx_cq, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_cq_open failed: %d", ret);
+
+	ret = fi_av_open(tx_dom, &av_attr, &tx_av, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_av_open failed: %d", ret);
+
+	sprintf(node, "%u", nic_addr);
+	ret = fi_av_insertsvc(tx_av, node, rx_ep_pid, &target_addr, 0, NULL);
+	cr_assert_eq(ret, 1, "fi_av_insertsvc failed: %d", ret);
+
+	for (i = 0; i < num_vnis; i++) {
+		key.vni = svc_desc.vnis[i];
+		key.svc_id = svc_desc.svc_id;
+
+		hints->ep_attr->auth_key = (void *)&key;
+		hints->ep_attr->auth_key_size = sizeof(key);
+
+		ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
+				 "cxi0", tx_ep_pids[i], FI_SOURCE, hints,
+				 &info);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+		ret = fi_endpoint(tx_dom, info, &tx_ep[i], NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_endpoint failed: %d", ret);
+
+		ret = fi_ep_bind(tx_ep[i], &tx_cq->fid, FI_TRANSMIT | FI_RECV);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_ep_bind CQ failed: %d", ret);
+
+		ret = fi_ep_bind(tx_ep[i], &tx_av->fid, 0);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_ep_bind AV failed: %d", ret);
+
+		ret = fi_enable(tx_ep[i]);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_enable failed: %d", ret);
+
+		fi_freeinfo(info);
+	}
+
+	hints->ep_attr->auth_key = NULL;
+	fi_freeinfo(hints);
+}
+
+static void av_auth_key_test_rx_ep_init(bool source_err, unsigned int num_vnis,
+					bool directed_recv)
+{
+	struct fi_info *hints;
+	static struct fi_info *info;
+	struct cxi_svc_fail_info fail_info = {};
+	int ret;
+	struct fi_cq_attr cq_attr = {
+		.format = FI_CQ_FORMAT_TAGGED,
+	};
+	struct fi_av_attr av_attr = {
+		.type = FI_AV_TABLE,
+	};
+	int i;
+	struct cxi_auth_key key = {};
+	size_t key_size;
+	char node[64];
+
+	/* Need to allocate a service to be used by libfabric. */
+	ret = cxil_open_device(0, &dev);
+	cr_assert_eq(ret, 0, "cxil_open_device failed: %d", ret);
+
+	nic_addr = dev->info.nic_addr;
+
+	ret = cxil_alloc_svc(dev, &svc_desc, &fail_info);
+	cr_assert_gt(ret, 0, "cxil_alloc_svc failed: %d", ret);
+	svc_desc.svc_id = ret;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->caps |= FI_SOURCE | FI_SOURCE_ERR | FI_MSG | FI_SEND | FI_RECV;
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
+	hints->domain_attr->max_ep_auth_key = num_vnis;
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints->fabric_attr->prov_name, "strdup failed");
+
+	if (directed_recv)
+		hints->caps |= FI_DIRECTED_RECV;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 rx_ep_pid, FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	fi_freeinfo(hints);
+
+	ret = fi_fabric(info->fabric_attr, &fab, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_fabric failed: %d", ret);
+
+	ret = fi_domain(fab, info, &dom, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_domain failed: %d", ret);
+
+	ret = fi_cq_open(dom, &cq_attr, &cq, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_cq_open failed: %d", ret);
+
+	ret = fi_av_open(dom, &av_attr, &av, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_av_open failed: %d", ret);
+
+	ret = fi_endpoint(dom, info, &rx_ep, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_endpoint failed: %d", ret);
+
+	ret = fi_ep_bind(rx_ep, &cq->fid, FI_TRANSMIT | FI_RECV);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_ep_bind CQ failed: %d", ret);
+
+	ret = fi_ep_bind(rx_ep, &av->fid, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_ep_bind AV failed: %d", ret);
+
+	for (i = 0; i < num_vnis; i++) {
+		key.vni = svc_desc.vnis[i];
+		key_size = sizeof(key);
+
+		ret = fi_av_insert_auth_key(av, &key, key_size, &auth_keys[i],
+					    0);
+		cr_assert_eq(ret, FI_SUCCESS,
+			     "fi_av_insert_auth_key failed: %d", ret);
+
+		if (source_err)
+			continue;
+
+		sprintf(node, "%u", nic_addr);
+		init_addrs[i] = auth_keys[i];
+		ret = fi_av_insertsvc(av, node, tx_ep_pids[i], &init_addrs[i],
+				      FI_AUTH_KEY, NULL);
+		cr_assert_eq(ret, 1, "fi_av_insertsvc failed: %d", ret);
+	}
+
+	ret = fi_enable(rx_ep);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_enable failed: %d", ret);
+
+	fi_freeinfo(info);
+}
+
+static void av_auth_key_tx_ep_fini(unsigned int num_vnis)
+{
+	int i;
+	int ret;
+
+	for (i = 0; i < num_vnis; i++) {
+		ret = fi_close(&tx_ep[i]->fid);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_close EP failed: %d", ret);
+	}
+
+	ret = fi_close(&tx_av->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close AV failed: %d", ret);
+
+	ret = fi_close(&tx_cq->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close CQ failed: %d", ret);
+
+	ret = fi_close(&tx_dom->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close dom failed: %d", ret);
+}
+
+static void av_auth_key_test_rx_ep_fini(void)
+{
+	int ret;
+
+	ret = fi_close(&rx_ep->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close EP failed: %d", ret);
+
+	ret = fi_close(&av->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close AV failed: %d", ret);
+
+	ret = fi_close(&cq->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close CQ failed: %d", ret);
+
+	ret = fi_close(&dom->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close dom failed: %d", ret);
+
+	ret = fi_close(&fab->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close fab failed: %d", ret);
+
+	ret = cxil_destroy_svc(dev, svc_desc.svc_id);
+	cr_assert_eq(ret, 0, "cxil_destroy_svc failed: %d", ret);
+	cxil_close_device(dev);
+}
+
+TestSuite(data_transfer_av_auth_key, .timeout = CXIT_DEFAULT_TIMEOUT);
+
+Test(data_transfer_av_auth_key, successful_inject_transfer_source)
+{
+	int i;
+	int ret;
+	struct fi_cq_tagged_entry event;
+	fi_addr_t src_addr;
+
+	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false);
+	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
+
+	/* Each TX EP has been configured for a different VNI. Send from each
+	 * TX EP to the RX EP. The RX EP is configured with all VNIs.
+	 */
+	for (i = 0; i < NUM_TX_EPS; i++) {
+		ret = fi_inject(tx_ep[i], NULL, 0, target_addr);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_send failed: %d", ret);
+
+		ret = fi_recv(rx_ep, NULL, 0, NULL, FI_ADDR_UNSPEC, NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed: %d", ret);
+
+		do {
+			ret = fi_cq_readfrom(cq, &event, 1, &src_addr);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_readfrom failed: %d", ret);
+		cr_assert_eq(src_addr, init_addrs[i], "Bad source addr");
+
+		ret = fi_inject(rx_ep, NULL, 0, src_addr);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_send failed: %d", ret);
+
+		ret = fi_recv(tx_ep[i], NULL, 0, NULL, FI_ADDR_UNSPEC, NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed: %d", ret);
+
+		do {
+			ret = fi_cq_readfrom(tx_cq, &event, 1, &src_addr);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_readfrom failed: %d", ret);
+		cr_assert_eq(src_addr, target_addr, "Bad source addr");
+	}
+
+	av_auth_key_tx_ep_fini(NUM_TX_EPS);
+	av_auth_key_test_rx_ep_fini();
+}
+
+Test(data_transfer_av_auth_key, successful_rdzv_transfer_source)
+{
+	int i;
+	int ret;
+	struct fi_cq_tagged_entry event;
+	fi_addr_t src_addr;
+	void *buf;
+	size_t buf_size = 1024 * 1024;
+
+	buf = malloc(buf_size);
+	cr_assert(buf != NULL);
+
+	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false);
+	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
+
+	/* Each TX EP has been configured for a different VNI. Send from each
+	 * TX EP to the RX EP. The RX EP is configured with all VNIs.
+	 */
+	for (i = 0; i < NUM_TX_EPS; i++) {
+		ret = fi_send(tx_ep[i], buf, buf_size, NULL, target_addr,
+			      tx_ep[i]);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_send failed: %d", ret);
+
+		ret = fi_recv(rx_ep, buf, buf_size, NULL, FI_ADDR_UNSPEC, NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed: %d", ret);
+
+		do {
+			ret = fi_cq_readfrom(cq, &event, 1, &src_addr);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_readfrom failed: %d", ret);
+		cr_assert_eq(src_addr, init_addrs[i], "Bad source addr");
+
+		do {
+			ret = fi_cq_read(tx_cq, &event, 1);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_read failed: %d", ret);
+
+		ret = fi_send(rx_ep, buf, buf_size, NULL, src_addr, NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_send failed: %d", ret);
+
+		ret = fi_recv(tx_ep[i], buf, buf_size, NULL, FI_ADDR_UNSPEC,
+			      NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed: %d", ret);
+
+		do {
+			ret = fi_cq_readfrom(tx_cq, &event, 1, &src_addr);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_readfrom failed: %d", ret);
+		cr_assert_eq(src_addr, target_addr, "Bad source addr");
+
+		do {
+			ret = fi_cq_read(cq, &event, 1);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_read failed: %d", ret);
+	}
+
+	av_auth_key_tx_ep_fini(NUM_TX_EPS);
+	av_auth_key_test_rx_ep_fini();
+
+	free(buf);
+}
+
+Test(data_transfer_av_auth_key, successful_transfer_source_err)
+{
+	int i;
+	int ret;
+	struct fi_cq_tagged_entry event;
+	struct fi_cq_err_entry error;
+	fi_addr_t src_addr;
+
+	av_auth_key_test_rx_ep_init(true, NUM_VNIS, false);
+	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
+
+	/* Each TX EP has been configured for a different VNI. Send from each
+	 * TX EP to the RX EP. The RX EP is configured with all VNIs.
+	 */
+	for (i = 0; i < NUM_TX_EPS; i++) {
+		ret = fi_send(tx_ep[i], NULL, 0, NULL, target_addr, tx_ep[i]);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_send failed: %d", ret);
+
+		ret = fi_recv(rx_ep, NULL, 0, NULL, FI_ADDR_UNSPEC, NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed: %d", ret);
+
+		do {
+			ret = fi_cq_readfrom(cq, &event, 1, &src_addr);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, -FI_EAVAIL, "fi_cq_readfrom failed: %d", ret);
+
+		ret = fi_cq_readerr(cq, &error, 0);
+		cr_assert_eq(ret, 1, "fi_cq_readfrom failed: %d", ret);
+		cr_assert_eq(error.err, FI_EADDRNOTAVAIL, "Bad error.err");
+		cr_assert_eq(error.src_addr, auth_keys[i],
+			     "Bad error.src_addr: got=%lx expected=%lx",
+			     error.src_addr, auth_keys[i]);
+
+		do {
+			ret = fi_cq_read(tx_cq, &event, 1);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_read failed: %d", ret);
+	}
+
+	av_auth_key_tx_ep_fini(NUM_TX_EPS);
+	av_auth_key_test_rx_ep_fini();
+}
+
+Test(data_transfer_av_auth_key, single_auth_key_with_directed_recv)
+{
+	int ret;
+	int i;
+	struct fi_cq_tagged_entry event;
+	fi_addr_t src_addr;
+	fi_addr_t from_src_addr;
+	struct cxip_addr addr;
+	size_t addr_size = sizeof(struct cxip_addr);
+
+	av_auth_key_test_rx_ep_init(false, 1, true);
+	av_auth_key_test_tx_ep_init(1);
+
+	ret = fi_getname(&rx_ep->fid, &addr, &addr_size);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getname failed: %d", ret);
+
+	/* Insert a AV entry for the RX EP. */
+	src_addr = auth_keys[0];
+	ret = fi_av_insert(av, &addr, 1, &src_addr, FI_AUTH_KEY, NULL);
+	cr_assert_eq(ret, 1, "fi_av_insert failed: %d", ret);
+
+	/* Queue FI_DIRECTED_RECV to match only the RX EP. */
+	ret = fi_recv(rx_ep, NULL, 0, NULL, src_addr, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed: %d", ret);
+
+	/* Queue a zero byte message which should not match. */
+	ret = fi_send(tx_ep[0], NULL, 0, NULL, target_addr, tx_ep[0]);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_send failed: %d", ret);
+
+	/* Arbitrary amount of loops to ensure no recv events. */
+	for (i = 0; i < 100; i++) {
+		ret = fi_cq_readfrom(cq, &event, 1, &from_src_addr);
+		cr_assert_eq(ret, -FI_EAGAIN, "fi_cq_read failed: %d", ret);
+	}
+
+	/* Post matching send. */
+	ret = fi_send(rx_ep, NULL, 0, NULL, src_addr, rx_ep);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_send failed: %d", ret);
+
+	/* Two events should occur: a send and a recv. */
+	for (i = 0; i < 2; i++) {
+		do {
+			ret = fi_cq_readfrom(cq, &event, 1, &from_src_addr);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_readfrom failed: %d", ret);
+
+		if (event.flags & FI_RECV)
+			cr_assert_eq(src_addr, from_src_addr,
+				     "Bad source addr");
+	}
+
+	av_auth_key_tx_ep_fini(1);
+	av_auth_key_test_rx_ep_fini();
+}
