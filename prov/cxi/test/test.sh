@@ -2,6 +2,18 @@
 #
 # Run CXI unit tests.
 
+test_short=0
+
+while getopts "s" option; do
+	case "${option}" in
+		s)
+			test_short=1
+			;;
+		*)
+			exit 1;
+	esac
+done
+
 DIR=`dirname $0`
 cd $DIR
 TEST_OUTPUT=cxitest.out
@@ -11,9 +23,15 @@ export MALLOC_FAULT_RATE=.1
 export FI_LOG_LEVEL=warn
 export FI_CXI_FC_RECOVERY=1
 
-if [[ $# -gt 0 ]]; then
-    FI_CXI_ENABLE_TRIG_OP_LIMIT=1 ./cxitest --verbose --filter="@($1)" --tap=cxitest.tap -j2
-    exit $?
+if [[ $test_short -eq 1 ]]; then
+    test="FI_CXI_ENABLE_TRIG_OP_LIMIT=1 ./cxitest --verbose --filter=\"@(msg*|tagged*|rma*|atomic*)/*\" -j 1 -f --tap=cxitest-short.tap > $TEST_OUTPUT 2>&1"
+    echo "running: $test"
+    eval $test
+    if [[ $? -ne 0 ]]; then
+        echo "cxitest return non-zero exit code. Possible failures in test teardown"
+        exit 1
+    fi
+    exit 0
 fi
 
 # Run unit tests. $(CWD) should be writeable.

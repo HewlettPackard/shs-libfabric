@@ -5,4 +5,4 @@
 DIR=`dirname $0`
 cd $DIR
 
-./run.sh ./test.sh
+./run.sh ./test.sh $1

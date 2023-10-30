@@ -1,4 +1,28 @@
 #!/bin/bash
+
+test_short=""
+exclude_commit_subject=""
+
+while getopts "se:" option; do
+	case "${option}" in
+		s)
+			test_short="-s"
+			;;
+		e)
+			exclude_commit_subject=${OPTARG}
+			;;
+		*)
+			exit 1;
+	esac
+done
+
+# Assumes that the commit subject is unique between all commits in the PR.
+head_commit_subject_collapsed=$(git log -1 --pretty=%s | tr -d ' ')
+if [[ "$head_commit_subject_collapsed" == "$exclude_commit_subject" ]]; then
+	echo "Skippping commit \"$(git log -1 --pretty=%s)\""
+	exit 0
+fi
+
 git log -1
 
 set -e
@@ -32,7 +56,7 @@ make -j 8 install
 
 test_dir=$(realpath ./prov/cxi/test)
 test_result_file="run_tests_vm_output.txt"
-ssh -tt localhost "cd ${test_dir}; ./run_tests_vm.sh" | tee ${test_result_file}
+ssh -tt localhost "cd ${test_dir}; ./run_tests_vm.sh $test_short" | tee ${test_result_file}
 
 set +e
 
