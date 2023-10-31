@@ -560,7 +560,7 @@ Test(cq, cq_readerr_err)
 	cr_assert_eq(ret, FI_SUCCESS);
 }
 
-Test(cq, cq_readerr_reperr, .disabled = true)
+Test(cq, cq_readerr_reperr)
 {
 	int ret;
 	struct fi_cq_err_entry err_entry = {0};
