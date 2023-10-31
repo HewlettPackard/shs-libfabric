@@ -302,17 +302,10 @@ static inline bool cxip_software_pte_allowed(void)
  * allocated. Libfabric clients can achieve this by not specifying a 'service'
  * in a call to fi_getinfo() or by not setting src_addr in the fi_info
  * structure used to allocate an Endpoint.
- *
- * TODO: If NIC Address must be non-zero, the valid bit can be removed.
  */
 struct cxip_addr {
-	union {
-		struct {
-			uint32_t pid		: C_DFA_PID_BITS_MAX;
-			uint32_t nic		: C_DFA_NIC_BITS;
-		};
-		uint32_t raw;
-	};
+	uint32_t pid		: C_DFA_PID_BITS_MAX;
+	uint32_t nic		: C_DFA_NIC_BITS;
 };
 
 #define CXIP_ADDR_EQUAL(a, b) ((a).nic == (b).nic && (a).pid == (b).pid)
