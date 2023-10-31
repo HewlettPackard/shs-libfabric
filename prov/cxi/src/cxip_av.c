@@ -272,9 +272,16 @@ fi_addr_t cxip_av_lookup_fi_addr(struct cxip_av *av,
 				 const struct cxip_addr *addr)
 {
 	struct cxip_av_entry *entry;
+	fi_addr_t fi_addr;
+
+	cxip_av_read_lock(av);
 
 	HASH_FIND(hh, av->hash, addr, sizeof(*addr), entry);
-	return entry ? entry->fi_addr : FI_ADDR_NOTAVAIL;
+	fi_addr = entry ? entry->fi_addr : FI_ADDR_NOTAVAIL;
+
+	cxip_av_unlock(av);
+
+	return fi_addr;
 }
 
 int cxip_av_bind_ep(struct cxip_av *av, struct cxip_ep *ep)
