@@ -32,6 +32,7 @@
 #include "config.h"
 #include "cxip.h"
 #include "ofi.h"
+#include "ofi_str.h"
 
 #define CXIP_DBG(...) _CXIP_DBG(FI_LOG_FABRIC, __VA_ARGS__)
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_FABRIC, __VA_ARGS__)

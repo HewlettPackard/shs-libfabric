@@ -99,10 +99,9 @@ static int ofi_hmem_no_dev_reg_copy_from_hmem(uint64_t handle, void *dest,
 }
 
 static int ofi_hmem_system_dev_register(const void *addr, size_t size,
-					uint64_t *handle, void **host_addr)
+					uint64_t *handle)
 {
 	*handle = (uint64_t)addr;
-	*host_addr = (void *)addr;
 	return FI_SUCCESS;
 }
 

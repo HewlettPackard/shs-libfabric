@@ -334,7 +334,7 @@ ssize_t ofi_cq_readerr(struct fid_cq *cq_fid, struct fi_cq_err_entry *buf,
 	 * output err_data will be set to a data buffer owned by the provider.
 	 */
 	if (aux_entry->comp.err_data_size &&
-	    (err_data_size_save == 0 || FI_VERSION_LT(api_version, FI_VERSION(1, 5)))) {
+	    (err_data_size == 0 || FI_VERSION_LT(api_version, FI_VERSION(1, 5)))) {
 		cq->err_data = mem_dup(aux_entry->comp.err_data,
 				       aux_entry->comp.err_data_size);
 		if (!cq->err_data) {

@@ -26,7 +26,7 @@ static int cxip_do_map(struct ofi_mr_cache *cache, struct ofi_mr_entry *entry)
 	void *ze_handle;
 	void *ze_base_addr;
 	size_t ze_base_size;
-	uint64_t hmem_flags = (uintptr_t)entry->info.ipc_mapped_addr;
+	uint64_t hmem_flags = entry->info.flags;
 
 	dom = container_of(cache, struct cxip_domain, iomm);
 
@@ -74,6 +74,7 @@ static int cxip_do_map(struct ofi_mr_cache *cache, struct ofi_mr_entry *entry)
 			}
 
 			ret = ze_hmem_get_base_addr(entry->info.iov.iov_base,
+						    entry->info.iov.iov_len,
 						    &ze_base_addr,
 						    &ze_base_size);
 			if (ret) {
@@ -113,7 +114,7 @@ static int cxip_do_map(struct ofi_mr_cache *cache, struct ofi_mr_entry *entry)
 		ret = ofi_hmem_dev_register(entry->info.iface,
 					    entry->info.iov.iov_base,
 					    entry->info.iov.iov_len,
-					    &md->handle, &md->host_addr);
+					    &md->handle);
 	switch (ret) {
 	case FI_SUCCESS:
 		break;
@@ -417,6 +418,7 @@ static int cxip_map_nocache(struct cxip_domain *dom, struct fi_mr_attr *attr,
 			}
 
 			ret = ze_hmem_get_base_addr(attr->mr_iov->iov_base,
+						    attr->mr_iov->iov_len,
 						    &ze_base_addr,
 						    &ze_base_size);
 			if (ret) {
@@ -454,8 +456,7 @@ static int cxip_map_nocache(struct cxip_domain *dom, struct fi_mr_attr *attr,
 		ret = ofi_hmem_dev_register(attr->iface,
 					    (const void *)uncached_md->md->va,
 					    uncached_md->md->len,
-					    &uncached_md->handle,
-					    &uncached_md->host_addr);
+					    &uncached_md->handle);
 
 	switch (ret) {
 	case FI_SUCCESS:
@@ -496,7 +497,7 @@ static void cxip_map_get_mem_region_size(const void *buf, unsigned long len,
 {
 	int ret;
 
-	ret = ofi_hmem_get_base_addr(iface, buf, out_buf, out_len);
+	ret = ofi_hmem_get_base_addr(iface, buf, len, out_buf, out_len);
 	if (ret) {
 		*out_buf = (void *)buf;
 		*out_len = len;
@@ -543,7 +544,7 @@ int cxip_map(struct cxip_domain *dom, const void *buf, unsigned long len,
 	 * corresponding entry is in the cache.
 	 */
 	if (cache && cxip_domain_mr_cache_enabled(dom)) {
-		entry = ofi_mr_cache_find(&dom->iomm, &attr);
+		entry = ofi_mr_cache_find(&dom->iomm, &attr, 0);
 		if (entry) {
 			*md = (struct cxip_md *)entry->data;
 			return FI_SUCCESS;
@@ -566,7 +567,7 @@ int cxip_map(struct cxip_domain *dom, const void *buf, unsigned long len,
 		mr_info.iov = iov;
 
 		/* Overload IPC addr to pass in HMEM flags. */
-		mr_info.ipc_mapped_addr = (void *)hmem_flags;
+		mr_info.flags = hmem_flags;
 
 		return cxip_map_cache(dom, &mr_info, md);
 	}

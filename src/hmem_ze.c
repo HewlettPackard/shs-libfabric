@@ -905,8 +905,7 @@ static ze_result_t ze_init_res(int dev_id)
 	return ofi_bufpool_create_attr(&attr, &cl_pool[dev_id]);
 }
 
-int ze_hmem_copy(uint64_t device, uint64_t handle, 
-		 void *dst, const void *src, size_t size)
+int ze_hmem_copy(uint64_t device, void *dst, const void *src, size_t size)
 {
 	ze_command_list_handle_t *cmd_list;
 	ze_result_t ze_ret;
@@ -1177,8 +1176,7 @@ struct ze_mmap_handle {
 	size_t len;
 };
 
-int ze_dev_register(const void *addr, size_t size, uint64_t *handle,
-		    void **host_addr)
+int ze_dev_register(const void *addr, size_t size, uint64_t *handle)
 {
 	void *ze_handle;
 	void *ze_base_addr;
@@ -1343,8 +1341,7 @@ int ze_hmem_cleanup(void)
 	return -FI_ENOSYS;
 }
 
-int ze_hmem_copy(uint64_t device, uint64_t handle, 
-		 void *dst, const void *src, size_t size)
+int ze_hmem_copy(uint64_t device, void *dst, const void *src, size_t size)
 {
 	return -FI_ENOSYS;
 }
@@ -1419,8 +1416,7 @@ int ze_hmem_host_unregister(void *ptr)
 	return FI_SUCCESS;
 }
 
-int ze_dev_register(const void *addr, size_t size, uint64_t *handle,
-		    void **host_addr)
+int ze_dev_register(const void *addr, size_t size, uint64_t *handle)
 {
 	return -FI_ENOSYS;
 }

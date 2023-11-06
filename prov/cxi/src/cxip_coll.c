@@ -257,9 +257,9 @@ __attribute__((unused)) static inline
 void _dump_red_pkt(struct red_pkt *pkt, char *dir)
 {
 #if __trc_pkts
-	const uint64_t *data = (const uint64_t *)pkt->data;
-		__attribute__((__unused__))
-	int i;
+	__attribute__((__unused__)) const uint64_t *data
+		= (const uint64_t *)pkt->data;
+	__attribute__((__unused__)) int i;
 
 	TRACE_PKT("---------------\n");
 	TRACE_PKT("Reduction packet (%s):\n", dir);

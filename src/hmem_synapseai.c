@@ -205,14 +205,14 @@ int synapseai_cleanup(void)
 	return -FI_ENOSYS;
 }
 
-int synapseai_copy_to_hmem(uint64_t device, uint64_t handle, 
-			   void *dest, const void *src, size_t size)
+int synapseai_copy_to_hmem(uint64_t device, void *dest, const void *src,
+			   size_t size)
 {
 	return -FI_ENOSYS;
 }
 
-int synapseai_copy_from_hmem(uint64_t device, uint64_t handle, 
-			     void *dest, const void *src, size_t size)
+int synapseai_copy_from_hmem(uint64_t device, void *dest, const void *src,
+			     size_t size)
 {
 	return -FI_ENOSYS;
 }

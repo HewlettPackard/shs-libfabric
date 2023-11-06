@@ -728,8 +728,8 @@ int cxip_set_wb_buffer(struct fid *fid, void *buf, size_t len)
 
 	if (cntr->wb_iface != FI_HMEM_SYSTEM) {
 		ret = ofi_hmem_dev_register(cntr->wb_iface, cntr->wb,
-					    sizeof(*cntr->wb), &cntr->wb_handle,
-					    &cntr->wb_host_addr);
+					    sizeof(*cntr->wb),
+					    &cntr->wb_handle);
 		if (ret == -FI_ENOSYS) {
 			cntr->wb_handle = NO_DEV_REG_HANDLE;
 			cntr->wb_host_addr = NULL;

@@ -158,7 +158,7 @@
 #define CXIP_MINOR_VERSION		1
 #define CXIP_PROV_VERSION		FI_VERSION(CXIP_MAJOR_VERSION, \
 						   CXIP_MINOR_VERSION)
-#define CXIP_FI_VERSION			FI_VERSION(1, 18)
+#define CXIP_FI_VERSION			FI_VERSION(1, 20)
 #define CXIP_WIRE_PROTO_VERSION		1
 
 #define	CXIP_COLL_MAX_CONCUR		8
@@ -731,7 +731,7 @@ struct cxip_md {
 	struct cxi_md *md;
 	struct ofi_mr_info info;
 	uint64_t handle;
-	void *host_addr;
+	bool handle_valid;
 	bool cached;
 };
 

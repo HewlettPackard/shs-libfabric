@@ -275,7 +275,7 @@ void cxip_txc_close(struct cxip_ep *ep)
 
 	if (txc->send_cq) {
 		ofi_genlock_lock(&txc->send_cq->ep_list_lock);
-		fid_list_remove(&txc->send_cq->util_cq.ep_list,
+		fid_list_remove2(&txc->send_cq->util_cq.ep_list,
 				&txc->send_cq->util_cq.ep_list_lock,
 				&ep->ep.fid);
 		ofi_genlock_unlock(&txc->send_cq->ep_list_lock);
@@ -321,7 +321,7 @@ void cxip_rxc_close(struct cxip_ep *ep)
 		 * but we still need to decrement reference.
 		 */
 		ofi_genlock_lock(&rxc->recv_cq->ep_list_lock);
-		fid_list_remove(&rxc->recv_cq->util_cq.ep_list,
+		fid_list_remove2(&rxc->recv_cq->util_cq.ep_list,
 				&rxc->recv_cq->util_cq.ep_list_lock,
 				&ep->ep.fid);
 		ofi_genlock_unlock(&rxc->recv_cq->ep_list_lock);
@@ -687,7 +687,7 @@ static int cxip_ep_bind_cq(struct cxip_ep *ep, struct cxip_cq *cq,
 
 		/* Use CXI ep_list_lock that can be selectively optimized */
 		ofi_genlock_lock(&cq->ep_list_lock);
-		ret = fid_list_insert(&cq->util_cq.ep_list,
+		ret = fid_list_insert2(&cq->util_cq.ep_list,
 				      &cq->util_cq.ep_list_lock,
 				      &ep->ep.fid);
 		ofi_genlock_unlock(&cq->ep_list_lock);
@@ -718,7 +718,7 @@ static int cxip_ep_bind_cq(struct cxip_ep *ep, struct cxip_cq *cq,
 
 		/* Use CXI ep_list_lock that can be selectively optimized */
 		ofi_genlock_lock(&cq->ep_list_lock);
-		ret = fid_list_insert(&cq->util_cq.ep_list,
+		ret = fid_list_insert2(&cq->util_cq.ep_list,
 				      &cq->util_cq.ep_list_lock,
 				      &ep->ep.fid);
 		ofi_genlock_unlock(&cq->ep_list_lock);
