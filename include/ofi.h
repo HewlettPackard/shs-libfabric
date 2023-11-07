@@ -364,6 +364,11 @@ extern int ofi_av_remove_cleanup;
 extern char *ofi_offload_coll_prov_name;
 extern int ofi_prefer_sysconfig;
 
+/* TODO: This MUST be removed before pushing upstream. This is a
+ * CXI provider helper to handle constant collision.
+ */
+extern int ofi_cxi_compat;
+
 bool ofi_send_allowed(uint64_t caps);
 bool ofi_recv_allowed(uint64_t caps);
 bool ofi_rma_initiate_allowed(uint64_t caps);

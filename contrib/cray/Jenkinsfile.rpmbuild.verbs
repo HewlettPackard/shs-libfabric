@@ -1,0 +1,18 @@
+#!/usr/bin/env groovy
+
+@Library('dst-shared@master') _
+@Library('CrayNetworkCI@master') _x
+
+def currentMasterBranch = currentLibfabricSS11Development()
+
+rpmBuild(
+    timeout: 60,  // long, to accommodate other overheads
+    product: "slingshot-host-software",
+    masterBranch: currentMasterBranch,
+    buildPrepScript: "contrib/cray/verbs_runBuildPrep.sh",
+    rpmBuildCmd: "contrib/cray/verbs_rpmbuild.sh",
+    specfile: "libfabric.spec.in",
+    // The obs_target_os structure contains [ obsTargetOS, [fanout_params], target_node ]
+    obs_target_os: obsTargetOs(),
+    manifestGen: "true"
+)

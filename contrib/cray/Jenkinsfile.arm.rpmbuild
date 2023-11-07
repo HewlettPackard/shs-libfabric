@@ -1,0 +1,17 @@
+@Library("dst-shared@master") _
+@Library('CrayNetworkCI@master') _x
+
+// Note that although we use rpmBuildCmd to build with a custom script, we still
+// need to provide a specfile (or in this case a specfile template) otherwise
+// the "Add RPM Metadata" stage will fail.
+rpmBuild(
+    product: "internal",
+    buildPrepScript: "contrib/cray/cxi_runBuildPrep.sh",
+    rpmBuildCmd: "contrib/cray/cxi_rpmbuild.sh",
+    specfile: "libfabric.spec.in",
+    build_arch: "aarch64",
+    obs_target_os: obsTargetOs_arm(),
+    masterBranch: currentLibfabricSS11Development(),
+    recv_triggers: ["libcxi-arm-built"],
+    manifestGen: "true"
+)
