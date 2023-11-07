@@ -186,6 +186,7 @@ typedef struct fid *fid_t;
 #define FI_NAMED_RX_CTX		(1ULL << 58)
 #define FI_DIRECTED_RECV	(1ULL << 59)
 
+
 /* Tagged messages, buffered receives, CQ flags */
 #define FI_CLAIM		(1ULL << 59)
 #define FI_DISCARD		(1ULL << 58)

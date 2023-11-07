@@ -39,7 +39,6 @@
 #include "ofi_hmem.h"
 #include "ofi.h"
 #include "ofi_iov.h"
-#include "ofi_mr.h"
 
 bool ofi_hmem_disable_p2p = false;
 
@@ -101,7 +100,7 @@ static int ofi_hmem_no_dev_reg_copy_from_hmem(uint64_t handle, void *dest,
 static int ofi_hmem_system_dev_register(const void *addr, size_t size,
 					uint64_t *handle)
 {
-	*handle = (uint64_t)addr;
+	*handle = (uint64_t) addr;
 	return FI_SUCCESS;
 }
 
@@ -210,8 +209,8 @@ struct ofi_hmem_ops hmem_ops[] = {
 		.get_handle = ze_hmem_get_handle,
 		.open_handle = ze_hmem_open_handle,
 		.close_handle = ze_hmem_close_handle,
-		.host_register = ofi_hmem_host_register_noop,
-		.host_unregister = ofi_hmem_host_unregister_noop,
+		.host_register = ze_hmem_host_register,
+		.host_unregister = ze_hmem_host_unregister,
 		.get_base_addr = ze_hmem_get_base_addr,
 		.is_ipc_enabled = ze_hmem_p2p_enabled,
 		.get_ipc_handle_size = ze_hmem_get_ipc_handle_size,
@@ -351,8 +350,7 @@ ofi_async_copy_hmem_iov_buf(enum fi_hmem_iface hmem_iface, uint64_t device,
 	return done;
 }
 
-static ssize_t ofi_copy_hmem_iov_buf(enum fi_hmem_iface hmem_iface,
-				     uint64_t device, uint64_t handle,
+static ssize_t ofi_copy_hmem_iov_buf(enum fi_hmem_iface hmem_iface, uint64_t device,
 				     const struct iovec *hmem_iov,
 				     size_t hmem_iov_count,
 				     uint64_t hmem_iov_offset, void *buf,
@@ -453,6 +451,7 @@ ssize_t ofi_copy_to_mr_iov(struct ofi_mr **mr, const struct iovec *iov,
 			       (void *) src, size, OFI_COPY_BUF_TO_IOV);
 }
 
+
 ssize_t ofi_async_copy_from_hmem_iov(void *dest, size_t size,
 			       enum fi_hmem_iface hmem_iface, uint64_t device,
 			       const struct iovec *hmem_iov,
@@ -486,10 +485,11 @@ int ofi_async_copy_query(enum fi_hmem_iface iface,
 ssize_t ofi_copy_from_hmem_iov(void *dest, size_t size,
 			       enum fi_hmem_iface hmem_iface, uint64_t device,
 			       const struct iovec *hmem_iov,
-			       size_t hmem_iov_count, uint64_t hmem_iov_offset)
+			       size_t hmem_iov_count,
+			       uint64_t hmem_iov_offset)
 {
-	return ofi_copy_hmem_iov_buf(hmem_iface, device, NO_DEV_REG_HANDLE,
-				     hmem_iov, hmem_iov_count, hmem_iov_offset,
+	return ofi_copy_hmem_iov_buf(hmem_iface, device, hmem_iov,
+				     hmem_iov_count, hmem_iov_offset,
 				     dest, size, OFI_COPY_IOV_TO_BUF);
 }
 
@@ -498,31 +498,8 @@ ssize_t ofi_copy_to_hmem_iov(enum fi_hmem_iface hmem_iface, uint64_t device,
 			     size_t hmem_iov_count, uint64_t hmem_iov_offset,
 			     const void *src, size_t size)
 {
-	return ofi_copy_hmem_iov_buf(hmem_iface, device, NO_DEV_REG_HANDLE,
-				     hmem_iov, hmem_iov_count, hmem_iov_offset,
-				     (void *) src, size, OFI_COPY_BUF_TO_IOV);
-}
-
-ssize_t ofi_copy_from_hmem_iov_reg(void *dest, size_t size,
-				   enum fi_hmem_iface hmem_iface,
-				   uint64_t device, uint64_t handle,
-				   const struct iovec *hmem_iov,
-				   size_t hmem_iov_count,
-				   uint64_t hmem_iov_offset)
-{
-	return ofi_copy_hmem_iov_buf(hmem_iface, device, handle,
-				     hmem_iov, hmem_iov_count, hmem_iov_offset,
-				     dest, size, OFI_COPY_IOV_TO_BUF);
-}
-
-ssize_t ofi_copy_to_hmem_iov_reg(enum fi_hmem_iface hmem_iface, uint64_t device,
-				 uint64_t handle, const struct iovec *hmem_iov,
-				 size_t hmem_iov_count,
-				 uint64_t hmem_iov_offset, const void *src,
-				 size_t size)
-{
-	return ofi_copy_hmem_iov_buf(hmem_iface, device, handle,
-				     hmem_iov, hmem_iov_count, hmem_iov_offset,
+	return ofi_copy_hmem_iov_buf(hmem_iface, device, hmem_iov,
+				     hmem_iov_count, hmem_iov_offset,
 				     (void *) src, size, OFI_COPY_BUF_TO_IOV);
 }
 

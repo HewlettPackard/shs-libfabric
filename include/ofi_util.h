@@ -676,8 +676,6 @@ ofi_cq_write_src(struct util_cq *cq, void *context, uint64_t flags, size_t len,
 	return ret;
 }
 
-int ofi_cq_insert_error(struct util_cq *cq,
-			const struct fi_cq_err_entry *err_entry);
 int ofi_cq_write_error(struct util_cq *cq,
 		       const struct fi_cq_err_entry *err_entry);
 int ofi_cq_write_error_peek(struct util_cq *cq, uint64_t tag, void *context);
@@ -1155,6 +1153,7 @@ void fid_list_remove(struct dlist_entry *fid_list, ofi_mutex_t *lock,
 void fid_list_remove2(struct dlist_entry *fid_list, struct ofi_genlock *lock,
 		      struct fid *fid);
 int fid_list_search(struct dlist_entry *fid_list, struct fid *fid);
+
 
 void ofi_fabric_insert(struct util_fabric *fabric);
 void ofi_fabric_remove(struct util_fabric *fabric);

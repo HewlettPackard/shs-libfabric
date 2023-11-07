@@ -2,7 +2,7 @@ dnl
 dnl Copyright (c) 2016 Cisco Systems, Inc.  All rights reserved.
 dnl Copyright (c) 2019-2021 Intel, Inc.  All rights reserved.
 dnl Copyright (c) 2019-2020 Amazon.com, Inc. or its affiliates. All rights reserved.
-dnl (C) Copyright 2020-2023 Hewlett Packard Enterprise Development LP
+dnl (C) Copyright 2020 Hewlett Packard Enterprise Development LP
 dnl Copyright (c) 2022 DataDirect Networks, Inc. All rights reserved.
 dnl Copyright (c) 2023 Tactical Computing Labs, LLC. All rights reserved.
 dnl
@@ -565,84 +565,6 @@ AC_ARG_ENABLE([restricted_dl],
 AC_DEFINE_UNQUOTED([HAVE_RESTRICTED_DL], [$restricted_dl],
   [Define to 1 to only look for dl providers under default location if FI_PROVIDER_PATH is not set])
 
-dnl Check uffd thread id support
-have_uffd_thread_id=0
-AS_IF([test $have_uffd -eq 1],
-	[AC_MSG_CHECKING([for userfaultfd thread id support])
-	AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
-			#include <sys/types.h>
-			#include <linux/userfaultfd.h>
-			#include <unistd.h>
-			#include <sys/syscall.h>
-			#include <fcntl.h>
-			#include <sys/ioctl.h>
-		]],
-		[[
-			int fd;
-			struct uffdio_api api_obj;
-			api_obj.api = UFFD_API;
-			api_obj.features = UFFD_FEATURE_THREAD_ID |
-					UFFD_FEATURE_EVENT_UNMAP |
-					UFFD_FEATURE_EVENT_REMOVE |
-					UFFD_FEATURE_EVENT_REMAP;
-			fd = syscall(__NR_userfaultfd, O_CLOEXEC | O_NONBLOCK);
-			return ioctl(fd, UFFDIO_API, &api_obj);
-		]])
-	],
-	[AC_MSG_RESULT([yes])
-		have_uffd_thread_id=1],
-	[AC_MSG_RESULT([no])])])
-
-AC_DEFINE_UNQUOTED([HAVE_UFFD_THREAD_ID], [$have_uffd_thread_id],
-	[Define to 1 if platform supports userfault fd thread id])
-
-dnl Check kdreg2 support
-kdreg2_enabled=1
-have_kdreg2=0
-have_kdreg2_include_path=0
-
-AC_ARG_ENABLE([kdreg2],
-              [AC_HELP_STRING([--disable-kdreg2],
-                              [Determine whether kdreg2 memory monitor is disabled.])],
-              [kdreg2_enabled=0],
-              [])
-
-AS_IF([test $kdreg2_enabled -ne 0 ],
-      [AC_CHECK_HEADER([linux/kdreg2.h], [have_kdreg2=1], [], [])
-
-       AC_ARG_WITH([kdreg2],
-		   [AS_HELP_STRING([--with-kdreg2=DIR],
-				   [Enable KDREG2 memory monitor.
-				    Optional=<Path to kdreg2.h header file>.])],
-		   [AS_CASE(["$with_kdreg2"],
-			    ["no"], [kdreg2_enabled=0],
-			    ["yes"], [],
-			    [""], [],
-			    [CPPFLAGS="$CPPFLAGS -I$with_kdreg2"
-			     AC_CHECK_HEADER([kdreg2.h],
-					     [have_kdreg2=1
-					      have_kdreg2_include_path=1],
-					     [have_kdreg2=0],
-					     [])])
-		    	     AS_IF([test $have_kdreg2 -eq 0 ],
-			           [AC_MSG_ERROR([KDREG2 header not found in $with_kdreg2.  Cannot enable KDREG2 memory monitor.])])
-		   ])
-       ])
-
-AS_IF([test $kdreg2_enabled -eq 0],
-      [AC_MSG_NOTICE([kdreg2 monitor disabled])],
-      [AS_IF([test $have_kdreg2 -ne 0],
-             [AC_MSG_NOTICE([kdreg2 present and enabled])])])
-
-AC_DEFINE_UNQUOTED(HAVE_KDREG2, [$have_kdreg2],
-	[Define to 1 if kdreg2.h is available.])
-
-AC_DEFINE_UNQUOTED(HAVE_KDREG2_INCLUDE_PATH, [$have_kdreg2_include_path],
-	[Define to 1 if kdreg2.h path is not <linux/kdreg2.h>.])
-
-AC_DEFINE_UNQUOTED(HAVE_KDREG2_MONITOR, [$have_kdreg2],
-	[Define to 1 to enable kdreg2 memory monitor])
-
 dnl Check support to intercept syscalls
 AC_CHECK_HEADERS_ONCE(elf.h sys/auxv.h)
 
@@ -931,33 +853,6 @@ AC_DEFINE_UNQUOTED(ENABLE_UFFD_MONITOR, [$enable_uffd],
 	[Define to 1 to enable uffd memory monitor])
 
 
-dnl Set the default monitor
-
-default_monitor=memhooks
-AC_ARG_WITH([default-monitor],
-	[AS_HELP_STRING([--with-default-monitor=<memhooks|uffd|kdreg2|disabled>],
-			[Select the default memory monitor.])],
-	[AS_CASE([$with_default_monitor],
-		[memhooks],[default_monitor=memhooks],
-		[uffd],[default_monitor=uffd],
-		[kdreg2],[default_monitor=kdreg2],
-		[disabled], [default_monitor=disabled],
-		[AC_MSG_ERROR([Unknown monitor specified: $with_default_monitor.  Choices are memhooks, uffd, kdreg2 or disabled.])])
-	],
-	[])
-
-bad_default=0
-AS_CASE([$default_monitor],
-	[memhooks], [AS_IF([test "$enable_memhooks" != "1"], [bad_default=1])],
-	[uffd], [AS_IF([test "$enable_uffd" != "1"], [bad_default=1])],
-	[kdreg2], [AS_IF([test "$have_kdreg2" != "1"], [bad_default=1])],
-	[])
-
-AS_IF([test "$bad_default" != "0"],
-	    [AC_MSG_ERROR(["Default memory monitor is not available: $default_monitor."])])
-
-AC_DEFINE_UNQUOTED([MR_CACHE_MONITOR_DEFAULT], ["$default_monitor"], [Default memory monitor])
-
 AH_BOTTOM([
 #if defined(__linux__) && (defined(__x86_64__) || defined(__amd64__) || defined(__aarch64__) || (defined(__riscv) && __riscv_xlen == 64)) && ENABLE_MEMHOOKS_MONITOR
 #define HAVE_MEMHOOKS_MONITOR 1
@@ -1099,7 +994,6 @@ dnl The usnic provider must be setup after the verbs provider.  See
 dnl prov/usnic/configure.m4 for details.
 FI_PROVIDER_SETUP([usnic])
 FI_PROVIDER_SETUP([gni])
-FI_PROVIDER_SETUP([cxi])
 FI_PROVIDER_SETUP([udp])
 FI_PROVIDER_SETUP([tcp])
 FI_PROVIDER_SETUP([rxm])

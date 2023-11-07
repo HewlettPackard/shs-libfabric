@@ -51,7 +51,6 @@ static int ofi_bufpool_region_alloc(struct ofi_bufpool_region *buf_region)
 	ssize_t page_size;
 	size_t alloc_size;
 	struct ofi_bufpool *pool = buf_region->pool;
-	size_t alignment;
 
 	if (pool->attr.flags & OFI_BUFPOOL_HUGEPAGES) {
 		page_size = ofi_get_hugepage_size();
@@ -95,19 +94,8 @@ static int ofi_bufpool_region_alloc(struct ofi_bufpool_region *buf_region)
 		pool->attr.alignment = ofi_get_aligned_size(pool->attr.alignment, page_size);
 	}
 
-	if (pool->attr.flags & OFI_BUFPOOL_PAGE_ALIGNED) {
-		page_size = ofi_get_page_size();
-		if (page_size < 0) {
-			return -ofi_syserr();
-		}
-
-		alignment = ofi_get_aligned_size(pool->alloc_size, page_size);
-	} else {
-		alignment = pool->attr.alignment;
-	}
-
 	return ofi_memalign((void **) &buf_region->alloc_region,
-				roundup_power_of_two(alignment),
+				roundup_power_of_two(pool->attr.alignment),
 				pool->alloc_size);
 }
 
@@ -181,7 +169,6 @@ int ofi_bufpool_grow(struct ofi_bufpool *pool)
 	for (i = 0; i < pool->attr.chunk_cnt; i++) {
 		buf = (buf_region->mem_region + i * pool->entry_size);
 		buf_hdr = ofi_buf_hdr(buf);
-		buf_hdr->allocated = false;
 		buf_hdr->region = buf_region;
 		buf_hdr->index = pool->entry_cnt + i;
 		OFI_DBG_SET(buf_hdr->allocated, false);
@@ -228,12 +215,6 @@ int ofi_bufpool_create_attr(struct ofi_bufpool_attr *attr,
 {
 	struct ofi_bufpool *pool;
 	size_t entry_sz;
-	int page_size;
-
-	page_size = ofi_get_page_size();
-	if (page_size < 0) {
-		return -ofi_syserr();
-	}
 
 	pool = calloc(1, sizeof(**buf_pool));
 	if (!pool)
@@ -258,10 +239,6 @@ int ofi_bufpool_create_attr(struct ofi_bufpool_attr *attr,
 		slist_init(&pool->free_list.entries);
 
 	pool->alloc_size = (pool->attr.chunk_cnt + 1) * pool->entry_size;
-	if (attr->flags & OFI_BUFPOOL_PAGE_ALIGNED)
-		pool->alloc_size =
-			ofi_get_aligned_size(pool->alloc_size, page_size);
-
 	pool->region_size = pool->alloc_size - pool->entry_size;
 
 	*buf_pool = pool;

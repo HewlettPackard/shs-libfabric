@@ -334,7 +334,7 @@ int efa_rdm_txe_prepare_to_be_read(struct efa_rdm_ope *txe, struct fi_rma_iov *r
 
 		if (!txe->desc[i]) {
 			/* efa_rdm_ope_try_fill_desc() did not register the memory */
-			return -FI_ENOMEM;
+			return -FI_ENOMR;
 		}
 
 		read_iov[i].key = fi_mr_key(txe->desc[i]);
@@ -1139,6 +1139,9 @@ void efa_rdm_ope_handle_recv_completed(struct efa_rdm_ope *ope)
 		return;
 	}
 
+	if (ope->internal_flags & EFA_RDM_OPE_READ_NACK)
+		efa_rdm_rxe_map_remove(&ope->ep->rxe_map, ope->msg_id, ope->peer->efa_fiaddr, ope);
+
 	if (ope->type == EFA_RDM_TXE) {
 		efa_rdm_txe_release(ope);
 	} else {
@@ -1385,11 +1388,9 @@ int efa_rdm_ope_post_read(struct efa_rdm_ope *ope)
 			if (!ope->desc[iov_idx]) {
 				/* efa_rdm_ope_try_fill_desc() did not fill the desc,
 				 * which means memory registration failed.
-				 * return -FI_EAGAIN here will cause user to run progress
-				 * engine, which will cause some memory registration
-				 * in MR cache to be released.
+				 * return -FI_ENOMR here so that we fallback to emulated read.
 				 */
-				return -FI_EAGAIN;
+				return -FI_ENOMR;
 			}
 
 		pkt_entry = efa_rdm_pke_alloc(ep, ep->efa_tx_pkt_pool, EFA_RDM_PKE_FROM_EFA_TX_POOL);
@@ -1592,15 +1593,23 @@ int efa_rdm_ope_post_remote_read_or_queue(struct efa_rdm_ope *ope)
 	}
 
 	err = efa_rdm_ope_post_read(ope);
-	if (err == -FI_EAGAIN) {
-		dlist_insert_tail(&ope->queued_read_entry, &ope->ep->ope_queued_read_list);
+	switch (err) {
+	case -FI_EAGAIN:
+		dlist_insert_tail(&ope->queued_read_entry,
+				  &ope->ep->ope_queued_read_list);
 		ope->internal_flags |= EFA_RDM_OPE_QUEUED_READ;
 		err = 0;
-	} else if(err) {
-		EFA_WARN(FI_LOG_CQ,
-			"RDMA post read failed. errno=%d.\n", err);
+		break;
+	case -FI_ENOMR:
+		/* We want to fallback to long CTS, so just return FI_ENOMR
+		 * without printing warning
+		 */
+	case 0:
+		break;
+	default:
+		EFA_WARN(FI_LOG_CQ, "RDMA post read failed. errno=%d.\n", err);
+		break;
 	}
-
 	return err;
 }
 
@@ -1722,7 +1731,7 @@ ssize_t efa_rdm_ope_post_send(struct efa_rdm_ope *ope, int pkt_type)
 		if (err) {
 			for (j = 0; j <= i; ++j)
 				efa_rdm_pke_release_tx(pkt_entry_vec[j]);
-			return err;
+			goto handle_err;
 		}
 
 		if (segment_offset != -1 && pkt_entry_cnt > 1) {
@@ -1735,7 +1744,7 @@ ssize_t efa_rdm_ope_post_send(struct efa_rdm_ope *ope, int pkt_type)
 	if (err) {
 		for (i = 0; i < pkt_entry_cnt; ++i)
 			efa_rdm_pke_release_tx(pkt_entry_vec[i]);
-		return err;
+		goto handle_err;
 	}
 
 	peer = efa_rdm_ep_get_peer(ep, ope->addr);
@@ -1744,6 +1753,54 @@ ssize_t efa_rdm_ope_post_send(struct efa_rdm_ope *ope, int pkt_type)
 	for (i = 0; i < pkt_entry_cnt; ++i)
 		efa_rdm_pke_handle_sent(pkt_entry_vec[i]);
 	return 0;
+
+handle_err:
+		return efa_rdm_ope_post_send_fallback(ope, pkt_type, err);
+}
+
+/**
+ * @brief Fallback to a different message type if a packet send fails.
+ *
+ * Currently, this function is only used in the read nack protocol. If a long read or
+ * runting read RTM packet fails to send because of a memory registration failure, it
+ * will send a long CTS RTM packet.
+ *
+ * @param[in]   ope            pointer to efa_rdm_ope. (either a txe or an rxe)
+ * @param[in]   pkt_type       packet type that failed to send
+ * @param[in]   err		       error code of the original failure
+ * @return      On success return 0, otherwise return a negative libfabric error code. Possible error codes include:
+ *             -FI_EAGAIN      temporarily  out of resource
+ */
+ssize_t efa_rdm_ope_post_send_fallback(struct efa_rdm_ope *ope,
+					   int pkt_type, ssize_t err)
+{
+	if (err == -FI_ENOMR) {
+		/* Long read and runting read protocols could fail because of a
+		 * lack of memory registrations. In that case, we retry with
+		 * long CTS protocol
+		 */
+		switch (pkt_type) {
+		case EFA_RDM_LONGREAD_MSGRTM_PKT:
+		case EFA_RDM_RUNTREAD_MSGRTM_PKT:
+			EFA_WARN(FI_LOG_EP_CTRL,
+				 "Sender fallback to long CTS untagged "
+				 "protocol because memory registration limit "
+				 "was reached on the sender\n");
+			return efa_rdm_ope_post_send_or_queue(
+				ope, EFA_RDM_LONGCTS_MSGRTM_PKT);
+		case EFA_RDM_LONGREAD_TAGRTM_PKT:
+		case EFA_RDM_RUNTREAD_TAGRTM_PKT:
+			EFA_WARN(FI_LOG_EP_CTRL,
+				 "Sender fallback to long CTS tagged protocol "
+				 "because memory registration limit was "
+				 "reached on the sender\n");
+			return efa_rdm_ope_post_send_or_queue(
+				ope, EFA_RDM_LONGCTS_TAGRTM_PKT);
+		default:
+			return err;
+		}
+	}
+	return err;
 }
 
 /**

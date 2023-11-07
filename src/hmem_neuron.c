@@ -116,8 +116,7 @@ static int neuron_dl_close(void)
 	return FI_SUCCESS;
 }
 
-int neuron_copy_to_dev(uint64_t device, void *dev, const void *host,
-		       size_t size)
+int neuron_copy_to_dev(uint64_t device, void *dev, const void *host, size_t size)
 {
 	NRT_STATUS ret;
 
@@ -131,8 +130,7 @@ int neuron_copy_to_dev(uint64_t device, void *dev, const void *host,
 	return -FI_EIO;
 }
 
-int neuron_copy_from_dev(uint64_t device, void *host, const void *dev,
-			 size_t size)
+int neuron_copy_from_dev(uint64_t device, void *host, const void *dev, size_t size)
 {
 	FI_WARN_ONCE(&core_prov, FI_LOG_CORE,
 		     "Copies from AWS Neuron to host memory are not supported.");
@@ -253,14 +251,12 @@ int neuron_get_dmabuf_fd(const void *addr, uint64_t size, int *fd,
 
 #else
 
-int neuron_copy_to_dev(uint64_t device, void *dev, const void *host,
-		       size_t size)
+int neuron_copy_to_dev(uint64_t device, void *dev, const void *host, size_t size)
 {
 	return -FI_ENOSYS;
 }
 
-int neuron_copy_from_dev(uint64_t device, void *host, const void *dev,
-			 size_t size)
+int neuron_copy_from_dev(uint64_t device, void *host, const void *dev, size_t size)
 {
 	return -FI_ENOSYS;
 }

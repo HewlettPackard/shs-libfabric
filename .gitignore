@@ -1,7 +1,6 @@
 .libs
 .deps
 .dirstamp
-.vscode
 *.o
 *.lo
 *.la
@@ -27,8 +26,6 @@
 *.orig
 *.c~
 *.h~
-*.tap
-[nr]0.dbg
 stamp-h?
 Makefile
 Makefile.in
@@ -43,7 +40,6 @@ config.lt
 config.status
 configure
 configure~
-install
 libtool
 
 libfabric.spec
@@ -92,6 +88,4 @@ fabtests/pytest/*/__pycache__
 .vscode
 prov/efa/docs/doxygen/html
 prov/efa/docs/doxygen/latex
-prov/cxi/test/multinode/test_coll
-prov/cxi/test/multinode/test_frmwk
-prov/cxi/test/multinode/test_zbcoll
+

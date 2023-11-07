@@ -2,7 +2,7 @@
 # Copyright (c) 2016 Cisco Systems, Inc.  All rights reserved.
 # Copyright (c) 2017-2018 Intel Corporation, Inc. All right reserved.
 # Copyright (c) 2018 Amazon.com, Inc. or its affiliates. All rights reserved.
-# (C) Copyright 2020-2023 Hewlett Packard Enterprise Development LP
+# (C) Copyright 2020 Hewlett Packard Enterprise Development LP
 #
 # Makefile.am for libfabric
 
@@ -100,8 +100,7 @@ common_srcs =				\
 	prov/coll/src/coll_eq.c		\
 	prov/coll/src/coll_fabric.c	\
 	prov/coll/src/coll_init.c	\
-	prov/coll/src/coll.h		\
-	prov/util/src/kdreg2_mem_monitor.c
+	prov/coll/src/coll.h
 
 if MACOS
 common_srcs += src/osx/osd.c
@@ -446,7 +445,7 @@ test:
 	./util/fi_info
 
 rpm: dist
-	LDFLAGS=-Wl,--build-id rpmbuild -ta $(RPMBUILD_OPTS) libfabric-$(PACKAGE_VERSION).tar.bz2
+	LDFLAGS=-Wl,--build-id rpmbuild -ta libfabric-$(PACKAGE_VERSION).tar.bz2
 
 prov_install_man_pages=
 prov_dist_man_pages=
@@ -461,7 +460,6 @@ include prov/usnic/Makefile.include
 include prov/psm2/Makefile.include
 include prov/psm3/Makefile.include
 include prov/gni/Makefile.include
-include prov/cxi/Makefile.include
 include prov/rxm/Makefile.include
 include prov/mrail/Makefile.include
 include prov/rxd/Makefile.include

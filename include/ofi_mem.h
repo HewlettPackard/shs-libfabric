@@ -327,7 +327,6 @@ enum {
 	OFI_BUFPOOL_NO_TRACK		= 1 << 2,
 	OFI_BUFPOOL_HUGEPAGES		= 1 << 3,
 	OFI_BUFPOOL_NONSHARED		= 1 << 4,
-	OFI_BUFPOOL_PAGE_ALIGNED	= 1 << 5,
 };
 
 struct ofi_bufpool_region;
@@ -559,7 +558,6 @@ static inline void *ofi_ibuf_alloc(struct ofi_bufpool *pool)
 
 	if (dlist_empty(&buf_region->free_list))
 		dlist_remove_init(&buf_region->entry);
-
 	return ofi_buf_data(buf_hdr);
 }
 

@@ -331,23 +331,20 @@ ssize_t ofi_gdrcopy_from_cuda_iov(uint64_t handle, void *host,
 	                            host, len, GDRCOPY_FROM_DEVICE);
 }
 
-int cuda_gdrcopy_dev_register(const void *addr, size_t size, uint64_t *handle,
-			      void **host_addr)
+int cuda_gdrcopy_dev_register(const void *buf, size_t len, uint64_t *handle)
 {
 	int err;
 	uintptr_t regbgn, regend;
 	size_t reglen;
 	struct gdrcopy_handle *gdrcopy;
-	size_t regoff;
 
 	assert(global_gdr);
 	assert(global_gdrcopy_ops.gdr_pin_buffer);
 	assert(global_gdrcopy_ops.gdr_map);
 
-	regbgn = (uintptr_t)ofi_get_page_start(addr, GPU_PAGE_SIZE);
-	regend = (uintptr_t)addr + size;
+	regbgn = (uintptr_t)ofi_get_page_start(buf, GPU_PAGE_SIZE);
+	regend = (uintptr_t)buf + len;
 	reglen = ofi_get_aligned_size(regend - regbgn, GPU_PAGE_SIZE);
-	regoff = (uintptr_t)addr - regbgn;
 
 	gdrcopy = malloc(sizeof(struct gdrcopy_handle));
 	if (!gdrcopy)
@@ -360,7 +357,7 @@ int cuda_gdrcopy_dev_register(const void *addr, size_t size, uint64_t *handle,
 	if (err) {
 		FI_WARN(&core_prov, FI_LOG_CORE,
 			"gdr_pin_buffer failed! error: %s ptr: %p len: %ld\n",
-			strerror(err), addr, size);
+			strerror(err), buf, len);
 		free(gdrcopy);
 		goto exit;
 	}
@@ -379,7 +376,6 @@ int cuda_gdrcopy_dev_register(const void *addr, size_t size, uint64_t *handle,
 	}
 
 	*handle = (uint64_t)gdrcopy;
-	*host_addr = (void *)((uintptr_t)gdrcopy->user_ptr + regoff);
 exit:
 	pthread_spin_unlock(&global_gdr_lock);
 	return err;
@@ -443,15 +439,14 @@ void cuda_gdrcopy_from_dev(uint64_t devhandle, void *hostptr,
 {
 }
 
-int cuda_gdrcopy_dev_register(const void *addr, size_t size, uint64_t *handle,
-			      void **host_addr)
+int cuda_gdrcopy_dev_register(const void *buf, size_t len, uint64_t *handle)
 {
-	return -FI_ENOSYS;
+	return FI_SUCCESS;
 }
 
 int cuda_gdrcopy_dev_unregister(uint64_t handle)
 {
-	return -FI_ENOSYS;
+	return FI_SUCCESS;
 }
 
 ssize_t ofi_gdrcopy_to_cuda_iov(uint64_t handle, const struct iovec *iov,
