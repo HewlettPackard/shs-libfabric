@@ -24,7 +24,7 @@ static int cxip_cntr_copy_ct_writeback(struct cxip_cntr *cntr,
 				       struct c_ct_writeback *wb_copy)
 {
 	struct cxip_domain *dom = cntr->domain;
-	ssize_t ret;
+	ssize_t ret __attribute__((unused));
 	struct iovec hmem_iov;
 
 	if (cntr->wb_iface == FI_HMEM_SYSTEM) {
@@ -32,8 +32,12 @@ static int cxip_cntr_copy_ct_writeback(struct cxip_cntr *cntr,
 		return FI_SUCCESS;
 	}
 
-	if (cntr->wb_host_addr) {
-		memcpy(wb_copy, cntr->wb_host_addr, sizeof(*cntr->wb));
+	if (cntr->wb_handle_valid) {
+		ret = ofi_hmem_dev_reg_copy_from_hmem(cntr->wb_iface,
+						      cntr->wb_handle, wb_copy,
+						      cntr->wb,
+						      sizeof(*cntr->wb));
+		assert(ret == FI_SUCCESS);
 		return FI_SUCCESS;
 	}
 
@@ -43,13 +47,7 @@ static int cxip_cntr_copy_ct_writeback(struct cxip_cntr *cntr,
 	ret = dom->hmem_ops.copy_from_hmem_iov(wb_copy, sizeof(*cntr->wb),
 					       cntr->wb_iface, cntr->wb_device,
 					       &hmem_iov, 1, 0);
-	if (ret < 0) {
-		return ret;
-	} else if (ret != sizeof(*wb_copy)) {
-		CXIP_WARN("Short device copy: expected=%lu got=%lu\n",
-			  sizeof(*wb_copy), ret);
-		return -FI_EIO;
-	}
+	assert(ret == sizeof(*wb_copy));
 	return FI_SUCCESS;
 }
 
@@ -102,7 +100,7 @@ static int cxip_cntr_get_ct_success(struct cxip_cntr *cntr, uint64_t *success)
 static int cxip_cntr_clear_ct_writeback(struct cxip_cntr *cntr)
 {
 	struct iovec hmem_iov;
-	ssize_t ret;
+	ssize_t ret __attribute__((unused));
 	uint8_t ct_writeback;
 
 	/* Only can reference the ct_success field directly if dealing with
@@ -119,14 +117,11 @@ static int cxip_cntr_clear_ct_writeback(struct cxip_cntr *cntr)
 	hmem_iov.iov_base = (char *)cntr->wb + CT_WRITEBACK_OFFSET;
 	hmem_iov.iov_len = 1;
 
-	ret = cxip_copy_to_hmem_iov(cntr->domain, cntr->wb_iface, 0, &hmem_iov,
-				    1, 0, &ct_writeback, 1);
-	if (ret < 0) {
-		return ret;
-	} else if (ret != 1) {
-		CXIP_WARN("Short device copy: expected=%u got=%lu\n", 1, ret);
-		return -FI_EIO;
-	}
+	ret = cntr->domain->hmem_ops.copy_to_hmem_iov(cntr->wb_iface, 0,
+						      &hmem_iov, 1, 0,
+						      &ct_writeback, 1);
+	assert(ret == 1);
+
 	return FI_SUCCESS;
 }
 
@@ -647,8 +642,7 @@ static int cxip_cntr_enable(struct cxip_cntr *cxi_cntr)
 
 	cxi_cntr->wb = &cxi_cntr->lwb;
 	cxi_cntr->wb_iface = FI_HMEM_SYSTEM;
-	cxi_cntr->wb_handle = NO_DEV_REG_HANDLE;
-	cxi_cntr->wb_host_addr = NULL;
+	cxi_cntr->wb_handle_valid = false;
 
 	ret = cxil_alloc_ct(cxi_cntr->domain->lni->lni,
 			    cxi_cntr->wb, &cxi_cntr->ct);
@@ -683,7 +677,7 @@ static int cxip_cntr_close(struct fid *fid)
 	assert(dlist_empty(&cntr->ctx_list));
 
 	if (cntr->wb_iface != FI_HMEM_SYSTEM &&
-	    cntr->wb_handle != NO_DEV_REG_HANDLE)
+	    cntr->wb_handle_valid)
 		ofi_hmem_dev_unregister(cntr->wb_iface, cntr->wb_handle);
 
 	ret = cxil_destroy_ct(cntr->ct);
@@ -720,7 +714,7 @@ int cxip_set_wb_buffer(struct fid *fid, void *buf, size_t len)
 		return ret;
 
 	if (cntr->wb_iface != FI_HMEM_SYSTEM &&
-	    cntr->wb_handle != NO_DEV_REG_HANDLE)
+	    cntr->wb_handle_valid)
 		ofi_hmem_dev_unregister(cntr->wb_iface, cntr->wb_handle);
 
 	cntr->wb = buf;
@@ -730,10 +724,7 @@ int cxip_set_wb_buffer(struct fid *fid, void *buf, size_t len)
 		ret = ofi_hmem_dev_register(cntr->wb_iface, cntr->wb,
 					    sizeof(*cntr->wb),
 					    &cntr->wb_handle);
-		if (ret == -FI_ENOSYS) {
-			cntr->wb_handle = NO_DEV_REG_HANDLE;
-			cntr->wb_host_addr = NULL;
-		}
+		cntr->wb_handle_valid = (ret == FI_SUCCESS);
 	}
 
 	/* Force a counter writeback into the user's provider buffer. */

@@ -1284,7 +1284,7 @@ struct cxip_cntr {
 	uint64_t wb_device;
 	enum fi_hmem_iface wb_iface;
 	uint64_t wb_handle;
-	void *wb_host_addr;
+	bool wb_handle_valid;
 	struct c_ct_writeback lwb;
 
 	struct dlist_entry dom_entry;
