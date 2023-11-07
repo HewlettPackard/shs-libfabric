@@ -117,11 +117,11 @@ static int cxip_do_map(struct ofi_mr_cache *cache, struct ofi_mr_entry *entry)
 					    &md->handle);
 	switch (ret) {
 	case FI_SUCCESS:
+		md->handle_valid = true;
 		break;
 
 	case -FI_ENOSYS:
-		md->handle = NO_DEV_REG_HANDLE;
-		md->host_addr = NULL;
+		md->handle_valid = false;
 		break;
 
 	default:
@@ -161,7 +161,7 @@ static void cxip_do_unmap(struct ofi_mr_cache *cache,
 	if (!md || !md->dom || md->md == md->dom->scalable_md.md)
 		return;
 
-	if (md->handle != NO_DEV_REG_HANDLE)
+	if (md->handle_valid)
 		ofi_hmem_dev_unregister(entry->info.iface, md->handle);
 
 	ret = cxil_unmap(md->md);
@@ -460,11 +460,11 @@ static int cxip_map_nocache(struct cxip_domain *dom, struct fi_mr_attr *attr,
 
 	switch (ret) {
 	case FI_SUCCESS:
+		uncached_md->handle_valid = true;
 		break;
 
 	case -FI_ENOSYS:
-		uncached_md->handle = NO_DEV_REG_HANDLE;
-		uncached_md->host_addr = NULL;
+		uncached_md->handle_valid = false;
 		break;
 
 	default:
@@ -587,7 +587,7 @@ static void cxip_unmap_nocache(struct cxip_md *md)
 {
 	int ret;
 
-	if (md->handle != NO_DEV_REG_HANDLE)
+	if (md->handle_valid)
 		ofi_hmem_dev_unregister(md->info.iface, md->handle);
 
 	ret = cxil_unmap(md->md);

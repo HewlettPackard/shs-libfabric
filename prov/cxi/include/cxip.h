@@ -735,22 +735,6 @@ struct cxip_md {
 	bool cached;
 };
 
-static inline void *cxip_md_host_addr(struct cxip_md *md, const void *addr)
-{
-	size_t offset;
-	void *host_addr;
-
-	assert(md);
-
-	if (!md->host_addr)
-		return NULL;
-
-	offset = (uintptr_t)addr - (uintptr_t)md->info.iov.iov_base;
-	host_addr = (void *)((uintptr_t)md->host_addr + offset);
-
-	return host_addr;
-}
-
 #define CXIP_MR_DOMAIN_HT_BUCKETS 16
 
 struct cxip_mr_domain {
@@ -1752,35 +1736,51 @@ struct cxip_rxc {
 	struct cxip_msg_counters cntrs;
 };
 
-static inline ssize_t
-cxip_rxc_copy_to_hmem(struct cxip_rxc *rxc, struct cxip_md *hmem_md,
-		      void *hmem_dest, const void *src, size_t size)
+static inline void cxip_copy_to_md(struct cxip_md *md, void *dest,
+				   const void *src, size_t size)
 {
-	void *host_addr;
-	struct iovec hmem_iov;
-
-	/* FI_HMEM disabled and FI_HMEM_SYSTEM will always default to memcpy. */
-	if (!rxc->hmem || hmem_md->info.iface == FI_HMEM_SYSTEM) {
-		memcpy(hmem_dest, src, size);
-		return size;
-	}
+	ssize_t ret __attribute__((unused));
+	struct iovec iov;
 
 	/* Favor CPU store access instead of relying on HMEM copy functions. */
-	host_addr = cxip_md_host_addr(hmem_md, hmem_dest);
-	if (host_addr && size <= cxip_env.safe_devmem_copy_threshold) {
-		memcpy(host_addr, src, size);
-		return size;
+	if (md->handle_valid && size <= cxip_env.safe_devmem_copy_threshold) {
+		ret = ofi_hmem_dev_reg_copy_to_hmem(md->info.iface, md->handle,
+						    dest, src, size);
+		assert(ret == FI_SUCCESS);
+	} else {
+		iov.iov_base = dest;
+		iov.iov_len = size;
+
+		ret = md->dom->hmem_ops.copy_to_hmem_iov(md->info.iface,
+							 md->info.device, &iov,
+							 1, 0, src, size);
+		assert(ret == size);
 	}
+}
 
-	hmem_iov.iov_base = hmem_dest;
-	hmem_iov.iov_len = size;
+static inline void cxip_copy_from_md(struct cxip_md *md, void *dest,
+				     const void *src, size_t size)
+{
+	ssize_t ret __attribute__((unused));
+	struct iovec iov;
 
-	/* Fallback to slow HMEM copy routines and/or HMEM override function
-	 * calls.
-	 */
-	return cxip_copy_to_hmem_iov(rxc->domain, hmem_md->info.iface,
-				     hmem_md->info.device, &hmem_iov, 1, 0, src,
-				     size);
+	/* Favor CPU store access instead of relying on HMEM copy functions. */
+	if (md->handle_valid && size <= cxip_env.safe_devmem_copy_threshold) {
+		ret = ofi_hmem_dev_reg_copy_from_hmem(md->info.iface,
+						      md->handle,
+						      dest, src, size);
+		assert(ret == FI_SUCCESS);
+	} else {
+		iov.iov_base = (void *)src;
+		iov.iov_len = size;
+
+
+		ret = md->dom->hmem_ops.copy_from_hmem_iov(dest, size,
+							   md->info.iface,
+							   md->info.device,
+							   &iov, 1, 0);
+		assert(ret == size);
+	}
 }
 
 /* PtlTE buffer pool - Common PtlTE request/overflow list buffer
@@ -3114,7 +3114,6 @@ static inline int
 cxip_txc_copy_from_hmem(struct cxip_txc *txc, struct cxip_md *hmem_md,
 			void *dest, const void *hmem_src, size_t size)
 {
-	void *host_addr;
 	enum fi_hmem_iface iface;
 	uint64_t device;
 	struct iovec hmem_iov;
@@ -3142,8 +3141,7 @@ cxip_txc_copy_from_hmem(struct cxip_txc *txc, struct cxip_md *hmem_md,
 	 * Memory registration can result in additional latency. Expectation is
 	 * the MR cache can amortize the additional memory registration latency.
 	 */
-	if (size <= cxip_env.safe_devmem_copy_threshold &&
-	    !cxip_env.fork_safe_requested) {
+	if (!cxip_env.fork_safe_requested) {
 		if (!hmem_md) {
 			ret = cxip_map(domain, hmem_src, size, 0, &hmem_md);
 			if (ret) {
@@ -3155,26 +3153,15 @@ cxip_txc_copy_from_hmem(struct cxip_txc *txc, struct cxip_md *hmem_md,
 			unmap_hmem_md = true;
 		}
 
-		host_addr = cxip_md_host_addr(hmem_md, hmem_src);
-		if (host_addr) {
-			memcpy(dest, host_addr, size);
-			if (unmap_hmem_md)
-				cxip_unmap(hmem_md);
-			return FI_SUCCESS;
-		}
+		cxip_copy_from_md(hmem_md, dest, hmem_src, size);
+		if (unmap_hmem_md)
+			cxip_unmap(hmem_md);
+
+		return FI_SUCCESS;
 	}
 
 	/* Slow path HMEM copy path.*/
-	if (hmem_md) {
-		iface = hmem_md->info.iface;
-		device = hmem_md->info.device;
-
-		if (unmap_hmem_md)
-			cxip_unmap(hmem_md);
-	} else {
-		iface = ofi_get_hmem_iface(hmem_src, &device, &flags);
-	}
-
+	iface = ofi_get_hmem_iface(hmem_src, &device, &flags);
 	hmem_iov.iov_base = (void *)hmem_src;
 	hmem_iov.iov_len = size;
 

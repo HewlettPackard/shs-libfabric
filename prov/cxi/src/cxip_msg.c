@@ -1008,12 +1008,8 @@ static int cxip_ux_send(struct cxip_req *match_req, struct cxip_req *oflow_req,
 
 	/* Copy data out of overflow buffer. */
 	oflow_bytes = MIN(put_event->tgt_long.mlength, match_req->data_len);
-
-	ret = cxip_rxc_copy_to_hmem(match_req->recv.rxc,
-				    match_req->recv.recv_md,
-				    match_req->recv.recv_buf,
-				    oflow_va, oflow_bytes);
-	assert(ret == oflow_bytes);
+	cxip_copy_to_md(match_req->recv.recv_md, match_req->recv.recv_buf,
+			oflow_va, oflow_bytes);
 
 	if (oflow_req->type == CXIP_REQ_OFLOW)
 		oflow_req_put_bytes(oflow_req, put_event->tgt_long.mlength);
@@ -4804,10 +4800,14 @@ static ssize_t _cxip_send_eager_idc(struct cxip_req *req)
 		assert(req->send.ibuf);
 
 	/* ibuf and send_md are mutually exclusive. */
-	if (req->send.ibuf)
+	if (req->send.ibuf) {
 		assert(req->send.send_md == NULL);
-	else if (req->send.send_md)
+	} else if (req->send.send_md) {
 		assert(req->send.ibuf == NULL);
+
+		/* All non FI_HMEM_SYSTEM buffers require an ibuf. */
+		assert(req->send.send_md->info.iface == FI_HMEM_SYSTEM);
+	}
 #endif
 
 	/* Calculate DFA */
@@ -4817,8 +4817,6 @@ static ssize_t _cxip_send_eager_idc(struct cxip_req *req)
 	/* Favor bounce buffer if allocated. */
 	if (req->send.ibuf)
 		buf = req->send.ibuf;
-	else if (req->send.send_md)
-		buf = cxip_md_host_addr(req->send.send_md, req->send.buf);
 	else
 		buf = req->send.buf;
 
@@ -5397,41 +5395,20 @@ static int cxip_send_buf_init(struct cxip_req *req)
 	if (cxip_send_eager_idc(req)) {
 		if (txc->hmem) {
 
-			/* For FI_HMEM, force the registration of the buffer
-			 * even though it is going through the IDC path. Memory
-			 * registration may return a valid device memory host
-			 * pointer. If that is the case, expensive HMEM copy
-			 * calls can be avoided.
-			 *
-			 * Use of the MR cache is required amortize memory
-			 * registration overhead.
-			 */
-			ret = cxip_map(txc->domain, req->send.buf,
-				       req->send.len, 0, &req->send.send_md);
-			if (ret)
-				return ret;
+			req->send.ibuf = cxip_txc_ibuf_alloc(txc);
+			if (!req->send.ibuf) {
+				ret = -FI_EAGAIN;
+				goto err_buf_fini;
+			}
 
-			if (!req->send.send_md->host_addr) {
-				req->send.ibuf = cxip_txc_ibuf_alloc(txc);
-				if (!req->send.ibuf) {
-					ret = -FI_EAGAIN;
-					goto err_buf_fini;
-				}
-
-				ret = cxip_txc_copy_from_hmem(txc,
-							      req->send.send_md,
-							      req->send.ibuf,
-							      req->send.buf,
-							      req->send.len);
-				if (ret) {
-					TXC_WARN(txc,
-						 "cxip_txc_copy_from_hmem failed: %d:%s\n",
-						 ret, fi_strerror(-ret));
-					goto err_buf_fini;
-				}
-
-				cxip_unmap(req->send.send_md);
-				req->send.send_md = NULL;
+			ret = cxip_txc_copy_from_hmem(txc, NULL, req->send.ibuf,
+						      req->send.buf,
+						      req->send.len);
+			if (ret) {
+				TXC_WARN(txc,
+					 "cxip_txc_copy_from_hmem failed: %d:%s\n",
+					 ret, fi_strerror(-ret));
+				goto err_buf_fini;
 			}
 		}
 

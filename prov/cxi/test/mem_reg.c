@@ -89,10 +89,10 @@ static void hmem_dev_reg_test_runner(bool dev_reg, bool cache_enable)
 	 */
 	cxi_mr = container_of(mr, struct cxip_mr, mr_fid);
 	if (dev_reg)
-		cr_assert_neq(cxi_mr->md->host_addr, NULL,
-			      "Bad cxip_md host_addr");
+		cr_assert_eq(cxi_mr->md->handle_valid, true,
+			      "Bad cxip_md handle_valid");
 	else
-		cr_assert_eq(cxi_mr->md->host_addr, NULL,
+		cr_assert_eq(cxi_mr->md->handle_valid, false,
 			     "Bad cxip_md host_addr");
 	cr_assert_eq(cxi_mr->md->cached, cache_enable, "Bad cxip_md cached");
 
