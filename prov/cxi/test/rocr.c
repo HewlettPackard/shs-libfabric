@@ -730,18 +730,8 @@ static void verify_dev_reg_handle(bool hmem_dev_reg, enum mem_type type)
 
 	mr = container_of(fid_mr, struct cxip_mr, mr_fid);
 
-	if (hmem_dev_reg) {
-		cr_assert_neq(mr->md->handle, NO_DEV_REG_HANDLE,
-			      "Invalid CXIP MD handle");
-		cr_assert_neq(mr->md->host_addr, NULL,
-			      "Invalid CXIP MD host addr");
-	} else {
-		cr_assert_eq(mr->md->handle, NO_DEV_REG_HANDLE,
-			     "Invalid CXIP MD handle");
-		cr_assert_eq(mr->md->host_addr, NULL,
-			     "Invalid CXIP MD host addr");
-	}
-
+	cr_assert_eq(cxi_mr->md->handle_valid, hmem_dev_reg,
+		     "Bad cxip_md handle_valid");
 	cr_assert_eq(mr->md->info.iface, FI_HMEM_ROCR,
 		     "Invalid CXIP MD iface: %d", mr->md->info.iface);
 
