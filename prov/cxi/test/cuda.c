@@ -415,7 +415,7 @@ static void verify_dev_reg_handle(bool hmem_dev_reg)
 
 	mr = container_of(fid_mr, struct cxip_mr, mr_fid);
 
-	cr_assert_eq(cxi_mr->md->handle_valid, hmem_dev_reg,
+	cr_assert_eq(mr->md->handle_valid, hmem_dev_reg,
 		     "Bad cxip_md handle_valid");
 	cr_assert_eq(mr->md->info.iface, FI_HMEM_CUDA,
 		     "Invalid CXIP MD iface: %d", mr->md->info.iface);
