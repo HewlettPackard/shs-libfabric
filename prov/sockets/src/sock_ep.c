@@ -1417,8 +1417,10 @@ static void sock_set_fabric_attr(void *src_addr, const struct fi_fabric_attr *hi
 	if (!attr->name)
 		attr->name = strdup(sock_fab_name);
 
-	attr->prov_name = strdup(hint_attr->prov_name);
-	attr->api_version = hint_attr->api_version;
+	if (hint_attr) {
+		attr->prov_name = strdup(hint_attr->prov_name);
+		attr->api_version = hint_attr->api_version;
+	}
 }
 
 static void sock_set_domain_attr(uint32_t api_version, void *src_addr,
@@ -1509,20 +1511,13 @@ struct fi_info *sock_fi_info(uint32_t version, enum fi_ep_type ep_type,
 	info->src_addrlen = 0;
 	info->dest_addrlen = 0;
 
-	info->src_addr = calloc(1, ofi_sizeofip(src_addr));
+	assert(src_addr);
+	info->src_addr = calloc(1, ofi_sizeofaddr(src_addr));
 	if (!info->src_addr)
 		goto err;
 
 	info->mode = SOCK_MODE;
-
-	if (src_addr) {
-		memcpy(info->src_addr, src_addr, ofi_sizeofaddr(src_addr));
-	} else {
-		sock_get_src_addr_from_hostname(info->src_addr, NULL,
-			dest_addr ? ((struct sockaddr *) dest_addr)->sa_family :
-			ofi_get_sa_family(hints));
-	}
-
+	memcpy(info->src_addr, src_addr, ofi_sizeofaddr(src_addr));
 	info->src_addrlen = ofi_sizeofaddr(info->src_addr);
 	if (info->src_addrlen == sizeof(struct sockaddr_in6))
 		info->addr_format = FI_SOCKADDR_IN6;
@@ -1530,7 +1525,7 @@ struct fi_info *sock_fi_info(uint32_t version, enum fi_ep_type ep_type,
 		info->addr_format = FI_SOCKADDR_IN;
 
 	if (dest_addr) {
-		info->dest_addr = calloc(1, ofi_sizeofip(dest_addr));
+		info->dest_addr = calloc(1, ofi_sizeofaddr(dest_addr));
 		if (!info->dest_addr)
 			goto err;
 		info->dest_addrlen = ofi_sizeofaddr(dest_addr);
