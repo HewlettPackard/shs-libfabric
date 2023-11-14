@@ -1938,3 +1938,217 @@ Test(av_auth_key, remove)
 	fi_freeinfo(info);
 	fi_freeinfo(hints);
 }
+
+Test(av_auth_key, valid_insert_auth_key_addr)
+{
+	struct fi_info *hints;
+	struct fi_info *info;
+	int ret;
+	struct fid_fabric *fab;
+	struct fid_domain *dom;
+	struct fid_av *av;
+	struct cxi_auth_key auth_key = {};
+	struct cxip_addr addr = {};
+	struct cxip_nic_attr *nic_attr;
+	fi_addr_t addr_key;
+	size_t addr_key_size = sizeof(addr);
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
+	hints->domain_attr->max_ep_auth_key = 1;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 "255", FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	nic_attr = info->nic->prov_attr;
+	auth_key.vni = nic_attr->default_vni;
+
+	open_av_auth_key(info, &fab, &dom, &av);
+
+	ret = fi_av_insert_auth_key(av, &auth_key, sizeof(auth_key), &addr_key,
+				    0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_av_insert_auth_key failed: %d", ret);
+
+	ret = fi_av_insert(av, &addr, 1, &addr_key, FI_AUTH_KEY, NULL);
+	cr_assert_eq(ret, 1, "fi_av_insert failed: %d", ret);
+
+	ret = fi_av_lookup(av, addr_key, &addr, &addr_key_size);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_av_lookup failed: %d", ret);
+
+	cr_assert_eq(addr.vni, auth_key.vni,
+		     "Invalid auth_key vni: expected=%u got=%u",
+		     auth_key.vni, addr.vni);
+
+	close_av_auth_key(fab, dom, av);
+
+	fi_freeinfo(info);
+	fi_freeinfo(hints);
+}
+
+Test(av_auth_key, miss_auth_key_insert_flag)
+{
+	struct fi_info *hints;
+	struct fi_info *info;
+	int ret;
+	struct fid_fabric *fab;
+	struct fid_domain *dom;
+	struct fid_av *av;
+	struct cxi_auth_key auth_key = {};
+	struct cxip_addr addr = {};
+	struct cxip_nic_attr *nic_attr;
+	fi_addr_t addr_key;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
+	hints->domain_attr->max_ep_auth_key = 1;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 "255", FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	nic_attr = info->nic->prov_attr;
+	auth_key.vni = nic_attr->default_vni;
+
+	open_av_auth_key(info, &fab, &dom, &av);
+
+	ret = fi_av_insert_auth_key(av, &auth_key, sizeof(auth_key), &addr_key,
+				    0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_av_insert_auth_key failed: %d", ret);
+
+	ret = fi_av_insert(av, &addr, 1, &addr_key, 0, NULL);
+	cr_assert_eq(ret, -FI_EINVAL, "fi_av_insert failed: %d", ret);
+
+	close_av_auth_key(fab, dom, av);
+
+	fi_freeinfo(info);
+	fi_freeinfo(hints);
+}
+
+Test(av_auth_key, invalid_user_id_flag)
+{
+	struct fi_info *hints;
+	struct fi_info *info;
+	int ret;
+	struct fid_fabric *fab;
+	struct fid_domain *dom;
+	struct fid_av *av;
+	struct cxi_auth_key auth_key = {};
+	struct cxip_addr addr = {};
+	struct cxip_nic_attr *nic_attr;
+	fi_addr_t addr_key;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
+	hints->domain_attr->max_ep_auth_key = 1;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 "255", FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	nic_attr = info->nic->prov_attr;
+	auth_key.vni = nic_attr->default_vni;
+
+	open_av_auth_key(info, &fab, &dom, &av);
+
+	ret = fi_av_insert_auth_key(av, &auth_key, sizeof(auth_key), &addr_key,
+				    0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_av_insert_auth_key failed: %d", ret);
+
+	ret = fi_av_insert(av, &addr, 1, &addr_key, FI_AV_USER_ID, NULL);
+	cr_assert_eq(ret, -FI_EINVAL, "fi_av_insert failed: %d", ret);
+
+	close_av_auth_key(fab, dom, av);
+
+	fi_freeinfo(info);
+	fi_freeinfo(hints);
+}
+
+Test(av_auth_key, invalid_user_id_auth_key_flags)
+{
+	struct fi_info *hints;
+	struct fi_info *info;
+	int ret;
+	struct fid_fabric *fab;
+	struct fid_domain *dom;
+	struct fid_av *av;
+	struct cxip_addr addr = {};
+	fi_addr_t addr_key;
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->domain_attr->max_ep_auth_key = 1;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 "255", FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	open_av_auth_key(info, &fab, &dom, &av);
+
+	ret = fi_av_insert(av, &addr, 1, &addr_key,
+			   (FI_AV_USER_ID | FI_AUTH_KEY), NULL);
+	cr_assert_eq(ret, -FI_EINVAL, "fi_av_insert failed: %d", ret);
+
+	close_av_auth_key(fab, dom, av);
+
+	fi_freeinfo(info);
+	fi_freeinfo(hints);
+}
+
+Test(av_auth_key, null_auth_key_addr)
+{
+	struct fi_info *hints;
+	struct fi_info *info;
+	int ret;
+	struct fid_fabric *fab;
+	struct fid_domain *dom;
+	struct fid_av *av;
+	struct cxip_addr addr = {};
+
+	hints = fi_allocinfo();
+	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert_not_null(hints, "strdup failed");
+
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
+	hints->domain_attr->max_ep_auth_key = 1;
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), "cxi0",
+			 "255", FI_SOURCE, hints, &info);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getinfo failed: %d", ret);
+
+	open_av_auth_key(info, &fab, &dom, &av);
+
+	ret = fi_av_insert(av, &addr, 1, NULL, FI_AUTH_KEY, NULL);
+	cr_assert_eq(ret, -FI_EINVAL, "fi_av_insert failed: %d", ret);
+
+	close_av_auth_key(fab, dom, av);
+
+	fi_freeinfo(info);
+	fi_freeinfo(hints);
+}
