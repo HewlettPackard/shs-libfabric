@@ -2328,7 +2328,7 @@ static void av_auth_key_test_tx_ep_init(unsigned int num_vnis)
 }
 
 static void av_auth_key_test_rx_ep_init(bool source_err, unsigned int num_vnis,
-					bool directed_recv)
+					bool directed_recv, bool av_user_id)
 {
 	struct fi_info *hints;
 	static struct fi_info *info;
@@ -2357,6 +2357,11 @@ static void av_auth_key_test_rx_ep_init(bool source_err, unsigned int num_vnis,
 
 	hints = fi_allocinfo();
 	cr_assert_not_null(hints, "fi_allocinfo failed");
+
+	if (av_user_id) {
+		av_attr.flags = FI_AV_USER_ID;
+		hints->caps |= FI_AV_USER_ID;
+	}
 
 	hints->caps |= FI_SOURCE | FI_SOURCE_ERR | FI_MSG | FI_SEND | FI_RECV;
 	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
@@ -2473,7 +2478,7 @@ Test(data_transfer_av_auth_key, successful_inject_transfer_source)
 	struct fi_cq_tagged_entry event;
 	fi_addr_t src_addr;
 
-	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false);
+	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false, false);
 	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
 
 	/* Each TX EP has been configured for a different VNI. Send from each
@@ -2521,7 +2526,7 @@ Test(data_transfer_av_auth_key, successful_rdzv_transfer_source)
 	buf = malloc(buf_size);
 	cr_assert(buf != NULL);
 
-	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false);
+	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false, false);
 	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
 
 	/* Each TX EP has been configured for a different VNI. Send from each
@@ -2576,10 +2581,10 @@ Test(data_transfer_av_auth_key, successful_transfer_source_err)
 	int i;
 	int ret;
 	struct fi_cq_tagged_entry event;
-	struct fi_cq_err_entry error;
+	struct fi_cq_err_entry error = {};
 	fi_addr_t src_addr;
 
-	av_auth_key_test_rx_ep_init(true, NUM_VNIS, false);
+	av_auth_key_test_rx_ep_init(true, NUM_VNIS, false, false);
 	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
 
 	/* Each TX EP has been configured for a different VNI. Send from each
@@ -2624,7 +2629,7 @@ Test(data_transfer_av_auth_key, single_auth_key_with_directed_recv)
 	struct cxip_addr addr;
 	size_t addr_size = sizeof(struct cxip_addr);
 
-	av_auth_key_test_rx_ep_init(false, 1, true);
+	av_auth_key_test_rx_ep_init(false, 1, true, false);
 	av_auth_key_test_tx_ep_init(1);
 
 	ret = fi_getname(&rx_ep->fid, &addr, &addr_size);
@@ -2666,5 +2671,99 @@ Test(data_transfer_av_auth_key, single_auth_key_with_directed_recv)
 	}
 
 	av_auth_key_tx_ep_fini(1);
+	av_auth_key_test_rx_ep_fini();
+}
+
+Test(data_transfer_av_auth_key, av_user_id_source_err_missing_auth_key_user_id)
+{
+	int i;
+	int ret;
+	struct fi_cq_tagged_entry event;
+	struct fi_cq_err_entry error = {};
+	fi_addr_t src_addr;
+
+	av_auth_key_test_rx_ep_init(true, NUM_VNIS, false, true);
+	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
+
+	/* Each TX EP has been configured for a different VNI. Send from each
+	 * TX EP to the RX EP. The RX EP is configured with all VNIs.
+	 */
+	for (i = 0; i < NUM_TX_EPS; i++) {
+		ret = fi_send(tx_ep[i], NULL, 0, NULL, target_addr, tx_ep[i]);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_send failed: %d", ret);
+
+		ret = fi_recv(rx_ep, NULL, 0, NULL, FI_ADDR_UNSPEC, NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed: %d", ret);
+
+		do {
+			ret = fi_cq_readfrom(cq, &event, 1, &src_addr);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, -FI_EAVAIL, "fi_cq_readfrom failed: %d", ret);
+
+		ret = fi_cq_readerr(cq, &error, 0);
+		cr_assert_eq(ret, 1, "fi_cq_readfrom failed: %d", ret);
+		cr_assert_eq(error.err, FI_EADDRNOTAVAIL, "Bad error.err");
+		cr_assert_eq(error.src_addr, FI_ADDR_UNSPEC,
+			     "Bad error.src_addr: got=%lx expected=%lx",
+			     error.src_addr, FI_ADDR_UNSPEC);
+
+		do {
+			ret = fi_cq_read(tx_cq, &event, 1);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_read failed: %d", ret);
+	}
+
+	av_auth_key_tx_ep_fini(NUM_TX_EPS);
+	av_auth_key_test_rx_ep_fini();
+}
+
+Test(data_transfer_av_auth_key, av_user_id_source_err_auth_key_user_id)
+{
+	int i;
+	int ret;
+	struct fi_cq_tagged_entry event;
+	struct fi_cq_err_entry error = {};
+	fi_addr_t src_addr;
+	fi_addr_t user_id[NUM_VNIS] = {0x1234, 0x1235, 0x1236, 0x1237};
+
+	av_auth_key_test_rx_ep_init(true, NUM_VNIS, false, true);
+	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
+
+	for (i = 0; i < NUM_VNIS; i++) {
+		ret = fi_av_set_user_id(av, auth_keys[i], user_id[i],
+					FI_AUTH_KEY);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_av_set_user_id failed: %d",
+			     ret);
+	}
+
+	/* Each TX EP has been configured for a different VNI. Send from each
+	 * TX EP to the RX EP. The RX EP is configured with all VNIs.
+	 */
+	for (i = 0; i < NUM_TX_EPS; i++) {
+		ret = fi_send(tx_ep[i], NULL, 0, NULL, target_addr, tx_ep[i]);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_send failed: %d", ret);
+
+		ret = fi_recv(rx_ep, NULL, 0, NULL, FI_ADDR_UNSPEC, NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed: %d", ret);
+
+		do {
+			ret = fi_cq_readfrom(cq, &event, 1, &src_addr);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, -FI_EAVAIL, "fi_cq_readfrom failed: %d", ret);
+
+		ret = fi_cq_readerr(cq, &error, 0);
+		cr_assert_eq(ret, 1, "fi_cq_readfrom failed: %d", ret);
+		cr_assert_eq(error.err, FI_EADDRNOTAVAIL, "Bad error.err");
+		cr_assert_eq(error.src_addr, user_id[i],
+			     "Bad error.src_addr: got=%lx expected=%lx",
+			     error.src_addr, user_id[i]);
+
+		do {
+			ret = fi_cq_read(tx_cq, &event, 1);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_read failed: %d", ret);
+	}
+
+	av_auth_key_tx_ep_fini(NUM_TX_EPS);
 	av_auth_key_test_rx_ep_fini();
 }

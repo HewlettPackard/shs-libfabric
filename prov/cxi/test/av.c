@@ -540,3 +540,18 @@ Test(av, av_user_id_invalid_null_fi_addr)
 
 	cxit_destroy_av();
 }
+
+Test(av, invalid_fi_av_user_id_flag)
+{
+	int ret;
+	struct cxip_addr addr = {};;
+	fi_addr_t fi_addr = 0;
+
+	cxit_av_attr.flags = FI_AV_USER_ID;
+	cxit_create_av();
+
+	ret = fi_av_insert(cxit_av, &addr, 1, &fi_addr, FI_AV_USER_ID, NULL);
+	cr_assert_eq(ret, -FI_EINVAL, "Bad fi_av_insert rc: %d", ret);
+
+	cxit_destroy_av();
+}

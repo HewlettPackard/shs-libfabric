@@ -2008,3 +2008,81 @@ Test(msg, av_user_id)
 	ret = cxit_await_completion(cxit_tx_cq, &tx_cqe);
 	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
 }
+
+/* Verify that FI_AV_USER_ID is returned from fi_cq_readfrom(). */
+Test(msg, av_user_id_domain_cap)
+{
+	int ret;
+	struct fid_cq *cq;
+	struct fid_av *av;
+	struct fid_ep *ep;
+	struct fi_cq_attr cxit_tx_cq_attr = {
+		.format = FI_CQ_FORMAT_TAGGED,
+	};
+	struct fi_cq_tagged_entry cqe;
+	fi_addr_t from;
+	fi_addr_t dest_ep;
+	fi_addr_t user_id = 0xdeadbeef;
+	char addr[256];
+	size_t addr_size = sizeof(addr);
+	struct fi_av_attr av_attr = {
+		.flags = FI_AV_USER_ID,
+	};
+
+	ret = fi_cq_open(cxit_domain, &cxit_tx_cq_attr, &cq, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_cq_open failed: %d", ret);
+
+	ret = fi_av_open(cxit_domain, &av_attr, &av, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_av_open failed: %d", ret);
+
+	ret = fi_endpoint(cxit_domain, cxit_fi, &ep, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_endpoint failed: %d", ret);
+
+	ret = fi_ep_bind(ep, &cq->fid, FI_TRANSMIT | FI_RECV);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_ep_bind failed: %d", ret);
+
+	ret = fi_ep_bind(ep, &av->fid, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_ep_bind failed: %d", ret);
+
+	ret = fi_enable(ep);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_enable failed: %d", ret);
+
+	ret = fi_getname(&ep->fid, addr, &addr_size);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_getname failed: %d", ret);
+
+	ret = fi_av_insert(av, addr, 1, &dest_ep, 0, NULL);
+	cr_assert_eq(ret, 1, "fi_av_insert failed: %d", ret);
+
+	ret = fi_av_set_user_id(av, dest_ep, user_id, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_av_set_user_id failed: %d", ret);
+
+	ret = fi_recv(ep, NULL, 0, NULL, dest_ep, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed %d", ret);
+
+	ret = fi_send(ep, NULL, 0, NULL, dest_ep, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_send failed %d", ret);
+
+	do {
+		ret = fi_cq_readfrom(cq, &cqe, 1, &from);
+	} while (ret == -FI_EAGAIN);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+
+	if (cqe.flags & FI_SEND) {
+		do {
+			ret = fi_cq_readfrom(cq, &cqe, 1, &from);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_read unexpected value %d", ret);
+	}
+
+	cr_assert_eq(from, user_id, "Invalid user id: expected=%#lx got=%#lx",
+		     user_id, from);
+
+	ret = fi_close(&ep->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close failed %d", ret);
+
+	ret = fi_close(&av->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close failed %d", ret);
+
+	ret = fi_close(&cq->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close failed %d", ret);
+}
