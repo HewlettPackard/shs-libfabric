@@ -42,7 +42,7 @@ struct fi_domain_attr cxip_prov_key_domain_attr = {
 	.cntr_cnt = 16,
 	.mr_iov_limit = 1,
 	.mr_cnt = 100,
-	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.caps = CXIP_DOM_CAPS,
 	.auth_key_size = sizeof(struct cxi_auth_key),
 	.max_ep_auth_key = 1,
 };
@@ -69,7 +69,7 @@ struct fi_domain_attr cxip_odp_prov_key_domain_attr = {
 	.cntr_cnt = 16,
 	.mr_iov_limit = 1,
 	.mr_cnt = 100,
-	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.caps = CXIP_DOM_CAPS,
 	.auth_key_size = sizeof(struct cxi_auth_key),
 	.max_ep_auth_key = 1,
 };
@@ -96,7 +96,7 @@ struct fi_domain_attr cxip_client_key_domain_attr = {
 	.cntr_cnt = 16,
 	.mr_iov_limit = 1,
 	.mr_cnt = 100,
-	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.caps = CXIP_DOM_CAPS,
 	.auth_key_size = sizeof(struct cxi_auth_key),
 	.max_ep_auth_key = 1,
 };
@@ -123,7 +123,7 @@ struct fi_domain_attr cxip_odp_client_key_domain_attr = {
 	.cntr_cnt = 16,
 	.mr_iov_limit = 1,
 	.mr_cnt = 100,
-	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.caps = CXIP_DOM_CAPS,
 	.auth_key_size = sizeof(struct cxi_auth_key),
 	.max_ep_auth_key = 1,
 };
@@ -150,7 +150,7 @@ struct fi_domain_attr cxip_prov_key_multi_auth_key_domain_attr = {
 	.cntr_cnt = 16,
 	.mr_iov_limit = 1,
 	.mr_cnt = 100,
-	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.caps = CXIP_DOM_CAPS,
 	.auth_key_size = sizeof(struct cxi_auth_key),
 
 	/* Set to the number of VNIs supported by a single CXI service. */
@@ -179,7 +179,7 @@ struct fi_domain_attr cxip_odp_prov_key_multi_auth_key_domain_attr = {
 	.cntr_cnt = 16,
 	.mr_iov_limit = 1,
 	.mr_cnt = 100,
-	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.caps = CXIP_DOM_CAPS,
 	.auth_key_size = sizeof(struct cxi_auth_key),
 
 	/* Set to the number of VNIs supported by a single CXI service. */
@@ -208,7 +208,7 @@ struct fi_domain_attr cxip_client_key_multi_auth_key_domain_attr = {
 	.cntr_cnt = 16,
 	.mr_iov_limit = 1,
 	.mr_cnt = 100,
-	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.caps = CXIP_DOM_CAPS,
 	.auth_key_size = sizeof(struct cxi_auth_key),
 
 	/* Set to the number of VNIs supported by a single CXI service. */
@@ -237,7 +237,7 @@ struct fi_domain_attr cxip_odp_client_key_multi_auth_key_domain_attr = {
 	.cntr_cnt = 16,
 	.mr_iov_limit = 1,
 	.mr_cnt = 100,
-	.caps = FI_LOCAL_COMM | FI_REMOTE_COMM,
+	.caps = CXIP_DOM_CAPS,
 	.auth_key_size = sizeof(struct cxi_auth_key),
 
 	/* Set to the number of VNIs supported by a single CXI service. */
@@ -309,7 +309,7 @@ struct fi_rx_attr cxip_multi_auth_key_rx_attr = {
  */
 struct fi_info cxip_infos[] = {
 	{
-		.caps = CXIP_EP_CAPS,
+		.caps = CXIP_CAPS,
 		.addr_format = FI_ADDR_CXI,
 		.tx_attr = &cxip_tx_attr,
 		.rx_attr = &cxip_rx_attr,
@@ -318,7 +318,7 @@ struct fi_info cxip_infos[] = {
 		.fabric_attr = &cxip_fabric_attr,
 	},
 	{
-		.caps = CXIP_EP_CAPS,
+		.caps = CXIP_CAPS,
 		.addr_format = FI_ADDR_CXI,
 		.tx_attr = &cxip_tx_attr,
 		.rx_attr = &cxip_rx_attr,
@@ -327,7 +327,7 @@ struct fi_info cxip_infos[] = {
 		.fabric_attr = &cxip_fabric_attr,
 	},
 	{
-		.caps = CXIP_EP_CAPS,
+		.caps = CXIP_CAPS,
 		.addr_format = FI_ADDR_CXI,
 		.tx_attr = &cxip_tx_attr,
 		.rx_attr = &cxip_rx_attr,
@@ -336,7 +336,7 @@ struct fi_info cxip_infos[] = {
 		.fabric_attr = &cxip_fabric_attr,
 	},
 	{
-		.caps = CXIP_EP_CAPS,
+		.caps = CXIP_CAPS,
 		.addr_format = FI_ADDR_CXI,
 		.tx_attr = &cxip_tx_attr,
 		.rx_attr = &cxip_rx_attr,
@@ -345,7 +345,7 @@ struct fi_info cxip_infos[] = {
 		.fabric_attr = &cxip_fabric_attr,
 	},
 	{
-		.caps = CXIP_EP_CAPS & ~FI_DIRECTED_RECV,
+		.caps = CXIP_CAPS & ~FI_DIRECTED_RECV,
 		.addr_format = FI_ADDR_CXI,
 		.tx_attr = &cxip_multi_auth_key_tx_attr,
 		.rx_attr = &cxip_multi_auth_key_rx_attr,
@@ -354,7 +354,7 @@ struct fi_info cxip_infos[] = {
 		.fabric_attr = &cxip_fabric_attr,
 	},
 	{
-		.caps = CXIP_EP_CAPS & ~FI_DIRECTED_RECV,
+		.caps = CXIP_CAPS & ~FI_DIRECTED_RECV,
 		.addr_format = FI_ADDR_CXI,
 		.tx_attr = &cxip_multi_auth_key_tx_attr,
 		.rx_attr = &cxip_multi_auth_key_rx_attr,
@@ -363,7 +363,7 @@ struct fi_info cxip_infos[] = {
 		.fabric_attr = &cxip_fabric_attr,
 	},
 	{
-		.caps = CXIP_EP_CAPS & ~FI_DIRECTED_RECV,
+		.caps = CXIP_CAPS & ~FI_DIRECTED_RECV,
 		.addr_format = FI_ADDR_CXI,
 		.tx_attr = &cxip_multi_auth_key_tx_attr,
 		.rx_attr = &cxip_multi_auth_key_rx_attr,
@@ -372,7 +372,7 @@ struct fi_info cxip_infos[] = {
 		.fabric_attr = &cxip_fabric_attr,
 	},
 	{
-		.caps = CXIP_EP_CAPS & ~FI_DIRECTED_RECV,
+		.caps = CXIP_CAPS & ~FI_DIRECTED_RECV,
 		.addr_format = FI_ADDR_CXI,
 		.tx_attr = &cxip_multi_auth_key_tx_attr,
 		.rx_attr = &cxip_multi_auth_key_rx_attr,

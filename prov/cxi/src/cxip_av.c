@@ -131,6 +131,8 @@ static int cxip_av_insert_addr(struct cxip_av *av, struct cxip_addr *addr,
 
 	if (flags & FI_AV_USER_ID)
 		entry->fi_addr = *fi_addr;
+	else if (av->av_user_id)
+		entry->fi_addr = FI_ADDR_UNSPEC;
 	else
 		entry->fi_addr = ofi_buf_index(entry);
 
@@ -173,6 +175,11 @@ static int cxip_av_insert_validate_args(struct fid_av *fid, const void *addr_in,
 	 */
 	if (av->symmetric && (flags & FI_AV_USER_ID)) {
 		CXIP_WARN("FI_SYMMETRIC not supported with FI_AV_USER_ID\n");
+		return -FI_EINVAL;
+	}
+
+	if (av->av_user_id && (flags & FI_AV_USER_ID)) {
+		CXIP_WARN("FI_AV_USER_ID insert flags not supported with AV opened with FI_AV_USER_ID\n");
 		return -FI_EINVAL;
 	}
 
@@ -585,6 +592,11 @@ static int cxip_av_insert_auth_key(struct fid_av *av, const void *auth_key,
 	dlist_insert_tail(&entry->entry, &cxi_av->auth_key_entry_list);
 	ofi_atomic_inc32(&cxi_av->auth_key_entry_cnt);
 
+	if (cxi_av->av_user_id)
+		entry->fi_addr = FI_ADDR_UNSPEC;
+	else
+		entry->fi_addr = ofi_buf_index(entry);
+
 	*fi_addr = ofi_buf_index(entry);
 
 	cxip_av_unlock(cxi_av);
@@ -659,7 +671,7 @@ fi_addr_t cxip_av_lookup_auth_key_fi_addr(struct cxip_av *av, unsigned int vni)
 	cxip_av_read_lock(av);
 
 	HASH_FIND(hh, av->auth_key_entry_hash, &lookup, sizeof(lookup), entry);
-	addr = entry ? ofi_buf_index(entry) : FI_ADDR_NOTAVAIL;
+	addr = entry ? entry->fi_addr : FI_ADDR_NOTAVAIL;
 
 	cxip_av_unlock(av);
 
@@ -733,6 +745,51 @@ void cxip_av_auth_key_put_vnis(struct cxip_av *av, uint16_t *vni,
 	free(vni);
 }
 
+#define AV_SET_USER_ID_VALID_FLAGS FI_AUTH_KEY
+
+static int cxip_av_set_user_id(struct fid_av *av, fi_addr_t fi_addr,
+			       fi_addr_t user_id, uint64_t flags)
+{
+	struct cxip_av *cxi_av = container_of(av, struct cxip_av, av_fid);
+	struct cxip_av_entry *av_entry = NULL;
+	struct cxip_av_auth_key_entry *auth_key_entry = NULL;
+	uint64_t unsupported_flags = flags & ~AV_INSERT_VALID_FLAGS;
+
+	if (!cxi_av->av_user_id) {
+		CXIP_WARN("AV not opened with FI_AV_AUTH_KEY\n");
+		return -FI_EINVAL;
+	}
+
+	if (unsupported_flags) {
+		CXIP_WARN("Unsupported AV set user id flags: %#lx\n",
+			  unsupported_flags);
+		return -FI_EINVAL;
+	}
+
+	cxip_av_write_lock(cxi_av);
+
+	if (flags & FI_AUTH_KEY) {
+		auth_key_entry =
+			ofi_bufpool_get_ibuf(cxi_av->auth_key_entry_pool,
+					     fi_addr);
+		if (auth_key_entry)
+			auth_key_entry->fi_addr = user_id;
+	} else {
+		av_entry = ofi_bufpool_get_ibuf(cxi_av->av_entry_pool, fi_addr);
+		if (av_entry)
+			av_entry->fi_addr = user_id;
+	}
+
+	cxip_av_unlock(cxi_av);
+
+	if (av_entry || auth_key_entry)
+		return FI_SUCCESS;
+
+	CXIP_WARN("Invalid fi_addr %#lx\n", fi_addr);
+
+	return -FI_EINVAL;
+}
+
 static struct fi_ops_av cxip_av_fid_ops = {
 	.size = sizeof(struct fi_ops_av),
 	.insert = cxip_av_insert,
@@ -744,6 +801,7 @@ static struct fi_ops_av cxip_av_fid_ops = {
 	.av_set = cxip_av_set,
 	.insert_auth_key = cxip_av_insert_auth_key,
 	.lookup_auth_key = cxip_av_lookup_auth_key,
+	.set_user_id = cxip_av_set_user_id,
 };
 
 static struct fi_ops cxip_av_fi_ops = {
@@ -754,7 +812,7 @@ static struct fi_ops cxip_av_fi_ops = {
 	.ops_open = fi_no_ops_open,
 };
 
-static int cxip_av_open_validate_args(struct fid_domain *domain,
+static int cxip_av_open_validate_args(struct cxip_domain *dom,
 				      struct fi_av_attr *attr,
 				      struct fid_av **avp, void *context)
 {
@@ -765,6 +823,11 @@ static int cxip_av_open_validate_args(struct fid_domain *domain,
 
 	if (!avp) {
 		CXIP_WARN("NULL AV\n");
+		return -FI_EINVAL;
+	}
+
+	if (!dom->av_user_id && (attr->flags & FI_AV_USER_ID)) {
+		CXIP_WARN("Domain not configured with FI_AV_USER_ID\n");
 		return -FI_EINVAL;
 	}
 
@@ -813,11 +876,11 @@ int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 	};
 	size_t orig_size;
 
-	ret = cxip_av_open_validate_args(domain, attr, avp, context);
+	dom = container_of(domain, struct cxip_domain, util_domain.domain_fid);
+
+	ret = cxip_av_open_validate_args(dom, attr, avp, context);
 	if (ret != FI_SUCCESS)
 		goto err;
-
-	dom = container_of(domain, struct cxip_domain, util_domain.domain_fid);
 
 	av = calloc(1, sizeof(*av));
 	if (!av) {
@@ -843,6 +906,7 @@ int cxip_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 	dlist_init(&av->auth_key_entry_list);
 	ofi_atomic_initialize32(&av->auth_key_entry_cnt, 0);
 	av->auth_key_entry_max = dom->auth_key_entry_max;
+	av->av_user_id = !!(attr->flags & FI_AV_USER_ID);
 
 	/* Cannot support symmetric with AV auth key. */
 	if (av->av_auth_key)

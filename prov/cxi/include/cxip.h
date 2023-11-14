@@ -133,6 +133,8 @@
 	(FI_SOURCE | FI_SOURCE_ERR | FI_LOCAL_COMM | \
 	 FI_REMOTE_COMM | FI_RMA_EVENT | FI_MULTI_RECV | FI_FENCE | FI_TRIGGER)
 #define CXIP_EP_CAPS (CXIP_EP_PRI_CAPS | CXIP_EP_SEC_CAPS)
+#define CXIP_DOM_CAPS (FI_LOCAL_COMM | FI_REMOTE_COMM | FI_AV_USER_ID)
+#define CXIP_CAPS (CXIP_DOM_CAPS | CXIP_EP_CAPS)
 #define CXIP_MSG_ORDER			(FI_ORDER_SAS | \
 					 FI_ORDER_WAW | \
 					 FI_ORDER_RMA_WAW | \
@@ -874,6 +876,9 @@ struct cxip_domain {
 
 	/* Maximum number of auth keys requested by user. */
 	size_t auth_key_entry_max;
+
+	/* Domain has been configured with FI_AV_USER_ID. */
+	bool av_user_id;
 };
 
 static inline bool cxip_domain_mr_cache_enabled(struct cxip_domain *dom)
@@ -2197,6 +2202,7 @@ struct cxip_av_auth_key_entry {
 	UT_hash_handle hh;
 	struct dlist_entry entry;
 	struct cxi_auth_key key;
+	fi_addr_t fi_addr;
 };
 
 struct cxip_av_entry {
@@ -2253,6 +2259,9 @@ struct cxip_av {
 
 	/* Whether or not the AV is operating in FI_AV_AUTH_KEY mode. */
 	bool av_auth_key;
+
+	/* Whether or not the AV was opened with FI_AV_USER_ID. */
+	bool av_user_id;
 };
 
 int cxip_av_auth_key_get_vnis(struct cxip_av *av, uint16_t **vni,
