@@ -674,6 +674,7 @@ ssize_t cxip_rma_common(enum fi_op_type op, struct cxip_txc *txc,
 	bool unr;
 	bool idc;
 	int ret;
+	uint16_t vni;
 
 	if (len && !buf) {
 		TXC_WARN(txc, "Invalid buffer\n");
@@ -714,6 +715,11 @@ ssize_t cxip_rma_common(enum fi_op_type op, struct cxip_txc *txc,
 		return ret;
 	}
 
+	if (txc->ep_obj->av_auth_key)
+		vni = caddr.vni;
+	else
+		vni = txc->ep_obj->auth_key.vni;
+
 	pid_idx = cxip_generic_mr_key_to_ptl_idx(txc->domain, key, write);
 	cxi_build_dfa(caddr.nic, caddr.pid, txc->pid_bits, pid_idx, &dfa,
 		      &idx_ext);
@@ -733,15 +739,13 @@ ssize_t cxip_rma_common(enum fi_op_type op, struct cxip_txc *txc,
 	 */
 	ofi_genlock_lock(&txc->ep_obj->lock);
 	if (idc)
-		ret = cxip_rma_emit_idc(txc, buf, len, &dfa, &idx_ext,
-					txc->ep_obj->auth_key.vni, addr,
-					key, data, flags, context, unr,
+		ret = cxip_rma_emit_idc(txc, buf, len, &dfa, &idx_ext, vni,
+					addr, key, data, flags, context, unr,
 					tclass, tc_type);
 	else
 		ret = cxip_rma_emit_dma(txc, buf, len, desc, &dfa, &idx_ext,
-					txc->ep_obj->auth_key.vni, addr, key,
-					data, flags, context, write,
-					unr, tclass, tc_type,
+					vni, addr, key, data, flags, context,
+					write, unr, tclass, tc_type,
 					triggered, trig_thresh,
 					trig_cntr, comp_cntr);
 	ofi_genlock_unlock(&txc->ep_obj->lock);
