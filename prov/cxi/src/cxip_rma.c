@@ -159,9 +159,10 @@ static int cxip_rma_cb(struct cxip_req *req, const union c_event *event)
 
 static int cxip_rma_emit_dma(struct cxip_txc *txc, const void *buf, size_t len,
 			     struct cxip_mr *mr, union c_fab_addr *dfa,
-			     uint8_t *idx_ext, uint64_t addr, uint64_t key,
-			     uint64_t data, uint64_t flags, void *context,
-			     bool write, bool unr, uint32_t tclass,
+			     uint8_t *idx_ext, uint16_t vni, uint64_t addr,
+			     uint64_t key, uint64_t data, uint64_t flags,
+			     void *context, bool write, bool unr,
+			     uint32_t tclass,
 			     enum cxi_traffic_class_type tc_type,
 			     bool triggered, uint64_t trig_thresh,
 			     struct cxip_cntr *trig_cntr,
@@ -360,8 +361,8 @@ static int cxip_rma_emit_dma(struct cxip_txc *txc, const void *buf, size_t len,
 		ofi_genlock_unlock(&txc->domain->trig_cmdq_lock);
 	} else {
 		/* Ensure correct traffic class is used. */
-		ret = cxip_txq_cp_set(cmdq, txc->ep_obj->auth_key.vni,
-				      cxip_ofi_to_cxi_tc(tclass), tc_type);
+		ret = cxip_txq_cp_set(cmdq, vni, cxip_ofi_to_cxi_tc(tclass),
+				      tc_type);
 		if (ret) {
 			TXC_WARN(txc, "Failed to set traffic class: %d:%s\n",
 				 ret, fi_strerror(-ret));
@@ -416,9 +417,9 @@ err:
 
 static int cxip_rma_emit_idc(struct cxip_txc *txc, const void *buf, size_t len,
 			     union c_fab_addr *dfa, uint8_t *idx_ext,
-			     uint64_t addr, uint64_t key, uint64_t data,
-			     uint64_t flags, void *context, bool unr,
-			     uint32_t tclass,
+			     uint16_t vni, uint64_t addr, uint64_t key,
+			     uint64_t data, uint64_t flags, void *context,
+			     bool unr, uint32_t tclass,
 			     enum cxi_traffic_class_type tc_type)
 {
 	int ret;
@@ -525,8 +526,7 @@ static int cxip_rma_emit_idc(struct cxip_txc *txc, const void *buf, size_t len,
 	 */
 
 	/* Ensure correct traffic class is used. */
-	ret = cxip_txq_cp_set(cmdq, txc->ep_obj->auth_key.vni,
-			      cxip_ofi_to_cxi_tc(tclass), tc_type);
+	ret = cxip_txq_cp_set(cmdq, vni, cxip_ofi_to_cxi_tc(tclass), tc_type);
 	if (ret) {
 		TXC_WARN(txc, "Failed to set traffic class: %d:%s\n", ret,
 			 fi_strerror(-ret));
@@ -733,12 +733,14 @@ ssize_t cxip_rma_common(enum fi_op_type op, struct cxip_txc *txc,
 	 */
 	ofi_genlock_lock(&txc->ep_obj->lock);
 	if (idc)
-		ret = cxip_rma_emit_idc(txc, buf, len, &dfa, &idx_ext, addr,
+		ret = cxip_rma_emit_idc(txc, buf, len, &dfa, &idx_ext,
+					txc->ep_obj->auth_key.vni, addr,
 					key, data, flags, context, unr,
 					tclass, tc_type);
 	else
 		ret = cxip_rma_emit_dma(txc, buf, len, desc, &dfa, &idx_ext,
-					addr, key, data, flags, context, write,
+					txc->ep_obj->auth_key.vni, addr, key,
+					data, flags, context, write,
 					unr, tclass, tc_type,
 					triggered, trig_thresh,
 					trig_cntr, comp_cntr);
