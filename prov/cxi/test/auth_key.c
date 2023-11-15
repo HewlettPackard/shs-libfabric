@@ -2869,3 +2869,68 @@ Test(data_transfer_av_auth_key, rma_read_successful_transfer)
 	av_auth_key_tx_ep_fini(NUM_TX_EPS);
 	av_auth_key_test_rx_ep_fini();
 }
+
+Test(data_transfer_av_auth_key, amo_inject_successful_transfer)
+{
+	int i;
+	int ret;
+	uint64_t amo_value = 1;
+
+	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false, false);
+	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
+
+	/* Each TX EP has been configured for a different VNI. Issue ping-pong
+	 * AMO from each TX MR to RX MR.
+	 */
+	for (i = 0; i < NUM_TX_EPS; i++) {
+		ret = fi_inject_atomic(tx_ep[i], &amo_value, 1, target_addr, 0,
+				       fi_mr_key(rx_mr), FI_UINT64, FI_SUM);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_atomic failed: %d", ret);
+
+		while (rx_mr_buf != i + 1) {}
+
+		ret = fi_inject_atomic(rx_ep, &amo_value, 1, init_addrs[i], 0,
+				       fi_mr_key(tx_mr[i]), FI_UINT64, FI_SUM);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_atomic failed: %d", ret);
+
+		while (tx_mr_buf[i] != 1) {}
+	}
+
+	av_auth_key_tx_ep_fini(NUM_TX_EPS);
+	av_auth_key_test_rx_ep_fini();
+}
+
+Test(data_transfer_av_auth_key, amo_successful_transfer_opt_disabled)
+{
+	int i;
+	int ret;
+	uint64_t amo_value = 1;
+
+	ret = setenv("FI_CXI_OPTIMIZED_MRS", "0", 1);
+	cr_assert(ret == 0);
+
+	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false, false);
+	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
+
+	/* Each TX EP has been configured for a different VNI. Issue ping-pong
+	 * AMO from each TX MR to RX MR.
+	 */
+	for (i = 0; i < NUM_TX_EPS; i++) {
+		ret = fi_atomic(tx_ep[i], &amo_value, 1, NULL,
+				target_addr, 0, fi_mr_key(rx_mr), FI_UINT64,
+				FI_SUM, NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_atomic failed: %d", ret);
+
+		while (rx_mr_buf != i + 1) {}
+
+		ret = fi_atomic(rx_ep, &amo_value, 1, NULL,
+				init_addrs[i], 0, fi_mr_key(tx_mr[i]),
+				FI_UINT64, FI_SUM, NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_atomic failed: %d", ret);
+
+		while (tx_mr_buf[i] != 1) {}
+	}
+
+	av_auth_key_tx_ep_fini(NUM_TX_EPS);
+	av_auth_key_test_rx_ep_fini();
+}
