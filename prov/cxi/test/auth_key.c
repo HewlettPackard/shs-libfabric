@@ -2804,3 +2804,68 @@ Test(data_transfer_av_auth_key, av_user_id_source_err_auth_key_user_id)
 	av_auth_key_tx_ep_fini(NUM_TX_EPS);
 	av_auth_key_test_rx_ep_fini();
 }
+
+Test(data_transfer_av_auth_key, rma_write_successful_transfer)
+{
+	int i;
+	int ret;
+	uint64_t rma_value;
+
+	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false, false);
+	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
+
+	/* Each TX EP has been configured for a different VNI. Issue ping-pong
+	 * RMA from each TX MR to RX MR.
+	 */
+	for (i = 0; i < NUM_TX_EPS; i++) {
+		rma_value = i + 1;
+
+		ret = fi_write(tx_ep[i], &rma_value, sizeof(rma_value), NULL,
+			       target_addr, 0, fi_mr_key(rx_mr), NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_write failed: %d", ret);
+
+		while (rx_mr_buf != rma_value) {}
+
+		ret = fi_write(rx_ep, &rma_value, sizeof(rma_value), NULL,
+			       init_addrs[i], 0, fi_mr_key(tx_mr[i]), NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_write failed: %d", ret);
+
+		while (tx_mr_buf[i] != rma_value) {}
+	}
+
+	av_auth_key_tx_ep_fini(NUM_TX_EPS);
+	av_auth_key_test_rx_ep_fini();
+}
+
+Test(data_transfer_av_auth_key, rma_read_successful_transfer)
+{
+	int i;
+	int ret;
+	uint64_t rma_value;
+
+	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false, false);
+	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
+
+	/* Each TX EP has been configured for a different VNI. Issue ping-pong
+	 * RMA from each TX MR to RX MR.
+	 */
+	for (i = 0; i < NUM_TX_EPS; i++) {
+		rx_mr_buf = i + 1;
+
+		ret = fi_read(tx_ep[i], &rma_value, sizeof(rma_value), NULL,
+			      target_addr, 0, fi_mr_key(rx_mr), NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_read failed: %d", ret);
+
+		while (rx_mr_buf != rma_value) {}
+
+		tx_mr_buf[i] = i + 1;
+		ret = fi_read(rx_ep, &rma_value, sizeof(rma_value), NULL,
+			       init_addrs[i], 0, fi_mr_key(tx_mr[i]), NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_read failed: %d", ret);
+
+		while (tx_mr_buf[i] != rma_value) {}
+	}
+
+	av_auth_key_tx_ep_fini(NUM_TX_EPS);
+	av_auth_key_test_rx_ep_fini();
+}
