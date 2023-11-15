@@ -2240,6 +2240,8 @@ static struct fid_fabric *fab;
 static struct fid_domain *dom;
 static struct fid_cq *cq;
 static struct fid_av *av;
+static uint64_t rx_mr_buf;
+static struct fid_mr *rx_mr;
 static struct fid_ep *rx_ep;
 static fi_addr_t auth_keys[NUM_VNIS];
 static fi_addr_t init_addrs[NUM_TX_EPS];
@@ -2252,6 +2254,8 @@ static struct fid_domain *tx_dom;
 static struct fid_cq *tx_cq;
 static struct fid_av *tx_av;
 static struct fid_ep *tx_ep[NUM_TX_EPS];
+static uint64_t tx_mr_buf[NUM_TX_EPS];
+static struct fid_mr *tx_mr[NUM_TX_EPS];
 static fi_addr_t target_addr;
 
 static void av_auth_key_test_tx_ep_init(unsigned int num_vnis)
@@ -2272,8 +2276,10 @@ static void av_auth_key_test_tx_ep_init(unsigned int num_vnis)
 	hints = fi_allocinfo();
 	cr_assert_not_null(hints, "fi_allocinfo failed");
 
-	hints->caps |= FI_SOURCE | FI_SOURCE_ERR | FI_MSG | FI_SEND | FI_RECV;
-	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->caps |= FI_SOURCE | FI_SOURCE_ERR | FI_MSG | FI_SEND | FI_RECV |
+		FI_RMA | FI_ATOMIC;
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED |
+		FI_MR_PROV_KEY;
 	hints->fabric_attr->prov_name = strdup("cxi");
 	cr_assert_not_null(hints->fabric_attr->prov_name, "strdup failed");
 
@@ -2320,6 +2326,18 @@ static void av_auth_key_test_tx_ep_init(unsigned int num_vnis)
 		ret = fi_enable(tx_ep[i]);
 		cr_assert_eq(ret, FI_SUCCESS, "fi_enable failed: %d", ret);
 
+		ret = fi_mr_reg(tx_dom, (void *)&tx_mr_buf[i],
+				sizeof(tx_mr_buf[i]),
+				FI_WRITE | FI_READ | FI_REMOTE_WRITE | FI_REMOTE_READ,
+				0, 0, 0, &tx_mr[i], NULL);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_mr_reg failed: %d", ret);
+
+		ret = fi_mr_bind(tx_mr[i], &tx_ep[i]->fid, 0);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind failed: %d", ret);
+
+		ret = fi_mr_enable(tx_mr[i]);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_mr_enable failed: %d", ret);
+
 		fi_freeinfo(info);
 	}
 
@@ -2363,8 +2381,10 @@ static void av_auth_key_test_rx_ep_init(bool source_err, unsigned int num_vnis,
 		hints->caps |= FI_AV_USER_ID;
 	}
 
-	hints->caps |= FI_SOURCE | FI_SOURCE_ERR | FI_MSG | FI_SEND | FI_RECV;
-	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED;
+	hints->caps |= FI_SOURCE | FI_SOURCE_ERR | FI_MSG | FI_SEND | FI_RECV |
+		FI_RMA | FI_ATOMIC;
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED |
+		FI_MR_PROV_KEY;
 	hints->domain_attr->auth_key_size = FI_AV_AUTH_KEY;
 	hints->domain_attr->max_ep_auth_key = num_vnis;
 	hints->fabric_attr->prov_name = strdup("cxi");
@@ -2422,6 +2442,17 @@ static void av_auth_key_test_rx_ep_init(bool source_err, unsigned int num_vnis,
 	ret = fi_enable(rx_ep);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_enable failed: %d", ret);
 
+	ret = fi_mr_reg(dom, (void *)&rx_mr_buf, sizeof(rx_mr_buf),
+			FI_WRITE | FI_READ | FI_REMOTE_WRITE | FI_REMOTE_READ,
+			0, 0, 0, &rx_mr, NULL);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_reg failed: %d", ret);
+
+	ret = fi_mr_bind(rx_mr, &rx_ep->fid, 0);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind failed: %d", ret);
+
+	ret = fi_mr_enable(rx_mr);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_enable failed: %d", ret);
+
 	fi_freeinfo(info);
 }
 
@@ -2431,6 +2462,9 @@ static void av_auth_key_tx_ep_fini(unsigned int num_vnis)
 	int ret;
 
 	for (i = 0; i < num_vnis; i++) {
+		ret = fi_close(&tx_mr[i]->fid);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_close MR failed: %d", ret);
+
 		ret = fi_close(&tx_ep[i]->fid);
 		cr_assert_eq(ret, FI_SUCCESS, "fi_close EP failed: %d", ret);
 	}
@@ -2448,6 +2482,9 @@ static void av_auth_key_tx_ep_fini(unsigned int num_vnis)
 static void av_auth_key_test_rx_ep_fini(void)
 {
 	int ret;
+
+	ret = fi_close(&rx_mr->fid);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_close MR failed: %d", ret);
 
 	ret = fi_close(&rx_ep->fid);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_close EP failed: %d", ret);
