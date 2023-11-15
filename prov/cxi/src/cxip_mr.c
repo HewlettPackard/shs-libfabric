@@ -1344,6 +1344,11 @@ static int cxip_regattr(struct fid *fid, const struct fi_mr_attr *attr,
 	if (attr->iov_count != 1)
 		return -FI_ENOSYS;
 
+	if (flags & FI_DIRECTED_RECV) {
+		CXIP_WARN("FI_DIRECTED_RECV and MRs not supported\n");
+		return -FI_EINVAL;
+	}
+
 	dom = container_of(fid, struct cxip_domain, util_domain.domain_fid);
 
 	_mr = calloc(1, sizeof(*_mr));
