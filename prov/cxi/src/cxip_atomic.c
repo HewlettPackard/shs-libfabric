@@ -521,7 +521,8 @@ static int cxip_amo_emit_idc(struct cxip_txc *txc,
 			     void *compare, void *result,
 			     struct cxip_mr *result_mr,
 			     uint64_t remote_offset, union c_fab_addr *dfa,
-			     uint8_t *idx_ext, enum c_atomic_op atomic_op,
+			     uint8_t *idx_ext, uint16_t vni,
+			     enum c_atomic_op atomic_op,
 			     enum c_cswap_op cswap_op,
 			     enum c_atomic_type atomic_type,
 			     unsigned int atomic_type_len, uint64_t flags,
@@ -796,8 +797,7 @@ static int cxip_amo_emit_idc(struct cxip_txc *txc,
 	}
 
 	/* Ensure correct traffic class is used. */
-	ret = cxip_txq_cp_set(cmdq, txc->ep_obj->auth_key.vni,
-			      cxip_ofi_to_cxi_tc(tclass), tc_type);
+	ret = cxip_txq_cp_set(cmdq, vni, cxip_ofi_to_cxi_tc(tclass), tc_type);
 	if (ret) {
 		TXC_WARN_RET(txc, ret, "Failed to set traffic class\n");
 		goto err_unmap_result_buf;
@@ -950,13 +950,13 @@ static int cxip_amo_emit_non_trig_dma(struct cxip_txc *txc,
 				      struct c_dma_amo_cmd *dma_amo_cmd,
 				      struct c_full_dma_cmd *flush_cmd,
 				      bool fetching, bool fetching_amo_flush,
-				      uint64_t flags, uint32_t tclass)
+				      uint64_t flags, uint16_t vni,
+				      uint32_t tclass)
 {
 	int ret;
 
 	/* Only CXI_TC_TYPE_DEFAULT is supported with DMA AMO commands. */
-	ret = cxip_txq_cp_set(cmdq, txc->ep_obj->auth_key.vni,
-			      cxip_ofi_to_cxi_tc(tclass),
+	ret = cxip_txq_cp_set(cmdq, vni, cxip_ofi_to_cxi_tc(tclass),
 			      CXI_TC_TYPE_DEFAULT);
 	if (ret) {
 		TXC_WARN_RET(txc, ret,
@@ -1053,7 +1053,7 @@ static int cxip_amo_emit_dma(struct cxip_txc *txc,
 			     struct cxip_mr *buf_mr, struct cxip_mr *result_mr,
 			     uint64_t key, uint64_t remote_offset,
 			     union c_fab_addr *dfa, uint8_t *idx_ext,
-			     enum c_atomic_op atomic_op,
+			     uint16_t vni, enum c_atomic_op atomic_op,
 			     enum c_cswap_op cswap_op,
 			     enum c_atomic_type atomic_type,
 			     unsigned int atomic_type_len, uint64_t flags,
@@ -1368,7 +1368,7 @@ static int cxip_amo_emit_dma(struct cxip_txc *txc,
 		ret = cxip_amo_emit_non_trig_dma(txc, cmdq, &dma_amo_cmd,
 						 &flush_cmd, fetching,
 						 fetching_amo_flush, flags,
-						 tclass);
+						 vni, tclass);
 		if (ret) {
 			TXC_WARN_RET(txc, ret,
 				     "Failed to emit non-triggered AMO\n");
@@ -1541,17 +1541,17 @@ int cxip_amo_common(enum cxip_amo_req_type req_type, struct cxip_txc *txc,
 	if (idc)
 		ret = cxip_amo_emit_idc(txc, req_type, msg, buf, compare,
 					result, result_mr, remote_offset, &dfa,
-					&idx_ext, atomic_op, cswap_op,
-					atomic_type, atomic_type_len, flags,
-					tclass);
+					&idx_ext, txc->ep_obj->auth_key.vni,
+					atomic_op, cswap_op, atomic_type,
+					atomic_type_len, flags, tclass);
 	else
 		ret = cxip_amo_emit_dma(txc, req_type, msg, buf, compare,
 					result, buf_mr, result_mr, key,
 					remote_offset, &dfa, &idx_ext,
-					atomic_op, cswap_op, atomic_type,
-					atomic_type_len, flags, tclass,
-					triggered, trig_thresh, trig_cntr,
-					comp_cntr);
+					txc->ep_obj->auth_key.vni, atomic_op,
+					cswap_op, atomic_type, atomic_type_len,
+					flags, tclass, triggered, trig_thresh,
+					trig_cntr, comp_cntr);
 	if (ret)
 		TXC_WARN_RET(txc, ret,
 			     "%s AMO failed: op=%u buf=%p compare=%p result=%p len=%u rkey=%#lx roffset=%#lx nic=%#x pid=%u pid_idx=%u triggered=%u",
