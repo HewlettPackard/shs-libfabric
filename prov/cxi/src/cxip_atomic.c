@@ -1444,6 +1444,7 @@ int cxip_amo_common(enum cxip_amo_req_type req_type, struct cxip_txc *txc,
 	uint32_t pid_idx;
 	struct cxip_mr *buf_mr = NULL;
 	struct cxip_mr *result_mr = NULL;
+	uint16_t vni;
 
 	if (!msg) {
 		TXC_WARN(txc, "NULL fi_msg_atomic");
@@ -1535,23 +1536,28 @@ int cxip_amo_common(enum cxip_amo_req_type req_type, struct cxip_txc *txc,
 		return ret;
 	}
 
+	if (txc->ep_obj->av_auth_key)
+		vni = caddr.vni;
+	else
+		vni = txc->ep_obj->auth_key.vni;
+
 	pid_idx = cxip_generic_mr_key_to_ptl_idx(txc->domain, key, !result);
 	cxi_build_dfa(caddr.nic, caddr.pid, txc->pid_bits, pid_idx, &dfa,
 		      &idx_ext);
 	if (idc)
 		ret = cxip_amo_emit_idc(txc, req_type, msg, buf, compare,
 					result, result_mr, remote_offset, &dfa,
-					&idx_ext, txc->ep_obj->auth_key.vni,
-					atomic_op, cswap_op, atomic_type,
-					atomic_type_len, flags, tclass);
+					&idx_ext, vni, atomic_op, cswap_op,
+					atomic_type, atomic_type_len, flags,
+					tclass);
 	else
 		ret = cxip_amo_emit_dma(txc, req_type, msg, buf, compare,
 					result, buf_mr, result_mr, key,
-					remote_offset, &dfa, &idx_ext,
-					txc->ep_obj->auth_key.vni, atomic_op,
-					cswap_op, atomic_type, atomic_type_len,
-					flags, tclass, triggered, trig_thresh,
-					trig_cntr, comp_cntr);
+					remote_offset, &dfa, &idx_ext, vni,
+					atomic_op, cswap_op, atomic_type,
+					atomic_type_len, flags, tclass,
+					triggered, trig_thresh, trig_cntr,
+					comp_cntr);
 	if (ret)
 		TXC_WARN_RET(txc, ret,
 			     "%s AMO failed: op=%u buf=%p compare=%p result=%p len=%u rkey=%#lx roffset=%#lx nic=%#x pid=%u pid_idx=%u triggered=%u",
