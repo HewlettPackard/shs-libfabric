@@ -1272,6 +1272,35 @@ cxip_rxp_check_le_usage_hybrid_preempt(struct cxip_rxc *rxc,
 	return false;
 }
 
+static int cxip_rxc_check_ule_hybrid_preempt(struct cxip_rxc *rxc)
+{
+	int ret;
+	int count;
+
+	if (cxip_env.rx_match_mode == CXIP_PTLTE_HYBRID_MODE &&
+	    cxip_env.hybrid_unexpected_msg_preemptive == 1) {
+		count = ofi_atomic_get32(&rxc->orx_hw_ule_cnt);
+
+		if (rxc->state == RXC_ENABLED && count > rxc->attr.size) {
+			ret = cxip_recv_pending_ptlte_disable(rxc, false);
+			if (ret == FI_SUCCESS) {
+				RXC_WARN(rxc,
+					 "Transitioning to SW EP due to too many unexpected messages: posted_count=%u request_size=%lu\n",
+					 ret, rxc->attr.size);
+			} else {
+				assert(ret == -FI_EAGAIN);
+				RXC_WARN(rxc,
+					 "Failed to transition to SW EP: %d\n",
+					 ret);
+			}
+
+			return ret;
+		}
+	}
+
+	return FI_SUCCESS;
+}
+
 /*
  * cxip_oflow_cb() - Process an Overflow buffer event.
  *
@@ -1370,6 +1399,10 @@ static int cxip_oflow_cb(struct cxip_req *req, const union c_event *event)
 		/* Replace the eager overflow buffer. */
 		cxip_ptelist_buf_replenish(rxc->oflow_list_bufpool, false);
 	}
+
+	ret = cxip_rxc_check_ule_hybrid_preempt(rxc);
+	if (ret)
+		goto err_dec_ule;
 
 	/* Drop all unexpected 0-byte Put events. */
 	if (!event->tgt_long.rlength)

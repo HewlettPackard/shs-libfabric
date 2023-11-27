@@ -646,6 +646,7 @@ struct cxip_environment cxip_env = {
 	.hybrid_preemptive = 0,
 	.hybrid_recv_preemptive = 0,
 	.hybrid_posted_recv_preemptive = 0,
+	.hybrid_unexpected_msg_preemptive = 0,
 	.fc_retry_usec_delay = 1000,
 	.ctrl_rx_eq_max_size = 67108864,
 	.default_cq_size = CXIP_CQ_DEF_SZ,
@@ -1048,6 +1049,18 @@ static void cxip_env_init(void)
 	    cxip_env.hybrid_posted_recv_preemptive) {
 		CXIP_WARN("Not in hybrid mode, ignore hybrid_posted_recv_preemptive\n");
 		cxip_env.hybrid_posted_recv_preemptive = 0;
+	}
+
+	fi_param_define(&cxip_prov, "hybrid_unexpected_msg_preemptive",
+			FI_PARAM_BOOL,
+			"Enable preemptive transition to software endpoint when number of hardware unexpected messages exceeds RX attribute size");
+	fi_param_get_bool(&cxip_prov, "hybrid_unexpected_msg_preemptive",
+			  &cxip_env.hybrid_unexpected_msg_preemptive);
+
+	if (cxip_env.rx_match_mode != CXIP_PTLTE_HYBRID_MODE &&
+	    cxip_env.hybrid_unexpected_msg_preemptive) {
+		CXIP_WARN("Not in hybrid mode, ignore hybrid_unexpected_msg_preemptive\n");
+		cxip_env.hybrid_unexpected_msg_preemptive = 0;
 	}
 
 	if (cxip_software_pte_allowed()) {
