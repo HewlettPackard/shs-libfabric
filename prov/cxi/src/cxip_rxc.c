@@ -250,6 +250,41 @@ static void cxip_rxc_free_ux_entries(struct cxip_rxc *rxc)
 	assert(rxc->sw_pending_ux_list_len == 0);
 }
 
+static size_t cxip_rxc_get_num_events(struct cxip_rxc *rxc)
+{
+	size_t num_events;
+
+	/* Hardware will ensure incoming RDMA operations have event queue space.
+	 * It is the responsibility of software to ensure that any SW initiated
+	 * target commands which may generate an event (e.g. append with failure
+	 * or search) have enough space in the EQ. This can be done in two ways.
+	 *
+	 * 1. Continually increase EQ buffer size until EQ overflows go away.
+	 * This option is not ideal since many application variables are in play
+	 * which impact number of events needed.
+	 *
+	 * 2. Use hybrid endpoint mode to preemptively transition to software
+	 * endpoint when event queue space may be under pressure. When in
+	 * software endpoint mode, software should not be issuing commands, like
+	 * append and search/search & delete, which could result in events being
+	 * generated.
+	 *
+	 * For both cases, RXC size will be used to size number of events. To
+	 * accommodate a stream of unexpected puts and append failures, RXC size
+	 * is added again. With correct credit control for hybrid endpoint to
+	 * preemptively transition to software endpoint, 2* RXC size should be
+	 * enough to prevent EQ overflow. For all other cases, EQ size needs to
+	 * be increased.
+	 */
+
+	num_events = rxc->attr.size * 2;
+
+	/* Add 1 more event for software initiated state change. */
+	num_events++;
+
+	return num_events;
+}
+
 /*
  * cxip_rxc_enable() - Enable an RX context for use.
  *
@@ -260,6 +295,7 @@ int cxip_rxc_enable(struct cxip_rxc *rxc)
 {
 	int ret;
 	int tmp;
+	size_t num_events;
 	enum c_ptlte_state state;
 
 	if (rxc->state != RXC_DISABLED)
@@ -275,8 +311,8 @@ int cxip_rxc_enable(struct cxip_rxc *rxc)
 		return -FI_ENOCQ;
 	}
 
-	ret = cxip_evtq_init(&rxc->rx_evtq, rxc->recv_cq,
-			     rxc->recv_cq->attr.size, 1);
+	num_events = cxip_rxc_get_num_events(rxc);
+	ret = cxip_evtq_init(&rxc->rx_evtq, rxc->recv_cq, num_events, 1);
 	if (ret) {
 		CXIP_WARN("Failed to initialize RXC event queue: %d, %s\n",
 			  ret, fi_strerror(-ret));
