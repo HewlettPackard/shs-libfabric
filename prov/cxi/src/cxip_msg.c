@@ -1244,8 +1244,8 @@ static int cxip_recv_pending_ptlte_disable(struct cxip_rxc *rxc,
 	return ret;
 }
 
-/* cxip_check_hybrid_preempt() - Examines LE Pool usage and forces a preemptive
- * hardware to software transition if needed.
+/* cxip_rxp_check_le_usage_hybrid_preempt() - Examines LE Pool usage and forces
+ * a preemptive hardware to software transition if needed.
  *
  * In cases where the LE pool entry reservation is insufficient to meet request
  * list buffers (due to multiple EP sharing an LE Pool or insufficient LE Pool
@@ -1259,8 +1259,9 @@ static int cxip_recv_pending_ptlte_disable(struct cxip_rxc *rxc,
  *
  * Caller should hold ep_obj->lock.
  */
-static inline bool cxip_check_hybrid_preempt(struct cxip_rxc *rxc,
-					     const union c_event *event)
+static inline bool
+cxip_rxp_check_le_usage_hybrid_preempt(struct cxip_rxc *rxc,
+				       const union c_event *event)
 {
 	if (event->tgt_long.lpe_stat_1 > (event->tgt_long.lpe_stat_2 >> 1) &&
 	    rxc->state == RXC_ENABLED) {
@@ -1323,7 +1324,7 @@ static int cxip_oflow_cb(struct cxip_req *req, const union c_event *event)
 			/* Check for possible hybrid mode preemptive
 			 * transitions to software managed mode.
 			 */
-			if (cxip_check_hybrid_preempt(rxc, event))
+			if (cxip_rxp_check_le_usage_hybrid_preempt(rxc, event))
 				RXC_WARN(rxc,
 					 "Force preemptive switch to SW EP\n");
 			return FI_SUCCESS;
@@ -1879,7 +1880,7 @@ static int cxip_recv_cb(struct cxip_req *req, const union c_event *event)
 			/* Check for possible hybrid mode preemptive
 			 * transitions to software managed mode.
 			 */
-			if (cxip_check_hybrid_preempt(rxc, event))
+			if (cxip_rxp_check_le_usage_hybrid_preempt(rxc, event))
 				RXC_WARN(rxc,
 					 "Force preemptive switch to SW EP\n");
 
