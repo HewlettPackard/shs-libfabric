@@ -421,11 +421,6 @@ void cxip_evtq_progress(struct cxip_evtq *evtq)
 
 	if (ret == FI_SUCCESS)
 		evtq->eq_saturated = false;
-
-	if (evtq->unacked_events) {
-		cxi_eq_ack_events(evtq->eq);
-		evtq->unacked_events = 0;
-	}
 }
 
 void cxip_evtq_fini(struct cxip_evtq *evtq)
