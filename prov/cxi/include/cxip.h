@@ -156,7 +156,17 @@
 #define CXIP_MAX_TX_SIZE		16384U
 #define CXIP_DEFAULT_TX_SIZE		256U
 
-#define CXIP_MAX_RX_SIZE		1024U
+/* Some LEs need to be used for internally by CXI provider. The user facing
+ * RX size should be updated to reflect this.
+ *
+ * Note: This value is an estimation and may be too high.
+ */
+#define CXI_PROV_LE_PER_EP		1024U
+
+/* Maximum number of LEs per endpoint. */
+#define LES_PER_EP_MAX			16384U
+
+#define CXIP_MAX_RX_SIZE		(LES_PER_EP_MAX - CXI_PROV_LE_PER_EP)
 #define CXIP_DEFAULT_RX_SIZE		1024U
 
 #define CXIP_MAJOR_VERSION		0
