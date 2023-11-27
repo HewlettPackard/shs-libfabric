@@ -449,6 +449,7 @@ void cxip_rxc_struct_init(struct cxip_rxc *rxc, const struct fi_rx_attr *attr,
 	int i;
 
 	dlist_init(&rxc->ep_list);
+	ofi_atomic_initialize32(&rxc->orx_hw_ule_cnt, 0);
 	ofi_atomic_initialize32(&rxc->orx_reqs, 0);
 	ofi_atomic_initialize32(&rxc->orx_tx_reqs, 0);
 	rxc->max_tx = cxip_env.sw_rx_tx_init_max;

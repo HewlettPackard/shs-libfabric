@@ -1697,6 +1697,8 @@ struct cxip_rxc {
 	struct cxip_cmdq *rx_cmdq;	// RX CMDQ for posting receive buffers
 	struct cxip_cmdq *tx_cmdq;	// TX CMDQ for Message Gets
 
+	/* Number of unexpected list entries in HW. */
+	ofi_atomic32_t orx_hw_ule_cnt;
 	ofi_atomic32_t orx_reqs;	// outstanding receive requests
 	ofi_atomic32_t orx_tx_reqs;	// outstanding RX initiated TX requests
 	int32_t max_tx;

@@ -1354,6 +1354,8 @@ static int cxip_oflow_cb(struct cxip_req *req, const union c_event *event)
 			  cxi_rc_to_str(cxi_event_rc(event)));
 	}
 
+	ofi_atomic_inc32(&rxc->orx_hw_ule_cnt);
+
 	if (event->tgt_long.auto_unlinked) {
 
 		oflow_buf->unlink_length = event->tgt_long.start -
@@ -1375,6 +1377,13 @@ static int cxip_oflow_cb(struct cxip_req *req, const union c_event *event)
 
 	/* Handle Put events */
 	ret = cxip_oflow_process_put_event(rxc, req, event);
+	if (ret)
+		goto err_dec_ule;
+
+	return FI_SUCCESS;
+
+err_dec_ule:
+	ofi_atomic_dec32(&rxc->orx_hw_ule_cnt);
 
 	return ret;
 }
@@ -1631,6 +1640,8 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 				def_ev->mrecv_start + def_ev->mrecv_len;
 		}
 
+		ofi_atomic_dec32(&rxc->orx_hw_ule_cnt);
+
 		if (!matched)
 			return FI_SUCCESS;
 
@@ -1639,11 +1650,14 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 		ret = cxip_ux_send(req, def_ev->req, &def_ev->ev,
 				   def_ev->mrecv_start, def_ev->mrecv_len,
 				   false);
-		if (ret == FI_SUCCESS)
+		if (ret == FI_SUCCESS) {
 			free_put_event(rxc, def_ev);
-		else
-			/* undo mrecv_req_put_bytes() */
+		} else {
+			/* undo mrecv_req_put_bytes() and orx_hw_ule_cnt dec */
 			req->recv.start_offset -= def_ev->mrecv_len;
+			ofi_atomic_inc32(&rxc->orx_hw_ule_cnt);
+		}
+
 		return ret;
 	case C_EVENT_PUT:
 		/* Eager data was delivered directly to the user buffer. */
@@ -1990,6 +2004,9 @@ static int cxip_recv_cb(struct cxip_req *req, const union c_event *event)
 		if (!event->tgt_long.rlength) {
 			ret = cxip_ux_send_zb(req, event,
 					      req->recv.start_offset, false);
+			if (ret == FI_SUCCESS)
+				ofi_atomic_dec32(&rxc->orx_hw_ule_cnt);
+
 			return ret;
 		}
 
@@ -2019,17 +2036,21 @@ static int cxip_recv_cb(struct cxip_req *req, const union c_event *event)
 				def_ev->mrecv_start + def_ev->mrecv_len;
 		}
 
+		ofi_atomic_dec32(&rxc->orx_hw_ule_cnt);
+
 		if (!matched)
 			return FI_SUCCESS;
 
 		ret = cxip_ux_send(req, def_ev->req, &def_ev->ev,
 				   def_ev->mrecv_start, def_ev->mrecv_len,
 				   false);
-		if (ret == FI_SUCCESS)
+		if (ret == FI_SUCCESS) {
 			free_put_event(rxc, def_ev);
-		else
-			/* undo mrecv_req_put_bytes() */
+		} else {
+			/* undo mrecv_req_put_bytes() and orx_hw_ule_cnt dec */
 			req->recv.start_offset -= def_ev->mrecv_len;
+			ofi_atomic_inc32(&rxc->orx_hw_ule_cnt);
+		}
 
 		return ret;
 	case C_EVENT_PUT:
@@ -2637,6 +2658,8 @@ static int cxip_ux_onload_cb(struct cxip_req *req, const union c_event *event)
 
 		RXC_DBG(rxc, "Onloaded Send: %p\n", ux_send);
 
+		ofi_atomic_dec32(&rxc->orx_hw_ule_cnt);
+
 		break;
 	case C_EVENT_SEARCH:
 		if (rxc->new_state == RXC_ENABLED_SOFTWARE &&
@@ -3122,6 +3145,8 @@ static int cxip_claim_onload_cb(struct cxip_req *req,
 		return FI_SUCCESS;
 	}
 
+	ofi_atomic_dec32(&rxc->orx_hw_ule_cnt);
+
 	/* FI_CLAIM UX message onloaded from hardware */
 	ux_send = calloc(1, sizeof(*ux_send));
 	if (!ux_send) {
@@ -3176,6 +3201,8 @@ static int cxip_claim_onload_cb(struct cxip_req *req,
 		RXC_DBG(rxc, "FI_CLAIM onload complete, req %p, ux_send %p\n",
 			req, ux_send);
 	}
+
+	ofi_atomic_dec32(&rxc->orx_hw_ule_cnt);
 
 	return FI_SUCCESS;
 }
