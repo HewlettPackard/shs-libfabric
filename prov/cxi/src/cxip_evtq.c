@@ -445,26 +445,42 @@ void cxip_evtq_fini(struct cxip_evtq *evtq)
 	evtq->eq = NULL;
 }
 
+static size_t cxip_evtq_get_queue_size(size_t num_events, size_t batch_ack)
+{
+	size_t num_slots = num_events + batch_ack;
+
+	/* One additional event slot is needed for full queue. */
+	num_slots += 1;
+
+	/* One additional event slot is needed for EQ status. */
+	num_slots += 1;
+
+	return num_slots * C_EE_CFG_ECB_SIZE;
+}
+
 #define MAP_HUGE_2MB    (21 << MAP_HUGE_SHIFT)
-int cxip_evtq_init(struct cxip_cq *cq, struct cxip_evtq *evtq, size_t len,
-		   unsigned int reserved_slots, size_t max_req_count)
+int cxip_evtq_init(struct cxip_evtq *evtq, struct cxip_cq *cq,
+		   size_t num_events, size_t num_fc_events)
 {
 	struct cxi_eq_attr eq_attr = {
-		.reserved_slots = reserved_slots,
+		.reserved_slots = num_fc_events,
 	};
 	struct ofi_bufpool_attr bp_attr = {
 		.size = sizeof(struct cxip_req),
 		.alignment = 8,
 		.chunk_cnt = 64,
-		.max_cnt = max_req_count,
 		.flags = OFI_BUFPOOL_NO_TRACK,
 	};
+	size_t len;
 	size_t eq_len;
 	bool eq_passthrough = false;
 	int ret;
 	int page_size;
 
 	assert(cq->domain->enabled);
+
+	len = cxip_evtq_get_queue_size(num_events + num_fc_events,
+				       cq->ack_batch_size);
 
 	/* Note max_cnt == 0 is unlimited */
 	ret = ofi_bufpool_create_attr(&bp_attr, &evtq->req_pool);

@@ -2668,9 +2668,8 @@ void cxip_cmdq_free(struct cxip_cmdq *cmdq);
 int cxip_cmdq_emit_c_state(struct cxip_cmdq *cmdq,
 			   const struct c_cstate_cmd *cmd);
 
-int cxip_evtq_init(struct cxip_cq *cq, struct cxip_evtq *eq,
-		   size_t len, unsigned int reserved_slots,
-		   size_t max_req_count);
+int cxip_evtq_init(struct cxip_evtq *evtq, struct cxip_cq *cq,
+		   size_t num_events, size_t num_fc_events);
 void cxip_evtq_fini(struct cxip_evtq *eq);
 
 int cxip_domain(struct fid_fabric *fabric, struct fi_info *info,

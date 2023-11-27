@@ -260,7 +260,6 @@ int cxip_rxc_enable(struct cxip_rxc *rxc)
 {
 	int ret;
 	int tmp;
-	size_t min_eq_size;
 	enum c_ptlte_state state;
 
 	if (rxc->state != RXC_DISABLED)
@@ -276,9 +275,8 @@ int cxip_rxc_enable(struct cxip_rxc *rxc)
 		return -FI_ENOCQ;
 	}
 
-	min_eq_size = (rxc->recv_cq->attr.size + rxc->recv_cq->ack_batch_size) *
-			C_EE_CFG_ECB_SIZE;
-	ret = cxip_evtq_init(rxc->recv_cq, &rxc->rx_evtq, min_eq_size, 0, 0);
+	ret = cxip_evtq_init(&rxc->rx_evtq, rxc->recv_cq,
+			     rxc->recv_cq->attr.size, 1);
 	if (ret) {
 		CXIP_WARN("Failed to initialize RXC event queue: %d, %s\n",
 			  ret, fi_strerror(-ret));
