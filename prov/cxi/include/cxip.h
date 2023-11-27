@@ -154,7 +154,7 @@
 
 /* Max TX size of 16,384 translate to a 4MiB command queue buffer. */
 #define CXIP_MAX_TX_SIZE		16384U
-#define CXIP_DEFAULT_TX_SIZE		256U
+#define CXIP_DEFAULT_TX_SIZE		512U
 
 /* Some LEs need to be used for internally by CXI provider. The user facing
  * RX size should be updated to reflect this.
@@ -167,7 +167,7 @@
 #define LES_PER_EP_MAX			16384U
 
 #define CXIP_MAX_RX_SIZE		(LES_PER_EP_MAX - CXI_PROV_LE_PER_EP)
-#define CXIP_DEFAULT_RX_SIZE		1024U
+#define CXIP_DEFAULT_RX_SIZE		512U
 
 #define CXIP_MAJOR_VERSION		0
 #define CXIP_MINOR_VERSION		1
