@@ -272,7 +272,7 @@ struct fi_rx_attr cxip_rx_attr = {
 	.msg_order = CXIP_MSG_ORDER,
 	.comp_order = FI_ORDER_NONE,
 	.total_buffered_recv = CXIP_UX_BUFFER_SIZE,
-	.size = 1024, /* 64k / 64b */
+	.size = CXIP_MAX_RX_SIZE,
 	.iov_limit = 1,
 };
 
@@ -292,7 +292,7 @@ struct fi_rx_attr cxip_multi_auth_key_rx_attr = {
 	.msg_order = CXIP_MSG_ORDER,
 	.comp_order = FI_ORDER_NONE,
 	.total_buffered_recv = CXIP_UX_BUFFER_SIZE,
-	.size = 1024, /* 64k / 64b */
+	.size = CXIP_MAX_RX_SIZE,
 	.iov_limit = 1,
 };
 
@@ -651,6 +651,7 @@ struct cxip_environment cxip_env = {
 	.ctrl_rx_eq_max_size = 67108864,
 	.default_cq_size = CXIP_CQ_DEF_SZ,
 	.default_tx_size = CXIP_DEFAULT_TX_SIZE,
+	.default_rx_size = CXIP_DEFAULT_RX_SIZE,
 	.disable_eq_hugetlb = false,
 	.zbcoll_radix = 2,
 	.cq_fill_percent = 50,
@@ -1211,6 +1212,18 @@ static void cxip_env_init(void)
 			  cxip_env.default_tx_size);
 	}
 
+	fi_param_define(&cxip_prov, "default_rx_size", FI_PARAM_SIZE_T,
+			"Default provider rx_attr.size (default: %lu).",
+			cxip_env.default_rx_size);
+	fi_param_get_size_t(&cxip_prov, "default_rx_size",
+			    &cxip_env.default_rx_size);
+	if (cxip_env.default_rx_size < 16 ||
+	    cxip_env.default_rx_size > CXIP_MAX_RX_SIZE) {
+		cxip_env.default_rx_size = CXIP_DEFAULT_RX_SIZE;
+		CXIP_WARN("Default RX size invalid. Setting to %lu\n",
+			  cxip_env.default_rx_size);
+	}
+
 	fi_param_define(&cxip_prov, "disable_hmem_dev_register", FI_PARAM_BOOL,
 			"Disable registering HMEM device buffer for load/store access (default: %u).",
 			cxip_env.disable_hmem_dev_register);
@@ -1321,6 +1334,14 @@ static void cxip_alter_tx_attr(struct fi_tx_attr *attr,
 		attr->size = cxip_env.default_tx_size;
 }
 
+static void cxip_alter_rx_attr(struct fi_rx_attr *attr,
+			       const struct fi_rx_attr *hints,
+			       uint64_t info_caps)
+{
+	if (!hints || hints->size == 0)
+		attr->size = cxip_env.default_rx_size;
+}
+
 static void cxip_alter_info(struct fi_info *info, const struct fi_info *hints,
 			    uint32_t api_version)
 {
@@ -1329,6 +1350,8 @@ static void cxip_alter_info(struct fi_info *info, const struct fi_info *hints,
 
 		cxip_alter_caps(info, hints);
 		cxip_alter_tx_attr(info->tx_attr, hints ? hints->tx_attr : NULL,
+				   info->caps);
+		cxip_alter_rx_attr(info->rx_attr, hints ? hints->rx_attr : NULL,
 				   info->caps);
 
 		/* Remove secondary capabilities that impact performance if

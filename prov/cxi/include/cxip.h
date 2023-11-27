@@ -156,6 +156,9 @@
 #define CXIP_MAX_TX_SIZE		16384U
 #define CXIP_DEFAULT_TX_SIZE		256U
 
+#define CXIP_MAX_RX_SIZE		1024U
+#define CXIP_DEFAULT_RX_SIZE		1024U
+
 #define CXIP_MAJOR_VERSION		0
 #define CXIP_MINOR_VERSION		1
 #define CXIP_PROV_VERSION		FI_VERSION(CXIP_MAJOR_VERSION, \
@@ -249,6 +252,7 @@ struct cxip_environment {
 	int msg_lossless;
 	size_t default_cq_size;
 	size_t default_tx_size;
+	size_t default_rx_size;
 	int optimized_mrs;
 	int prov_key_cache;
 	int mr_match_events;
