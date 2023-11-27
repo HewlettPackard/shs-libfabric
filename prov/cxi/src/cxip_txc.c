@@ -294,6 +294,31 @@ static int txc_msg_fini(struct cxip_txc *txc)
 	return FI_SUCCESS;
 }
 
+static size_t cxip_txc_get_num_events(struct cxip_txc *txc)
+{
+	size_t num_events;
+
+	/* Need enough events to accommodate initiator credits which is
+	 * based on TX attr size.
+	 */
+	num_events = txc->attr.size;
+
+	/* Worse case is an initiator credit needs two events (e.g. rendezvous
+	 * send).
+	 */
+	num_events *= 2;
+
+	/* For messaging, target initiator rendezvous gets has its own set of
+	 * credits. These are always single event operations.
+	 */
+	num_events += cxip_env.sw_rx_tx_init_max;
+
+	/* Account for internal operations. */
+	num_events += CXIP_INTERNAL_TX_REQS;
+
+	return num_events;
+}
+
 /*
  * cxip_txc_enable() - Enable a TX context for use.
  *
@@ -324,8 +349,7 @@ int cxip_txc_enable(struct cxip_txc *txc)
 	memset(&txc->msg_rdzv_ids, 0, sizeof(txc->msg_rdzv_ids));
 	memset(&txc->tx_ids, 0, sizeof(txc->tx_ids));
 
-	num_events = txc->attr.size + cxip_env.sw_rx_tx_init_max +
-		CXIP_INTERNAL_TX_REQS;
+	num_events = cxip_txc_get_num_events(txc);
 	ret = cxip_evtq_init(&txc->tx_evtq, txc->send_cq, num_events, 0);
 	if (ret) {
 		CXIP_WARN("Failed to initialize TX event queue: %d, %s\n",
