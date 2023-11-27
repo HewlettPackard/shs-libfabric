@@ -284,6 +284,7 @@ struct cxip_environment {
 	int ze_hmem_supported;
 	enum cxip_rdzv_proto  rdzv_proto;
 	int enable_trig_op_limit;
+	int hybrid_posted_recv_preemptive;
 };
 
 extern struct cxip_environment cxip_env;

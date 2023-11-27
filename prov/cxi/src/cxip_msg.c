@@ -4021,6 +4021,39 @@ err_dequeue_req:
 	return -FI_EAGAIN;
 }
 
+static int cxip_rxc_check_recv_count_hybrid_preempt(struct cxip_rxc *rxc)
+{
+	int ret;
+	int count;
+
+	if (cxip_env.rx_match_mode == CXIP_PTLTE_HYBRID_MODE &&
+	    cxip_env.hybrid_posted_recv_preemptive == 1) {
+		count = ofi_atomic_get32(&rxc->orx_reqs);
+
+		if (count > rxc->attr.size) {
+			assert(rxc->state == RXC_ENABLED);
+
+			/* On success, need to return -FI_EAGAIN which will
+			 * propagate back to the user. In addition, RXC state
+			 * will have transitioned to RXC_PENDING_PTLTE_DISABLE.
+			 */
+			ret = cxip_recv_pending_ptlte_disable(rxc, false);
+			if (ret == FI_SUCCESS) {
+				RXC_WARN(rxc,
+					 "Transitioning to SW EP due to too many posted recvs: posted_count=%u request_size=%lu\n",
+					 ret, rxc->attr.size);
+				return -FI_EAGAIN;
+			}
+
+			RXC_WARN(rxc, "Failed to transition to SW EP: %d\n",
+				 ret);
+			return ret;
+		}
+	}
+
+	return FI_SUCCESS;
+}
+
 /*
  * _cxip_recv_req() - Submit Receive request to hardware.
  */
@@ -4039,6 +4072,10 @@ static ssize_t _cxip_recv_req(struct cxip_req *req, bool restart_seq)
 	int ret;
 	struct cxip_md *recv_md = req->recv.recv_md;
 	uint64_t recv_iova = 0;
+
+	ret = cxip_rxc_check_recv_count_hybrid_preempt(rxc);
+	if (ret != FI_SUCCESS)
+		return ret;
 
 	if (req->recv.tagged) {
 		mb.tagged = 1;
