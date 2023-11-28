@@ -366,11 +366,39 @@ Test(domain, coll_info)
 			FI_SUCCESS);
 
 	_test_coll_info(FI_REDUCE, FI_ATOMIC_WRITE, -1, 0, 0, -FI_EOPNOTSUPP);
-	_test_coll_info(FI_REDUCE, FI_BOR, FI_INT64, 0, 0, -FI_EOPNOTSUPP);
+	_test_coll_info(FI_REDUCE, FI_BOR, FI_INT8, 32, 1, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BOR, FI_INT16, 16, 2, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BOR, FI_INT32, 8, 4, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BOR, FI_INT64, 4, 8, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BOR, FI_UINT8, 32, 1, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BOR, FI_UINT16, 16, 2, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BOR, FI_UINT32, 8, 4, FI_SUCCESS);
 	_test_coll_info(FI_REDUCE, FI_BOR, FI_UINT64, 4, 8, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BAND, FI_INT8, 32, 1, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BAND, FI_INT16, 16, 2, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BAND, FI_INT32, 8, 4, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BAND, FI_INT64, 4, 8, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BAND, FI_UINT8, 32, 1, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BAND, FI_UINT16, 16, 2, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BAND, FI_UINT32, 8, 4, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BAND, FI_UINT64, 4, 8, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BXOR, FI_INT8, 32, 1, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BXOR, FI_INT16, 16, 2, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BXOR, FI_INT32, 8, 4, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BXOR, FI_INT64, 4, 8, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BXOR, FI_UINT8, 32, 1, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BXOR, FI_UINT16, 16, 2, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BXOR, FI_UINT32, 8, 4, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_BXOR, FI_UINT64, 4, 8, FI_SUCCESS);
 	_test_coll_info(FI_REDUCE, FI_MIN, FI_UINT64, 0, 0, -FI_EOPNOTSUPP);
 	_test_coll_info(FI_REDUCE, FI_MIN, FI_INT64, 4, 8, FI_SUCCESS);
 	_test_coll_info(FI_REDUCE, FI_MIN, FI_DOUBLE, 4, 8, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_MAX, FI_UINT64, 0, 0, -FI_EOPNOTSUPP);
+	_test_coll_info(FI_REDUCE, FI_MAX, FI_INT64, 4, 8, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_MAX, FI_DOUBLE, 4, 8, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_SUM, FI_UINT64, 0, 0, -FI_EOPNOTSUPP);
+	_test_coll_info(FI_REDUCE, FI_SUM, FI_INT64, 4, 8, FI_SUCCESS);
+	_test_coll_info(FI_REDUCE, FI_SUM, FI_DOUBLE, 4, 8, FI_SUCCESS);
 
 	cxit_destroy_domain();
 }

@@ -1565,6 +1565,7 @@ static void _predict_fmin(int nodes, struct cxip_fltval *data,
 {
 	int i, j;
 
+	prefer_nan = false;	// NETCASSINI-5959
 	memcpy(check, &data[0], sizeof(*check));
 	for (i = 1; i < nodes; i++)
 		for (j = 0; j < 4; j++)
@@ -1582,6 +1583,7 @@ static void _predict_fmax(int nodes, struct cxip_fltval *data,
 {
 	int i, j;
 
+	prefer_nan = false;	// NETCASSINI-5959
 	memcpy(check, &data[0], sizeof(*check));
 	for (i = 1; i < nodes; i++)
 		for (j = 0; j < 4; j++)
@@ -1600,6 +1602,7 @@ static void _predict_fminmax(int nodes, struct cxip_fltminmax *data,
 	double a, b;
 	int i;
 
+	prefer_nan = false;	// NETCASSINI-5959
 	memcpy(check, &data[0], sizeof(*check));
 	for (i = 1; i < nodes; i++) {
 		a = data[i].fminval;
@@ -1999,9 +2002,9 @@ Test(coll_reduce_ops, iminmaxloc)
 		}
 	}
 
-	ret = _allreduceop(FI_CXI_MINMAXLOC, FI_INT64, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_CXI_MINMAXLOC, FI_INT64, 0L, data, rslt, 1,
 			   context);
-	cr_assert(!ret, "_allreduceop() failed\n");
+	cr_assert(!ret, "_allreduceop() failed = %d\n", ret);
 	ret = _check_iminmax(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed\n");
 	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
@@ -2153,7 +2156,7 @@ Test(coll_reduce_ops, fminmaxloc)
 	}
 
 	_predict_fminmax(nodes, data, &check, true);
-	ret = _allreduceop(FI_CXI_MINMAXLOC, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_CXI_MINMAXLOC, FI_DOUBLE, 0L, data, rslt, 1,
 			   context);
 	cr_assert(!ret, "_allreduceop failed normal");
 	ret = _check_fminmax(nodes, rslt, &check);
@@ -2165,7 +2168,7 @@ Test(coll_reduce_ops, fminmaxloc)
 	data[1].fminval = NAN;
 	data[3].fmaxval = NAN;
 	_predict_fminmax(nodes, data, &check, true);
-	ret = _allreduceop(FI_CXI_MINMAXLOC, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_CXI_MINMAXLOC, FI_DOUBLE, 0L, data, rslt, 1,
 			   context);
 	cr_assert(!ret, "_allreduceop failed NAN");
 	ret = _check_fminmax(nodes, rslt, &check);
@@ -2178,7 +2181,7 @@ Test(coll_reduce_ops, fminmaxloc)
 	data[2].fminval = _snan64();
 	data[3].fmaxval = NAN;
 	_predict_fminmax(nodes, data, &check, true);
-	ret = _allreduceop(FI_CXI_MINMAXLOC, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_CXI_MINMAXLOC, FI_DOUBLE, 0L, data, rslt, 1,
 			   context);
 	cr_assert(!ret, "_allreduceop failed sNAN");
 	ret = _check_fminmax(nodes, rslt, &check);
@@ -2201,7 +2204,7 @@ Test(coll_reduce_ops, fminnum)
 	}
 
 	_predict_fmin(nodes, data, &check, false);
-	ret = _allreduceop(FI_CXI_MINNUM, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_MIN, FI_DOUBLE, 0L, data, rslt, 4,
 			   context);
 	cr_assert(!ret, "_allreduceop failed normal");
 	ret = _check_fval(nodes, rslt, &check);
@@ -2212,7 +2215,7 @@ Test(coll_reduce_ops, fminnum)
 	/* number is given preference over NAN */
 	data[1].fval[1] = NAN;
 	_predict_fmin(nodes, data, &check, false);
-	ret = _allreduceop(FI_CXI_MINNUM, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_MIN, FI_DOUBLE, 0L, data, rslt, 4,
 			   context);
 	cr_assert(!ret, "_allreduceop failed NAN");
 	ret = _check_fval(nodes, rslt, &check);
@@ -2223,7 +2226,7 @@ Test(coll_reduce_ops, fminnum)
 	/* number is given preference over NAN */
 	data[1].fval[1] = _snan64();
 	_predict_fmin(nodes, data, &check, false);
-	ret = _allreduceop(FI_CXI_MINNUM, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_MIN, FI_DOUBLE, 0L, data, rslt, 4,
 			   context);
 	cr_assert(!ret, "_allreduceop failed sNAN");
 	ret = _check_fval(nodes, rslt, &check);
@@ -2246,7 +2249,7 @@ Test(coll_reduce_ops, fmaxnum)
 	}
 
 	_predict_fmax(nodes, data, &check, false);
-	ret = _allreduceop(FI_CXI_MAXNUM, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_MAX, FI_DOUBLE, 0L, data, rslt, 4,
 			   context);
 	cr_assert(!ret, "_allreduceop failed normal");
 	ret = _check_fval(nodes, rslt, &check);
@@ -2257,7 +2260,7 @@ Test(coll_reduce_ops, fmaxnum)
 	/* number is given preference over NAN */
 	data[1].fval[1] = NAN;
 	_predict_fmax(nodes, data, &check, false);
-	ret = _allreduceop(FI_CXI_MAXNUM, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_MAX, FI_DOUBLE, 0L, data, rslt, 4,
 			   context);
 	cr_assert(!ret, "_allreduceop failed NAN");
 	ret = _check_fval(nodes, rslt, &check);
@@ -2268,7 +2271,7 @@ Test(coll_reduce_ops, fmaxnum)
 	/* SNAN is given preference over number */
 	data[1].fval[1] = _snan64();
 	_predict_fmax(nodes, data, &check, false);
-	ret = _allreduceop(FI_CXI_MAXNUM, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_MAX, FI_DOUBLE, 0L, data, rslt, 4,
 			   context);
 	cr_assert(!ret, "_allreduceop failed sNAN");
 	ret = _check_fval(nodes, rslt, &check);
@@ -2302,7 +2305,7 @@ Test(coll_reduce_ops, fminmaxnumloc)
 	}
 
 	_predict_fminmax(nodes, data, &check, false);
-	ret = _allreduceop(FI_CXI_MINMAXNUMLOC, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_CXI_MINMAXLOC, FI_DOUBLE, 0L, data, rslt, 1,
 			   context);
 	cr_assert(!ret, "_allreduceop failed normal");
 	ret = _check_fminmax(nodes, rslt, &check);
@@ -2314,7 +2317,7 @@ Test(coll_reduce_ops, fminmaxnumloc)
 	data[1].fminval = NAN;
 	data[3].fmaxval = NAN;
 	_predict_fminmax(nodes, data, &check, false);
-	ret = _allreduceop(FI_CXI_MINMAXNUMLOC, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_CXI_MINMAXLOC, FI_DOUBLE, 0L, data, rslt, 1,
 			   context);
 	cr_assert(!ret, "_allreduceop failed NAN");
 	ret = _check_fminmax(nodes, rslt, &check);
@@ -2327,7 +2330,7 @@ Test(coll_reduce_ops, fminmaxnumloc)
 	data[2].fminval = _snan64();
 	data[3].fmaxval = NAN;
 	_predict_fminmax(nodes, data, &check, false);
-	ret = _allreduceop(FI_CXI_MINMAXNUMLOC, FI_DOUBLE, 0L, data, rslt, 4,
+	ret = _allreduceop(FI_CXI_MINMAXLOC, FI_DOUBLE, 0L, data, rslt, 1,
 			   context);
 	cr_assert(!ret, "_allreduceop failed sNAN");
 	ret = _check_fminmax(nodes, rslt, &check);

@@ -1311,13 +1311,37 @@ static int cxip_query_collective(struct fid_domain *domain,
 	case FI_REDUCE:
 	case FI_ALLREDUCE:
 		switch (ext_op) {
+		case FI_CXI_BARRIER:
+			attr->datatype_attr.count = 0;
+			attr->datatype_attr.size = 0;
+			break;
 		case FI_BOR:
 		case FI_BAND:
 		case FI_BXOR:
-			if (attr->datatype != FI_UINT64)
+			switch (attr->datatype) {
+			case FI_INT8:
+			case FI_UINT8:
+				attr->datatype_attr.count = 32;
+				attr->datatype_attr.size = 1;
+				break;
+			case FI_INT16:
+			case FI_UINT16:
+				attr->datatype_attr.count = 16;
+				attr->datatype_attr.size = 2;
+				break;
+			case FI_INT32:
+			case FI_UINT32:
+				attr->datatype_attr.count = 8;
+				attr->datatype_attr.size = 4;
+				break;
+			case FI_INT64:
+			case FI_UINT64:
+				attr->datatype_attr.count = 4;
+				attr->datatype_attr.size = 8;
+				break;
+			default:
 				return -FI_EOPNOTSUPP;
-			attr->datatype_attr.count = 4;
-			attr->datatype_attr.size = 8;
+			}
 			break;
 		case FI_MIN:
 		case FI_MAX:
@@ -1326,6 +1350,14 @@ static int cxip_query_collective(struct fid_domain *domain,
 			    attr->datatype != FI_DOUBLE)
 				return -FI_EOPNOTSUPP;
 			attr->datatype_attr.count = 4;
+			attr->datatype_attr.size = 8;
+			break;
+		case FI_CXI_MINMAXLOC:
+			attr->datatype_attr.count = 1;
+			attr->datatype_attr.size = 32;
+			break;
+		case FI_CXI_REPSUM:
+			attr->datatype_attr.count = 1;
 			attr->datatype_attr.size = 8;
 			break;
 		default:

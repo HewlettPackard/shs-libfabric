@@ -296,9 +296,6 @@ void _dump_red_pkt(struct red_pkt *pkt, char *dir)
 #define COLL_OPCODE_INT_MAX		0x11
 #define COLL_OPCODE_INT_MINMAXLOC	0x12
 #define COLL_OPCODE_INT_SUM		0x14
-#define COLL_OPCODE_FLT_MIN		0x20
-#define COLL_OPCODE_FLT_MAX		0x21
-#define COLL_OPCODE_FLT_MINMAXLOC	0x22
 #define COLL_OPCODE_FLT_MINNUM		0x24
 #define COLL_OPCODE_FLT_MAXNUM		0x25
 #define COLL_OPCODE_FLT_MINMAXNUMLOC	0x26
@@ -341,6 +338,9 @@ void cxip_coll_populate_opcodes(void)
 	}
 	/* operations supported by 32, 16, and 8 bit signed int operands */
 	/* NOTE: executed as packed 64-bit quantities */
+	_int8_16_32_op_to_opcode[FI_BOR] = COLL_OPCODE_BIT_OR;
+	_int8_16_32_op_to_opcode[FI_BAND] = COLL_OPCODE_BIT_AND;
+	_int8_16_32_op_to_opcode[FI_BXOR] = COLL_OPCODE_BIT_XOR;
 	_int8_16_32_op_to_opcode[FI_CXI_BARRIER] = COLL_OPCODE_BARRIER;
 
 	/* operations supported by 32, 16, and 8 bit unsigned int operands */
@@ -363,12 +363,9 @@ void cxip_coll_populate_opcodes(void)
 	_uint64_op_to_opcode[FI_CXI_BARRIER] = COLL_OPCODE_BARRIER;
 
 	/* operations supported by 64 bit double operands */
-	_flt_op_to_opcode[FI_MIN] = COLL_OPCODE_FLT_MIN;
-	_flt_op_to_opcode[FI_MAX] = COLL_OPCODE_FLT_MAX;
-	_flt_op_to_opcode[FI_CXI_MINMAXLOC] = COLL_OPCODE_FLT_MINMAXLOC;
-	_flt_op_to_opcode[FI_CXI_MINNUM] = COLL_OPCODE_FLT_MINNUM;
-	_flt_op_to_opcode[FI_CXI_MAXNUM] = COLL_OPCODE_FLT_MAXNUM;
-	_flt_op_to_opcode[FI_CXI_MINMAXNUMLOC] = COLL_OPCODE_FLT_MINMAXNUMLOC;
+	_flt_op_to_opcode[FI_MIN] = COLL_OPCODE_FLT_MINNUM;
+	_flt_op_to_opcode[FI_MAX] = COLL_OPCODE_FLT_MAXNUM;
+	_flt_op_to_opcode[FI_CXI_MINMAXLOC] = COLL_OPCODE_FLT_MINMAXNUMLOC;
 	_flt_op_to_opcode[FI_CXI_REPSUM] = COLL_OPCODE_FLT_REPSUM;
 	_flt_op_to_opcode[FI_CXI_BARRIER] = COLL_OPCODE_BARRIER;
 	/* NOTE: FI_SUM handled in flt_op_to_opcode() function */
@@ -380,8 +377,6 @@ void cxip_coll_populate_opcodes(void)
 	_cxi_op_to_redtype[COLL_OPCODE_INT_MIN] = REDTYPE_INT;
 	_cxi_op_to_redtype[COLL_OPCODE_INT_MAX] = REDTYPE_INT;
 	_cxi_op_to_redtype[COLL_OPCODE_INT_SUM] = REDTYPE_INT;
-	_cxi_op_to_redtype[COLL_OPCODE_FLT_MIN] = REDTYPE_FLT;
-	_cxi_op_to_redtype[COLL_OPCODE_FLT_MAX] = REDTYPE_FLT;
 	_cxi_op_to_redtype[COLL_OPCODE_FLT_MINNUM] = REDTYPE_FLT;
 	_cxi_op_to_redtype[COLL_OPCODE_FLT_MAXNUM] = REDTYPE_FLT;
 	_cxi_op_to_redtype[COLL_OPCODE_FLT_SUM_NOFTZ_RND0] = REDTYPE_FLT;
@@ -394,7 +389,6 @@ void cxip_coll_populate_opcodes(void)
 	_cxi_op_to_redtype[COLL_OPCODE_FLT_SUM_FTZ_RND3] = REDTYPE_FLT;
 
 	_cxi_op_to_redtype[COLL_OPCODE_INT_MINMAXLOC] = REDTYPE_IMINMAX;
-	_cxi_op_to_redtype[COLL_OPCODE_FLT_MINMAXLOC] = REDTYPE_FMINMAX;
 	_cxi_op_to_redtype[COLL_OPCODE_FLT_MINMAXNUMLOC] = REDTYPE_FMINMAX;
 	_cxi_op_to_redtype[COLL_OPCODE_FLT_REPSUM] = REDTYPE_REPSUM;
 
@@ -515,6 +509,16 @@ int _get_cxi_data_bytcnt(cxip_coll_op_t cxi_opcode,
 		break;
 	default:
 		return -FI_EOPNOTSUPP;
+	}
+	switch (cxi_opcode) {
+	case COLL_OPCODE_INT_MINMAXLOC:
+	case COLL_OPCODE_FLT_MINMAXNUMLOC:
+	case COLL_OPCODE_FLT_REPSUM:
+		size *= 4;
+		break;
+	default:
+		// do nothing, size is correct
+		break;
 	}
 	size *= count;
 	if (size > CXIP_COLL_MAX_DATA_SIZE)
@@ -1229,78 +1233,6 @@ bool _quiesce_nan(double *d)
 }
 
 /**
- * Implement NaN comparison in RSDG 4.5.9.2.3 FLT_MIN and FLT_MAX
- *
- * Compares two doubles, replaces *d1 as appropriate, and indicates swap.
- *
- * If the values are normal doubles, less=true indicates we are looking for the
- * lesser of the two values, while less=false indicates we are looking for the
- * greater of the two values. The appropriate value will be swapped into *d1 if
- * necessary.
- *
- * If any of the values are NaN, this will give preference to the NaN, ignoring
- * less, and if both are NaN, this will give preference to sNaN over qNan.
- *
- * The return value can be used when associating an index with the value.
- *
- * Note that since this quiets any signalling NaNs, we need set the
- * CXIP_COLL_RC_FLT_INVALID error here.
- *
- * - return  0 indicates the values are equivalent, so use the smallest index.
- * - return +1 indicates the values were swapped, so use the second index.
- * - return -1 indicates no swap, so use the first index.
- */
-static int swpnan1(double *d1, double d2, bool less, cxip_coll_rc_t *rc)
-{
-	bool nan1, nan2, snan1, snan2;
-
-	// isnan() does not distinguish sNaN from qNaN
-	nan1 = isnan(*d1);
-	nan2 = isnan(d2);
-	// Neither is NaN, so simple comparison
-	if (!nan1 && !nan2) {
-		if (*d1 == d2)
-			return 0;
-		if (less && (*d1 > d2)) {
-			*d1 = d2;
-			return 1;
-		}
-		if (!less && (*d1 < d2)) {
-			*d1 = d2;
-			return 1;
-		}
-		return -1;
-	}
-
-	// ----- FLT_MIN and FLT_MAX rules
-	snan1 = _quiesce_nan(d1);
-	snan2 = _quiesce_nan(&d2);
-	if (snan1 || snan2)
-		SET_RED_RC(*rc, CXIP_COLL_RC_FLT_INVALID);
-
-	// Always give preference to any NaN over normal number
-	if (!nan1 && nan2) {
-		*d1 = d2;
-		return 1;
-	}
-	if (nan1 && !nan2) {
-		return -1;
-	}
-	// Both are NaN
-
-	// Always prefers sNaN over qNaN or number
-	if (!snan1 && snan2) {
-		*d1 = d2;
-		return 1;
-	}
-	if (snan1 && !snan2) {
-		return -1;
-	}
-	// both snan || neither snan
-	return 0;
-}
-
-/**
  * Implement NaN comparison in RSDG 4.5.9.2.4 FLT_MINNUM and FLT_MAXNUM
  *
  * Only associative mode is supported. The old IEEE mode is incorrect, and has
@@ -1441,8 +1373,6 @@ static void _init_coll_data(struct cxip_coll_data *coll_data, int opcode,
 	coll_data->red_cnt = 1;
 	coll_data->red_op = opcode;
 	switch (coll_data->red_op) {
-	case COLL_OPCODE_FLT_MIN:
-	case COLL_OPCODE_FLT_MAX:
 	case COLL_OPCODE_FLT_MINNUM:
 	case COLL_OPCODE_FLT_MAXNUM:
 	case COLL_OPCODE_FLT_SUM_NOFTZ_RND0:
@@ -1464,7 +1394,6 @@ static void _init_coll_data(struct cxip_coll_data *coll_data, int opcode,
 					   CXIP_COLL_RC_FLT_OVERFLOW);
 		}
 		break;
-	case COLL_OPCODE_FLT_MINMAXLOC:
 	case COLL_OPCODE_FLT_MINMAXNUMLOC:
 		/* evaluate the two doubles */
 		for (i = 0; i < 4; i += 2) {
@@ -1492,6 +1421,7 @@ static void _reduce(struct cxip_coll_data *accum,
 {
 	int i, swp;
 
+	TRACE_DEBUG("%s entry\n", __func__);
 	/* Initialize with new data */
 	if (!accum->initialized) {
 		memcpy(accum, coll_data, sizeof(*accum));
@@ -1580,28 +1510,6 @@ static void _reduce(struct cxip_coll_data *accum,
 				SET_RED_RC(accum->red_rc,
 					   CXIP_COLL_RC_INT_OVERFLOW);
 		}
-		break;
-	case COLL_OPCODE_FLT_MIN:
-		/* RSDG 4.5.9.2.3 FLT_MIN and FLT_MAX */
-		for (i = 0; i < 4; i++) {
-			swpnan1(&accum->fltval.fval[i], coll_data->fltval.fval[i], 1,
-				&accum->red_rc);
-		}
-		break;
-	case COLL_OPCODE_FLT_MAX:
-		/* RSDG 4.5.9.2.3 FLT_MIN and FLT_MAX */
-		for (i = 0; i < 4; i++)
-			swpnan1(&accum->fltval.fval[i], coll_data->fltval.fval[i], 0,
-				&accum->red_rc);
-		break;
-	case COLL_OPCODE_FLT_MINMAXLOC:
-		/* RSDG 4.5.9.2.3 FLT_MIN and FLT_MAX */
-		swp = swpnan1(&accum->fltminmax.fminval,
-			      coll_data->fltminmax.fminval, 1, &accum->red_rc);
-		swpidx(&accum->fltminmax.fminidx, coll_data->fltminmax.fminidx, swp);
-		swp = swpnan1(&accum->fltminmax.fmaxval,
-			      coll_data->fltminmax.fmaxval, 0, &accum->red_rc);
-		swpidx(&accum->fltminmax.fmaxidx, coll_data->fltminmax.fmaxidx, swp);
 		break;
 	case COLL_OPCODE_FLT_MINNUM:
 		/* RSDG 4.5.9.2.4 FLT_MINNUM and FLT_MAXNUM */
@@ -2241,6 +2149,8 @@ _cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 	struct cxip_req *req;
 	int ret;
 
+	TRACE_DEBUG("%s entry\n", __func__);
+	TRACE_DEBUG("%s bytecnt=%ld\n", __func__, bytcnt);
 	ofi_genlock_lock(&mc_obj->ep_obj->lock);
 
 	/* must observe strict round-robin across all nodes */
@@ -2290,6 +2200,7 @@ _cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 
 quit:
 	ofi_genlock_unlock(&mc_obj->ep_obj->lock);
+	TRACE_DEBUG("%s return %d\n", __func__, ret);
 	return ret;
 }
 
@@ -2409,6 +2320,7 @@ ssize_t cxip_reduce(struct fid_ep *ep, const void *buf, size_t count,
 	int cxi_opcode;
 	ssize_t bytcnt, ret;
 
+	TRACE_DEBUG("%s entry\n", __func__);
 	cxi_opcode = cxip_fi2cxi_opcode(op, datatype);
 	bytcnt = _get_bytcnt(cxi_opcode, datatype, buf, count);
 	if (bytcnt < 0)
@@ -2448,8 +2360,11 @@ ssize_t cxip_allreduce(struct fid_ep *ep, const void *buf, size_t count,
 	int cxi_opcode, bytcnt;
 	ssize_t ret;
 
+	TRACE_DEBUG("%s entry\n", __func__);
 	cxi_opcode = cxip_fi2cxi_opcode(op, datatype);
+	TRACE_DEBUG("%s cxi_opcode = %d\n", __func__, cxi_opcode);
 	bytcnt = _get_bytcnt(cxi_opcode, datatype, buf, count);
+	TRACE_DEBUG("%s bytcnt = %d\n", __func__, bytcnt);
 	if (bytcnt < 0)
 		return bytcnt;
 

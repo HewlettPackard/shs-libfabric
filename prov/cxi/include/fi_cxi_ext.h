@@ -428,9 +428,6 @@ struct cxip_comm_key {
  */
 enum cxip_coll_op {
 	FI_CXI_MINMAXLOC = 32,	// FLT or INT
-	FI_CXI_MINNUM,		// FLT only
-	FI_CXI_MAXNUM,		// FLT only
-	FI_CXI_MINMAXNUMLOC,	// FLT only
 	FI_CXI_REPSUM,		// FLT only
 	FI_CXI_BARRIER,		// no data
 	FI_CXI_OP_LAST

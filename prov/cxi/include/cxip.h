@@ -2386,7 +2386,7 @@ struct cxip_intval {
 	int64_t ival[4];
 };
 
-/* flt MIN, MAX, MINNUM, MAXNUM, SUM */
+/* flt MIN, MAX, SUM */
 struct cxip_fltval {
 	double fval[4];
 };
