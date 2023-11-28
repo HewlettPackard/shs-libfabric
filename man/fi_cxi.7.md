@@ -1121,6 +1121,22 @@ The CXI provider checks for the following environment variables:
     where reserved resources may be insufficient to prevent starvation of
     software request list match entries. Default is 0, disabled.
 
+*FI_CXI_HYBRID_POSTED_RECV_PREEMPTIVE*
+:   When in hybrid mode, this variable can be used to enable preemptive
+    transitions to software matching when the number of posted receives
+    exceeds the user requested RX size attribute. This is useful for
+    applications where they may not know the exact number of posted receives
+    and they are expereincing application termination due to event queue
+    overflow. Default is 0, disabled.
+
+*FI_CXI_HYBRID_UNEXPECTED_MSG_PREEMPTIVE*
+:   When in hybrid mode, this variable can be used to enable preemptive
+    transitions to software matching when the number of hardware unexpected
+    messages exceeds the user requested RX size attribute. This is useful for
+    applications where they may not know the exact number of posted receives
+    and they are expereincing application termination due to event queue
+    overflow. Default is 0, disabled.
+
 *FI_CXI_REQ_BUF_SIZE*
 :   Size of request buffers. Increasing the request buffer size allows for more
     unmatched messages to be sent into a single request buffer. The default
@@ -1190,7 +1206,11 @@ The CXI provider checks for the following environment variables:
 
 *FI_CXI_DEFAULT_TX_SIZE*
 :   Set the default tx_attr.size field to be used by the provider if the size
-    in not specified in the user provided fi_info hints.
+    is not specified in the user provided fi_info hints.
+
+*FI_CXI_DEFAULT_RX_SIZE*
+:   Set the default rx_attr.size field to be used by the provider if the size
+    is not specified in the user provided fi_info hints.
 
 *FI_CXI_SW_RX_TX_INIT_MAX*
 :   Debug control to override the number of TX operations that can be
