@@ -405,7 +405,7 @@ void cxip_evtq_progress(struct cxip_evtq *evtq)
 		cxi_eq_next_event(evtq->eq);
 
 		evtq->unacked_events++;
-		if (evtq->unacked_events == evtq->cq->ack_batch_size) {
+		if (evtq->unacked_events >= evtq->ack_batch_size) {
 			cxi_eq_ack_events(evtq->eq);
 			evtq->unacked_events = 0;
 		}
@@ -578,6 +578,7 @@ mmap_success:
 
 	/* Point back to the CQ bound to the TX or RX context */
 	evtq->cq = cq;
+	evtq->ack_batch_size = cq->ack_batch_size;
 
 	return FI_SUCCESS;
 

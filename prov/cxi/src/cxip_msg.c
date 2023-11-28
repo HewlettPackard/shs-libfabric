@@ -2703,6 +2703,7 @@ static int cxip_ux_onload_cb(struct cxip_req *req, const union c_event *event)
 			RXC_FATAL(rxc, FC_SW_ONLOAD_MSG_FATAL);
 
 		req->search.complete = true;
+		rxc->rx_evtq.ack_batch_size = rxc->rx_evtq.cq->ack_batch_size;
 
 		RXC_DBG(rxc, "UX Onload Search done\n");
 
@@ -2845,6 +2846,8 @@ static int cxip_flush_appends(struct cxip_rxc *rxc)
 		goto err;
 	}
 	ofi_atomic_inc32(&rxc->orx_reqs);
+
+	rxc->rx_evtq.ack_batch_size = 1;
 
 	req->cb = cxip_flush_appends_cb;
 	req->type = CXIP_REQ_SEARCH;

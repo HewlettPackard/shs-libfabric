@@ -1265,6 +1265,7 @@ struct cxip_evtq {
 	struct cxi_md *md;
 	bool mmap;
 	unsigned int unacked_events;
+	unsigned int ack_batch_size;
 	struct c_eq_status prev_eq_status;
 	bool eq_saturated;
 
