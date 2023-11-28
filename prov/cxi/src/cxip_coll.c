@@ -2873,14 +2873,14 @@ static void _start_curl(void *ptr)
 	static const char *json_fmt =
 		"{'macs':[%s],'jobID':'%s','jobStepID':'%s','timeout':%ld}";
 	struct cxip_addr caddr;
-	char *jsonreq, *mac, *p;
-	char url[256];
-	int i, len, ret;
+	char *jsonreq, *mac, *url, *p;
+	int i, ret;
 
 	/* early exit will attempt to free these */
 	curl_usrptr = NULL;
 	jsonreq = NULL;
 	mac = NULL;
+	url = NULL;
 
 	/* acquire the environment variables needed */
 	TRACE_JOIN("jobid   = %s\n", cxip_env.coll_job_id);
@@ -2891,32 +2891,40 @@ static void _start_curl(void *ptr)
 	TRACE_JOIN("minnodes= %ld\n", cxip_env.hwcoll_min_nodes);
 	TRACE_JOIN("tmout   = %ld\n", cxip_env.coll_timeout_usec);
 
-	ret = -FI_EINVAL;
+	/* Generic error for any preliminary failures */
+	jstate->prov_errno = CXIP_PROV_ERRNO_CURL;
 	if (!cxip_env.coll_job_id ||
 	    !cxip_env.coll_fabric_mgr_url ||
 	    !cxip_env.coll_mcast_token) {
 		TRACE_JOIN("Check environment variables\n");
+		ret = -FI_EINVAL;
 		goto quit;
 	}
 
-	len = snprintf(url, sizeof(url), "%s/fabric/collectives/multicast",
-			cxip_env.coll_fabric_mgr_url);
-	if (len >= sizeof(url)) {
+	ret = asprintf(&url, "%s/fabric/collectives/multicast",
+		       cxip_env.coll_fabric_mgr_url);
+	if (ret < 0) {
 		TRACE_JOIN("Failed to construct CURL address\n");
+		ret = -FI_ENOMEM;
 		goto quit;
 	}
 
 	/* five hex digits per mac, two colons, two quotes, comma */
-	ret = -FI_ENOMEM;
 	p = mac = malloc(10*jstate->av_set_obj->fi_addr_cnt + 1);
-	if (!mac)
+	if (!mac) {
+		TRACE_JOIN("Failed to allocate mac list\n");
+		ret = -FI_ENOMEM;
 		goto quit;
+	}
 	for (i = 0; i < jstate->av_set_obj->fi_addr_cnt; i++) {
 		ret = cxip_av_lookup_addr(
 				jstate->av_set_obj->cxi_av,
 				jstate->av_set_obj->fi_addr_ary[i], &caddr);
-		if (ret < 0)
+		if (ret < 0) {
+			TRACE_JOIN("failed to find address[%d]=%ld\n",
+				   i, jstate->av_set_obj->fi_addr_ary[i]);
 			goto quit;
+		}
 		p += sprintf(p, "'%01X:%02X:%02X',",
 		 		(caddr.nic >> 16) & 0xf,
 				(caddr.nic >> 8) & 0xff,
@@ -2930,16 +2938,21 @@ static void _start_curl(void *ptr)
 			cxip_env.coll_job_id,
 			cxip_env.coll_job_step_id,
 			cxip_env.coll_timeout_usec);
-	if (ret < 0)
+	if (ret < 0) {
+		TRACE_JOIN("Creating JSON request = %d\n", ret);
+		ret = -FI_ENOMEM;
 		goto quit;
+	}
 	single_to_double_quote(jsonreq);
 	TRACE_JOIN("JSON = %s\n", jsonreq);
 
 	/* create the mcast address */
-	ret = -FI_ENOMEM;
 	curl_usrptr = calloc(1, sizeof(*curl_usrptr));
-	if (!curl_usrptr)
+	if (!curl_usrptr) {
+		TRACE_JOIN("curl_usrptr calloc() error\n");
+		ret = -FI_ENOMEM;
 		goto quit;
+	}
 	/* dispatch CURL request */
 	curl_usrptr->jstate = jstate;
 	if (cxip_trap_search(jstate->mynode_idx, CXIP_TRAP_CURLSND, &ret))
@@ -2948,6 +2961,7 @@ static void _start_curl(void *ptr)
 				CURL_POST, false, _cxip_create_mcast_cb,
 				curl_usrptr);
 quit:
+	free(url);
 	free(mac);
 	free(jsonreq);
 	if (ret < 0) {
