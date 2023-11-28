@@ -351,8 +351,7 @@ static struct cxip_req *cxip_evtq_event_req(struct cxip_evtq *evtq,
 					  cxi_event_to_str(event));
 		}
 		break;
-	case C_EVENT_STATE_CHANGE:
-		cxip_pte_state_change(evtq->cq->domain->iface, event);
+
 
 		req = NULL;
 		break;
@@ -395,11 +394,22 @@ void cxip_evtq_progress(struct cxip_evtq *evtq)
 	evtq->prev_eq_status = *evtq->eq->status;
 
 	while ((event = cxi_eq_peek_event(evtq->eq))) {
-		req = cxip_evtq_event_req(evtq, event);
-		if (req) {
-			ret = req->cb(req, event);
-			if (ret != FI_SUCCESS)
-				break;
+
+		/* State change events can be caused due to unacked events. When
+		 * a state change event occurs, always ack EQ.
+		 */
+		if (event->hdr.event_type == C_EVENT_STATE_CHANGE) {
+			cxi_eq_ack_events(evtq->eq);
+			evtq->unacked_events = 0;
+			cxip_pte_state_change(evtq->cq->domain->iface, event);
+		} else {
+
+			req = cxip_evtq_event_req(evtq, event);
+			if (req) {
+				ret = req->cb(req, event);
+				if (ret != FI_SUCCESS)
+					break;
+			}
 		}
 
 		cxi_eq_next_event(evtq->eq);
