@@ -445,15 +445,21 @@ void cxip_evtq_fini(struct cxip_evtq *evtq)
 	evtq->eq = NULL;
 }
 
-static size_t cxip_evtq_get_queue_size(size_t num_events, size_t batch_ack)
+static size_t cxip_evtq_get_queue_size(struct cxip_cq *cq, size_t num_events)
 {
-	size_t num_slots = num_events + batch_ack;
+	size_t num_slots = num_events + cq->ack_batch_size;
 
 	/* One additional event slot is needed for full queue. */
 	num_slots += 1;
 
 	/* One additional event slot is needed for EQ status. */
 	num_slots += 1;
+
+	/* Users current expect libfabric CQ size to control sizing of HW EQs.
+	 * Honor this by using CQ size to override CXI provider requested EQ
+	 * slots.
+	 */
+	num_slots = MAX(num_slots, cq->attr.size);
 
 	return num_slots * C_EE_CFG_ECB_SIZE;
 }
@@ -479,8 +485,7 @@ int cxip_evtq_init(struct cxip_evtq *evtq, struct cxip_cq *cq,
 
 	assert(cq->domain->enabled);
 
-	len = cxip_evtq_get_queue_size(num_events + num_fc_events,
-				       cq->ack_batch_size);
+	len = cxip_evtq_get_queue_size(cq, num_events + num_fc_events);
 
 	/* Note max_cnt == 0 is unlimited */
 	ret = ofi_bufpool_create_attr(&bp_attr, &evtq->req_pool);
