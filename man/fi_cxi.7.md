@@ -1182,20 +1182,7 @@ The CXI provider checks for the following environment variables:
 *FI_CXI_DEFAULT_CQ_SIZE*
 :   Change the provider default completion queue size expressed in entries. This
     may be useful for applications which rely on middleware, and middleware defaults
-    the completion queue size to the provider default. To avoid flow-control due
-    to the associated event queue being full, care should be taken to adequately
-    progress the CQ and to size it appropriately. Note that unexpected messages
-    hold reservations against the queue and reduce the amount of space available
-    at any given time. The sizing is application specific and based on job scale,
-    but should minimally meet the following:
-
-    entries = Num Receives Posted + Num Unexpected Messages * 6 + Num Sends Posted +
-              FI_CXI_EQ_ACK_BATCH_SIZE + Num Overflow Buffers + Num Request Buffers
-
-    For instance if 1K of each RX, Unexpected, TX messages can be outstanding, then
-    the size should be set to at least something > 8K. See FI_CXI_CQ_FILL_PERCENT
-    which can be set to change the percentage at which the CQ should indicate that
-    it has become saturated and force pushback to the application to ensure progress.
+    the completion queue size to the provider default.
 
 *FI_CXI_DISABLE_EQ_HUGETLB/FI_CXI_DISABLE_CQ_HUGETLB*
 :   By default, the provider will attempt to allocate 2 MiB hugetlb pages for
@@ -1633,6 +1620,159 @@ FI_EIO: Catch all errno.
 
 * Fetch and compare type AMOs with FI_DELIVERY_COMPLETE or FI_MATCH_COMPLETE
   completion semantics are not supported with FI_RMA_EVENT.
+
+# Libfabric CXI Provider User Programming and Troubleshooting Guide
+
+The scope of the following subsection is to provide guidance and/or troubleshooting tips
+for users of the libfabric CXI provider. The scope of this section is not a full guide
+for user libfabric.
+
+## Sizing Libfabric Objects Based on Expected Usage
+
+The CXI provider uses various libfabric object attribute size and/or libfabric enviroment
+variables to size hardware related resources accordingly. Failure to size resources properly
+can result in the CXI provider frequently returning -FI_EAGAIN which may negatively impact
+performance. The following subsection outline important sizing related attributes and
+environment variables.
+
+### Completion Queue Size Attribute
+
+The CXI provider uses completion queue attribute size to size various software and hardware
+event queues used to generate libfabric completion events. While the size of the software
+queues may grow, hardware event queue sizes are static. Failing to size hardware queues
+properly may result in CXI provider returning -FI_EAGAIN frequently for data transfer
+operations. When this error is returned, user should progress the corresponding endpoint
+completion queues by calling fi_cq_read().
+
+Users are encouraged to set the completion queue size attribute based on the expected
+number of inflight RDMA operations to and from a single endpoint. For users which are
+relying on the provider default value (e.g. MPI), the FI_CXI_DEFAULT_CQ_SIZE environment
+variable can be used to override the provider default value.
+
+### Endpoint Recieve Size Attribute
+
+The CXI provider uses the endpoint receive size attribute to size internal command
+and hardware event queues. Failing to size the either command queue correctly can result
+in the CXI provider returning -FI_EAGAIN frequently for data transfer operations. When
+this error is returned, user should progress the corresponding endpoint completion queues
+by calling fi_cq_read().
+
+Users are encouraged to set the endpoint receive size attribute based on the expected
+numbfer of inflight untagged and tagged RDMA operations. For users which are relying on the
+provider default value (e.g. MPI), the FI_CXI_DEFAULT_RX_SIZE environment variable can be
+used to override the provider default value.
+
+### Endpoint Transmit Size Attribute
+
+The CXI provider uses the endpoint transmit size attribute to size internal command
+and hardware event queues. Failing to size the either command queue correctly can result
+in the CXI provider returning -FI_EAGAIN frequently for data transfer operations. When
+this error is returned, user should progress the corresponding endpoint completion queues
+by calling fi_cq_read().
+
+At a minimum, users are encouraged to set the endpoint transmit size attribute based on
+the expected numbfer of inflight, initiator RDMA operations. If users are going to be
+issuing message opeartions over the CXI provider rendezvous limit (FI_CXI_RDZV_THRESHOLD),
+the transmit size attribute must also include the number of outstanding, unexpected
+rendezvous operations (i.e. inflight, initiator RDMA operations + outstanding, unexpected
+rendezvous operations).
+
+For users which are relying on the provider default value (e.g. MPI), the
+FI_CXI_DEFAULT_TX_SIZE environment variable can be used to override the provider default
+value.
+
+### FI_UNIVERSE_SIZE Environment Variable
+
+The libfabric FI_UNIVERSE_SIZE environment variable defines the number of expected ranks/peers
+an application needs to communicate with. The CXI provider may use this environment variable
+to size resources tied to number of peers. Users are encourage to set this environment
+variable accordingly.
+
+## Selecting Proper Receive Match Mode
+
+As mentioned in the *Runtime Parameters* section, the CXI provider supports 3 different
+operational modes: hardware, hybrid, and software.
+
+Hardware match mode is approriate for users who can ensure the sum of unexpected messages
+and posted receives does not exceed the configured hardware receive resource limit for the
+application. When resources are consumed, the endpoint will transition into a flow control
+operational mode which requires side-band messaging to recover from. Recovery will involve
+the CXI provider trying to reclaim hardware receive resources to help prevent future
+transition into flow control. If the CXI provider is unable to reclaim hardware receive
+resoures, this can lead to a cycle of entering and exiting flow control which may present
+itself as a hang to the libfabric user. Running with FI_LOG_LEVEL=warn and FI_LOG_PROV=cxi
+will report if this flow control transition is happening.
+
+Hybrid match mode is approriate for users who are unsure if the sum of unexpected messages
+and posted receives will not exceed the configure hardware receive resource limit for the
+application but want to ensure they application still functions if hardware receive resources
+are consumed. Hybrid match mode extends hardware match by allowing for an automated
+transition into software match mode if resources are consumed.
+
+Sofftware match mode is approriate for user who know the sum of unexpected messages
+and posted receives will exceed the configured hardware receive resource limit for the
+application. In software match mode, the CXI provider maintains the a software unexpected and
+posted receive list rather than offloading to hardware. This avoids having to allocated a
+hardware receive resource for each unxpected messsage and posted receive.
+
+*Note*: In practice, dependent processes (e.g. parallel job) will most likely be sharing a
+recieve hardware resource pool.
+
+*Note*: Each match mode may still enter flow control. For example, if a user is not draining
+the libfabric completion queue at a reasonable rate, corresponding hardware events may fill
+up which will trigger flow control.
+
+## Using Hybrid Match Mode Preemptive Options
+
+The high-level objective of the hybrid match mode preemptive environment variables (i.e.
+FI_CXI_HYBRID_PREEMPTIVE, FI_CXI_HYBRID_RECV_PREEMPTIVE,
+FI_CXI_HYBRID_POSTED_RECV_PREEMPTIVE, and FI_CXI_HYBRID_UNEXPECTED_MSG_PREEMPTIVE) is to
+ensure a process requiring more hardware receives resource does not force other process
+requiring less hardware receive resource to be force into software match mode due to no
+available hardware receive resources available.
+
+For example, considered a parallel application which has multiple processes (i.e. ranks)
+per NIC all sharing the same hardware receive resource pool. Suppose that the application
+communication pattern results in an all-to-one communication to only a single rank (e.g.
+rank 0) while other ranks may be doing communication amongst each other. If the width of
+the all-to-one exceeds hardware resource consumptions, all ranks on the target NIC will
+transition to software match mode. The preemptive options may help ensure that only
+rank 0 would transition to software match mode instead of all the ranks on the target NIC.
+
+The FI_CXI_HYBRID_POSTED_RECV_PREEMPTIVE and FI_CXI_HYBRID_UNEXPECTED_MSG_PREEMPTIVE
+environment variables will force the transition to software match mode if the user
+requested endpoint recieve size attribute is exceeded. The benefit of running with
+these enabled is that software match mode transition is 100% in control of the libfabric
+user through the receive size attribute. One approach users could take here is set
+receive size attribute to expected usage, and if this expected usage is exceeded, only
+the offending endpoints will transition to software match mode.
+
+FI_CXI_HYBRID_PREEMPTIVE and FI_CXI_HYBRID_RECV_PREEMPTIVE environment variables will
+force the transition to software match mode if hardware receive resources in the pool
+are running low. The CXI provider will do a multi-step process to transition the libfabric
+endpoint to software match mode. The benefit of running with these enabled is that the
+number of endpoints transitioning to software match mode may be smaller when compared to
+forced software match mode transition due to zero hardware resources available.
+
+## Preventing Messaging Flow Control Due to Hardware Event Queue Sizing
+
+As much as possible, CXI provider message flow control should be avoided. Flow control
+results in expensive, side-band, CXI provider internal messaging to recover from. One
+cause for flow control is due to improper hardware event queue sizing. If the hardware
+event queue is undersized resulting it filling quicker than expected, the next incoming
+message operation targeting a full event queue will result in the message operation
+being dropped and flow control triggered.
+
+The default CXI provider behavior is to size hardware event queues based on endpoint
+transmit and receive size attributes. Thus, it is critical for users to set these
+attributes accordingly.
+
+The CQ size can be used to override the CXI provider calcuatled hardware event queue
+size based on endpoint transmit and receive size attributes. If the CQ size is greater
+than the CXI proviuder calcuation, the value from the CQ size will be used.
+
+The CQ fill percent can be used to define a threshold for when no new RDMA operations
+can be queued until the libfabric CQ a progressed thus draining hardware event queues.
 
 # SEE ALSO
 
