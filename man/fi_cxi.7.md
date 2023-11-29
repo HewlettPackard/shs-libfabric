@@ -1607,15 +1607,6 @@ capabilities.
 unit tests are supported where the test feature set matches the CXI provider's
 current capabilities.
 
-# CXI Provider CQ Error Event Errno
-
-The following are the libfabric errno value which may be returned in an RDMA CQ error event.
-
-FI_ETRUNC: Receive message truncation.
-FI_EHOSTUNREACH: Target is unreachable. This is due to connectivity issues, such as downed links, between the two peers.
-FI_ENOTCONN: Cannot communicate due to no libfabric endpoint configure. In this case, the target NIC is reachable.
-FI_EIO: Catch all errno.
-
 # ERRATA
 
 * Fetch and compare type AMOs with FI_DELIVERY_COMPLETE or FI_MATCH_COMPLETE
@@ -1773,6 +1764,20 @@ than the CXI proviuder calcuation, the value from the CQ size will be used.
 
 The CQ fill percent can be used to define a threshold for when no new RDMA operations
 can be queued until the libfabric CQ a progressed thus draining hardware event queues.
+
+## Interrupting CXI Provider CQ Error Event Errno
+
+The following are the libfabric errno value which may be returned in an RDMA CQ error event.
+
+FI_ETRUNC: Receive message truncation.
+
+FI_EHOSTUNREACH: Target is unreachable. This is due to connectivity issues, such as downed
+links, between the two peers.
+
+FI_ENOTCONN: Cannot communicate due to no libfabric endpoint configure. In this case, the
+target NIC is reachable.
+
+FI_EIO: Catch all errno.
 
 # SEE ALSO
 
