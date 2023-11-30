@@ -25,6 +25,70 @@ static char *get_dom_name(int if_idx)
 	return dom;
 }
 
+TestSuite(getinfo_env_vars, .timeout = CXIT_DEFAULT_TIMEOUT);
+
+Test(getinfo_env_vars, default_tx_size)
+{
+	int ret;
+	struct fi_info *hints;
+	struct fi_info *info;
+	struct fi_info *iter;
+
+	ret = setenv("FI_CXI_DEFAULT_TX_SIZE", "17", 1);
+	cr_assert(ret == 0);
+
+	hints = fi_allocinfo();
+	cr_assert(hints);
+
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT;
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert(hints->fabric_attr->prov_name);
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
+			 NULL, NULL, cxit_flags, hints, &info);
+	cr_assert(ret == FI_SUCCESS);
+
+	iter = info;
+	while (iter) {
+		cr_assert(info->tx_attr->size == 17);
+		iter = iter->next;
+	}
+
+	fi_freeinfo(info);
+	fi_freeinfo(hints);
+}
+
+Test(getinfo_env_vars, default_rx_size)
+{
+	int ret;
+	struct fi_info *hints;
+	struct fi_info *info;
+	struct fi_info *iter;
+
+	ret = setenv("FI_CXI_DEFAULT_RX_SIZE", "17", 1);
+	cr_assert(ret == 0);
+
+	hints = fi_allocinfo();
+	cr_assert(hints);
+
+	hints->domain_attr->mr_mode = FI_MR_ENDPOINT;
+	hints->fabric_attr->prov_name = strdup("cxi");
+	cr_assert(hints->fabric_attr->prov_name);
+
+	ret = fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
+			 NULL, NULL, cxit_flags, hints, &info);
+	cr_assert(ret == FI_SUCCESS);
+
+	iter = info;
+	while (iter) {
+		cr_assert(info->rx_attr->size == 17);
+		iter = iter->next;
+	}
+
+	fi_freeinfo(info);
+	fi_freeinfo(hints);
+}
+
 TestSuite(getinfo, .init = cxit_setup_getinfo,
 	  .fini = cxit_teardown_getinfo, .timeout = CXIT_DEFAULT_TIMEOUT);
 
