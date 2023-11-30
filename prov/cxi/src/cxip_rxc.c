@@ -219,7 +219,7 @@ static void cxip_rxc_free_ux_entries(struct cxip_rxc *rxc)
 	dlist_foreach_container_safe(&rxc->sw_ux_list, struct cxip_ux_send,
 				     ux_send, rxc_entry, tmp) {
 		dlist_remove(&ux_send->rxc_entry);
-		if (ux_send->req->type == CXIP_REQ_RBUF)
+		if (ux_send->req && ux_send->req->type == CXIP_REQ_RBUF)
 			cxip_req_buf_ux_free(ux_send);
 		else
 			free(ux_send);
