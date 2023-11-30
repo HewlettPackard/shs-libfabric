@@ -2086,3 +2086,84 @@ Test(msg, av_user_id_domain_cap)
 	ret = fi_close(&cq->fid);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_close failed %d", ret);
 }
+
+TestSuite(hybrid_preemptive, .timeout = CXIT_DEFAULT_TIMEOUT);
+
+#define RX_SIZE 2U
+
+Test(hybrid_preemptive, posted_recv_preemptive)
+{
+	int ret;
+	int i;
+
+	ret = setenv("FI_CXI_HYBRID_POSTED_RECV_PREEMPTIVE", "1", 1);
+	cr_assert(ret == 0);
+
+	ret = setenv("FI_CXI_RX_MATCH_MODE", "hybrid", 1);
+	cr_assert(ret == 0);
+
+	cxit_fi_hints = cxit_allocinfo();
+	cr_assert(cxit_fi_hints);
+
+	cxit_fi_hints->rx_attr->size = RX_SIZE;
+
+	cxit_setup_msg();
+
+	/* Posting more receives than RX_SIZE should cause transition to
+	 * SW EP.
+	 */
+	for (i = 0; i < RX_SIZE + 1; i++) {
+		ret = fi_recv(cxit_ep, NULL, 0, NULL, FI_ADDR_UNSPEC, NULL);
+
+		if (i < RX_SIZE)
+			cr_assert(ret == FI_SUCCESS);
+		else
+			cr_assert(ret == -FI_EAGAIN);
+	}
+
+	while (ret == -FI_EAGAIN) {
+		fi_cq_read(cxit_rx_cq, NULL, 0);
+		ret = fi_recv(cxit_ep, NULL, 0, NULL, FI_ADDR_UNSPEC, NULL);
+	}
+
+	cr_assert(ret == FI_SUCCESS);
+
+	cxit_teardown_msg();
+}
+
+Test(hybrid_preemptive, unexpected_msg_preemptive)
+{
+	int ret;
+	int i;
+	struct cxip_ep *cxip_ep;
+
+	ret = setenv("FI_CXI_HYBRID_UNEXPECTED_MSG_PREEMPTIVE", "1", 1);
+	cr_assert(ret == 0);
+
+	ret = setenv("FI_CXI_RX_MATCH_MODE", "hybrid", 1);
+	cr_assert(ret == 0);
+
+	cxit_fi_hints = cxit_allocinfo();
+	cr_assert(cxit_fi_hints);
+
+	cxit_fi_hints->rx_attr->size = RX_SIZE;
+
+	cxit_setup_msg();
+
+	cxip_ep = container_of(&cxit_ep->fid, struct cxip_ep, ep.fid);
+
+	/* Posting more unexpected messages than RX_SIZE should cause
+	 * transition to SW EP.
+	 */
+	for (i = 0; i < RX_SIZE + 1; i++) {
+		ret = fi_send(cxit_ep, NULL, 0, NULL, cxit_ep_fi_addr, NULL);
+		cr_assert(ret == FI_SUCCESS);
+	}
+
+	while (cxip_ep->ep_obj->rxc.state != RXC_ENABLED_SOFTWARE)
+		fi_cq_read(cxit_rx_cq, NULL, 0);
+
+	cr_assert(ret == FI_SUCCESS);
+
+	cxit_teardown_msg();
+}
