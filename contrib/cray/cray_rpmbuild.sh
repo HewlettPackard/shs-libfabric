@@ -51,7 +51,7 @@ function build_dl_provider() {
 		./prov/${provider}/libfabric-${provider}.spec
 }
 
-configure_options="LDFLAGS=-Wl,--build-id --enable-only"
+configure_options="LDFLAGS=-Wl,--build-id --enable-only --enable-restricted-dl"
 
 rpmbuilddir=$PWD/rpmbuild
 
