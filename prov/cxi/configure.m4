@@ -11,6 +11,13 @@ dnl
 dnl $1: action if configured successfully
 dnl $2: action if not configured successfully
 dnl
+
+AM_CONDITIONAL([HAVE_PMI], [test "x$have_pmi" = "xtrue"])
+AM_CONDITIONAL([HAVE_ZE], [test "$have_ze" = "1" && test "$with_ze" != ""])
+AM_CONDITIONAL([HAVE_CUDA], [test "$have_cuda" = "1" && test "$with_cuda" != ""])
+AM_CONDITIONAL([HAVE_ROCR], [test "$have_rocr" = "1" && test "$with_rocr" != ""])
+
+
 AC_DEFUN([FI_CXI_CONFIGURE],[
 
 	cxi_happy=1
@@ -125,10 +132,6 @@ AC_DEFUN([FI_CXI_CONFIGURE],[
 				cxitest_LIBS="-lcriterion"
 				have_criterion=true])
 			AM_CONDITIONAL([HAVE_CRITERION], [test "x$have_criterion" = "xtrue"])
-			AM_CONDITIONAL([HAVE_PMI], [test "x$have_pmi" = "xtrue"])
-			AM_CONDITIONAL([HAVE_ZE], [test "$have_ze" = "1" && test "$with_ze" != ""])
-			AM_CONDITIONAL([HAVE_CUDA], [test "$have_cuda" = "1" && test "$with_cuda" != ""])
-			AM_CONDITIONAL([HAVE_ROCR], [test "$have_rocr" = "1" && test "$with_rocr" != ""])
 
 			AS_IF([test "$have_ze" = "1" && test "$with_ze" != "" && test x"$with_ze" != x"yes"],
 					[cxitest_CPPFLAGS="$cxitest_CPPFLAGS -I$with_ze/include"
