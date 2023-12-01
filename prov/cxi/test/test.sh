@@ -244,16 +244,9 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-# Test FI_CXI_DISABLE_TRIG_OP_LIMIT. The following criterion test should fail with this env var.
 test_file="cxitest-disable-trig-op-limit.tap"
 test="FI_CXI_ENABLE_TRIG_OP_LIMIT=0 ./cxitest -j 1 --verbose --filter=deferred_work_trig_op_limit/* --tap=${test_file} >> $TEST_OUTPUT 2>&1"
 echo "running: $test"
 eval $test
-if [[ $? -eq 0 ]]; then
-    echo "cxitest returned zero exit code"
-    echo "not ok - disable_trig_op_limit" > $test_file
-else
-    echo "ok - disable_trig_op_limit" > $test_file
-fi
 
 grep "Tested" $TEST_OUTPUT

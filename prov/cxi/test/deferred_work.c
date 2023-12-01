@@ -1040,6 +1040,40 @@ deferred_work_resources_teardown(struct deferred_work_resources *res)
 	fi_freeinfo(res->hints);
 }
 
+static bool triggered_ops_limited()
+{
+	static bool first = true;
+	static bool limited = false;
+
+	if (!first)
+		return limited;
+
+	char *s = getenv("FI_CXI_ENABLE_TRIG_OP_LIMIT");
+
+	if (!s)           /* variable not set/found */
+		goto not_limited;
+
+	char *endptr;
+	int i = strtol(s, &endptr, 10);
+
+	if (endptr == s)  /* no parsable integers */
+		goto not_limited;
+	if (!i)           /* set to 0 */
+		goto not_limited;
+
+	/* Some non-zero integer was parsed.
+	 * It still could be 10zebras, but we will count it.
+	 */
+
+	limited = true;
+
+ not_limited:
+
+	first = false;
+
+	return limited;
+}
+
 static void deferred_work_resources_init(struct deferred_work_resources *res,
 					 int service_id)
 {
@@ -1123,6 +1157,7 @@ Test(deferred_work_trig_op_limit, enforce_limit_single_thread)
 	struct fi_deferred_work work = {};
 	struct iovec iov = {};
 	struct fi_op_msg msg = {};
+	bool limited = triggered_ops_limited();
 
 	ret = cxil_open_device(0, &res.dev);
 	cr_assert_eq(ret, 0, "cxil_open_device failed: %d\n", ret);
@@ -1161,7 +1196,10 @@ Test(deferred_work_trig_op_limit, enforce_limit_single_thread)
 	}
 
 	ret = fi_control(&res.dom->fid, FI_QUEUE_WORK, &work);
-	cr_assert_eq(ret, -FI_ENOSPC, "FI_QUEUE_WORK failed %d", ret);
+	if (limited)
+		cr_assert_eq(ret, -FI_ENOSPC, "FI_QUEUE_WORK failed %d", ret);
+	else
+		cr_assert_eq(ret, FI_SUCCESS, "FI_QUEUE_WORK failed %d", ret);
 
 	cr_assert((fi_control(&res.dom->fid, FI_FLUSH_WORK, NULL) == FI_SUCCESS));
 
@@ -1189,6 +1227,7 @@ static void run_multi_process_dwq_test(int service_id)
 	struct fi_deferred_work work = {};
 	struct iovec iov = {};
 	struct fi_op_msg msg = {};
+	bool limited = triggered_ops_limited();
 
 	deferred_work_resources_init(&res, service_id);
 
@@ -1212,7 +1251,7 @@ static void run_multi_process_dwq_test(int service_id)
 	for (i = 0; i < count; i++) {
 		while (true) {
 			ret = fi_control(&res.dom->fid, FI_QUEUE_WORK, &work);
-			test_assert((ret == FI_SUCCESS) || (ret  == -FI_ENOSPC),
+			test_assert(((ret == FI_SUCCESS) && limited) || (ret  == -FI_ENOSPC),
 				    "FI_QUEUE_WORK failed %d", ret);
 
 			if (ret == -FI_ENOSPC)
@@ -1241,6 +1280,7 @@ Test(deferred_work_trig_op_limit, enforce_limit_multi_process)
 	int i;
 	bool found_max_in_use = false;
 	int num_forks = 5;
+	bool limited = triggered_ops_limited();
 
 	ret = cxil_open_device(0, &res.dev);
 	cr_assert_eq(ret, 0, "cxil_open_device failed: %d\n", ret);
@@ -1278,8 +1318,8 @@ Test(deferred_work_trig_op_limit, enforce_limit_multi_process)
 			break;
 		}
 	}
-
-	cr_assert_eq(found_max_in_use, true, "Triggered op limit exceeded\n");
+	if (limited)
+		cr_assert_eq(found_max_in_use, true, "Triggered op limit exceeded\n");
 
 	while ((ret = cxil_destroy_svc(res.dev, res.service_id)) == -EBUSY) {}
 	cr_assert(ret == 0, "cxil_destroy_svc failed: %d\n", ret);
