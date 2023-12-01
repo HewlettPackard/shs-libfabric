@@ -2424,6 +2424,18 @@ enum cxip_coll_state {
 	CXIP_COLL_STATE_FAULT,
 };
 
+/* Similar to C_RC_* provider errors, but pure libfabric */
+/* These should be in priority order, from lowest to highest */
+enum cxip_coll_prov_errno {
+	CXIP_PROV_ERRNO_OK = -1,		// good
+	CXIP_PROV_ERRNO_PTE = -2,		// PTE setup failure
+	CXIP_PROV_ERRNO_MCAST_INUSE = -3,	// multicast in-use
+	CXIP_PROV_ERRNO_HWROOT_INUSE = -4,	// hwroot in-use
+	CXIP_PROV_ERRNO_MCAST_INVALID = -5,	// multicast invalid
+	CXIP_PROV_ERRNO_HWROOT_INVALID = -6,	// hwroot invalid
+	CXIP_PROV_ERRNO_CURL = -7,		// CURL failure
+};
+
 /* Rosetta reduction engine error codes */
 typedef enum cxip_coll_rc {
 	CXIP_COLL_RC_SUCCESS = 0,		// good

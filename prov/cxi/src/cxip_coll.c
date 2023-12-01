@@ -2485,7 +2485,13 @@ union pack_mcast {
 		uint64_t mcast_addr: 16;// maximum anticipated multicast
 		uint64_t hwroot_idx: 27;// 128M endpoints in tree
 		uint64_t valid: 1;	// success flag
-		uint64_t pad2: 20;	// needed by zbcoll
+		uint64_t pad: 20;	// needed by zbcoll
+	} __attribute__((__packed__));
+	struct {
+		uint64_t error_bits: 43;// up to 43 independent errors
+		uint64_t valid1: 1;	// unused/reserved
+		uint64_t pad1: 20;	// unused/reserved
+
 	} __attribute__((__packed__));
 };
 
@@ -2522,6 +2528,39 @@ struct cxip_curl_mcast_usrptr {
 	int mcast_id;			// multicast address
 	int hwroot_rank;		// hardware root index
 };
+
+/* pack provider errors into AND bitmask - address data */
+void _proverr_to_bits(struct cxip_join_state *jstate)
+{
+	int bitno;
+
+	jstate->bcast_data.error_bits = 0L;
+	if (!jstate->bcast_data.valid) {
+		bitno = -jstate->prov_errno;
+		jstate->bcast_data.error_bits |= (1L << bitno);
+	}
+	/* invert bits, zbcoll reduce does AND */
+	jstate->bcast_data.error_bits ^= -1L;
+}
+
+/* unpack AND bitmask into dominant provider error */
+void _bits_to_proverr(struct cxip_join_state *jstate)
+{
+	int bitno;
+
+	/* invert bits, zbcoll reduce does AND */
+	jstate->bcast_data.error_bits ^= -1L;
+	if (jstate->bcast_data.valid) {
+		jstate->prov_errno = CXIP_PROV_ERRNO_OK;
+		return;
+	}
+	for (bitno = 42; bitno > 0; bitno--) {
+		if (jstate->bcast_data.error_bits &= (1 << bitno)) {
+			jstate->prov_errno = -bitno;
+			return;
+		}
+	}
+}
 
 /* Close collective pte object - ep_obj->lock must be held */
 static void _close_pte(struct cxip_coll_pte *coll_pte)
@@ -2639,8 +2678,7 @@ static struct fi_ops mc_ops = {
 
 /**
  * Utility routine to set up the collective framework in response to calls to
- * fi_join_collective(). Any failures are reported to all endpoints with
- * C_RC_PTLTE_NOT_FOUND as the prov_errno.
+ * fi_join_collective().
  *
  * If jstate->is_rank is true, this is a NETSIM model, which opens a PTE for
  * each call to fi_join_collective() that is bound to the multicast object
@@ -2873,6 +2911,7 @@ static void _cxip_create_mcast_cb(struct cxip_curl_handle *handle)
 		TRACE_JOIN("final index=%d\n", i);
 		if (i >= jstate->av_set_obj->fi_addr_cnt) {
 			TRACE_JOIN("multicast HWroot not found in av_set\n");
+			jstate->prov_errno = CXIP_PROV_ERRNO_HWROOT_INVALID;
 			break;
 		}
 		if (mcaddr >= 8192) {
@@ -2899,6 +2938,8 @@ static void _cxip_create_mcast_cb(struct cxip_curl_handle *handle)
 		TRACE_JOIN("ERRMSK SET CURL error %ld!\n", handle->status);
 		if (handle->response)
 			TRACE_JOIN("ERROR RESPONSE:\n%s\n", handle->response);
+		// TODO finer error differentiation from CURL errors
+		jstate->prov_errno = CXIP_PROV_ERRNO_CURL;
 		break;
 	}
 	free(curl_usrptr);
@@ -3017,18 +3058,34 @@ quit:
  * - FI_EAGAIN  - retries the same state
  * - other      - fails the join operation
  *
- * The prov_errno value is used to carry the state error, and is one of the
- * following:
+ * The bcast_data value is used to carry 64 bits of data.
+ * The prov_errno value records a local (speculative) error
+ * prov_errno is ignored if bcast_data.valid == true
  *
- * - C_RC_NO_EVENT              no error
- * - C_RC_INVALID_DFA_FORMAT    CURL multicast address request failed
- * - C_RC_PTLTE_NOT_FOUND       PtlTE could not be initialized
+ * getgroup:
+ *	acquires a group ID for zbcoll collectives
+ * broadcast (zbcoll rank 0):
+ *   if appropriate, starts CURL request, evaluates return
+ *   otherwise, assumes static initialization, sets return
+ *   on broadcast completion
+ *   - all endpoints share bcast_data from zbcoll rank 0
+ *   - prov_errno indicates an error if bcast_data.valid is false
+ *   - if bcast_data.valid, initializes a new MC object, new PTE if needed
+ *   - creation errors set bcast_data.valid false, set prov_errno
+ * reduce:
+ *   converts this endpoint prov_errno to bitmask
+ *   overwrites mcast_addr and hwcoll_idx in bcast_data with bitmask
+ *   bcast_data.valid remains unchanged
+ *   on reduce completion
+ *   - bitmask is bitwise OR of all error bits and address valid bit
+ *   - prov_errno is set to prioritized error code (0 if bcast_data.valid)
+ *   - all endpoints report the same completion status and error
  */
 
 /**
  * Join state machine.
  *
- * The state machine walks through the following functions in the order shown.
+ * The state machine walks through the following functions top-to-bottom.
  * If the return code is success, it advances to the next state.
  * If the return code is -FI_EAGAIN, it repeats the current state.
  * If the return code is anything else, the join operation fails.
@@ -3048,6 +3105,7 @@ static void _noop(void *ptr)
 	TRACE_JOIN("%s: entry\n", __func__);
 }
 
+/* get a zbcoll group identifier */
 static void _start_getgroup(void *ptr)
 {
 	struct cxip_join_state *jstate = ptr;
@@ -3074,6 +3132,10 @@ static void _finish_getgroup(void *ptr)
 	_append_sched(zb, jstate);	// _start_bcast
 }
 
+/* Create a multicast address and broadcast it to all endpoints.
+ * If jstate->create_mcast is set, this will use CURL to get an address.
+ * Otherwise, this presumes static initialization, and sets bcast_data.valid.
+ */
 static void _start_bcast(void *ptr)
 {
 	struct cxip_join_state *jstate = ptr;
@@ -3100,8 +3162,11 @@ static void _start_bcast(void *ptr)
 			goto quit;
 		}
 	}
+	/* speculative prov_errno for trap */
+	jstate->prov_errno = CXIP_PROV_ERRNO_CURL;
 	if (cxip_trap_search(jstate->mynode_idx, CXIP_TRAP_BCAST, &zb->error))
 		goto quit;
+	/* rank > 0 endpoints overwritten by rank = 0 data */
 	/* zb->error == FI_SUCCESS, -FI_EAGAIN, -FI_EINVAL */
 	zb->error = cxip_zbcoll_broadcast(zb, &jstate->bcast_data.uint64);
 quit:
@@ -3109,6 +3174,7 @@ quit:
 		_append_sched(zb, jstate);
 }
 
+/* Check broadcast validity, and if valid, set up the MC object */
 static void _finish_bcast(void *ptr)
 {
 	struct cxip_join_state *jstate = ptr;
@@ -3119,23 +3185,27 @@ static void _finish_bcast(void *ptr)
 	if (!jstate->bcast_data.valid)
 		goto quit;
 	/* error indicates that attempt to configure fails */
-	jstate->prov_errno = C_RC_PTLTE_NOT_FOUND;
+	jstate->prov_errno = CXIP_PROV_ERRNO_PTE;
 	if (cxip_trap_search(jstate->mynode_idx, CXIP_TRAP_INITPTE, &ret))
 		goto quit;
+	TRACE_JOIN("%s: continuing to configure\n", __func__);
 	ret = _initialize_mc(jstate);
 quit:
 	/* if initialization fails, invalidate bcast_data */
 	if (ret != FI_SUCCESS)
 		jstate->bcast_data.valid = false;
+	/* represent prov_errno values as inverted bitmask */
+	_proverr_to_bits(jstate);
 	_append_sched(zb, jstate);	// _start_reduce
 }
 
+/* Accumulate composite errors from different endpoints */
 static void _start_reduce(void *ptr)
 {
 	struct cxip_join_state *jstate = ptr;
 	struct cxip_zbcoll_obj *zb = jstate->zb;
 
-	/* reduce ANDs bcast_data, if any invalid, all become invalid */
+	/* reduce ANDs inverted bcast_data, if any invalid, all become invalid */
 	if (cxip_trap_search(jstate->mynode_idx, CXIP_TRAP_REDUCE, &zb->error))
 		goto quit;
 	/* zb->error == FI_SUCCESS, -FI_EAGAIN, -FI_EINVAL */
@@ -3145,6 +3215,7 @@ quit:
 		_append_sched(zb, jstate);
 }
 
+/* process error bits (if any) to produce an error condition */
 static void _finish_reduce(void *ptr)
 {
 	struct cxip_join_state *jstate = ptr;
@@ -3152,14 +3223,14 @@ static void _finish_reduce(void *ptr)
 
 	TRACE_JOIN("%s: entry\n", __func__);
 
-	/* if bcast_data is valid, we can clear the error */
-	if (jstate->bcast_data.valid)
-		jstate->prov_errno = C_RC_NO_EVENT;
+	/* re-invert bitmap, select common reported error */
+	_bits_to_proverr(jstate);
 
 	TRACE_JOIN("%s: prov_errno=0x%x\n", __func__, jstate->prov_errno);
 	_append_sched(zb, jstate);	// _start_cleanup
 }
 
+/* state machine cleanup */
 static void _start_cleanup(void *ptr)
 {
 	struct cxip_join_state *jstate = ptr;
@@ -3174,7 +3245,7 @@ static void _start_cleanup(void *ptr)
 				&jstate->mc_obj->mc_fid.fid : NULL;
 		entry.context = jstate->context;
 
-		if (jstate->prov_errno != C_RC_NO_EVENT) {
+		if (jstate->prov_errno != CXIP_PROV_ERRNO_OK) {
 			size = sizeof(struct fi_eq_err_entry);
 			entry.data = FI_JOIN_COMPLETE;
 			entry.err = -FI_EAVAIL;

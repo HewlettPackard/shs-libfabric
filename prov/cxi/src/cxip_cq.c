@@ -135,6 +135,22 @@ static const char *cxip_cq_strerror(struct fid_cq *cq, int prov_errno,
 				    const void *err_data, char *buf,
 				    size_t len)
 {
+	switch (prov_errno) {
+	case CXIP_PROV_ERRNO_OK:
+		return "CXIP_COLL_OK";
+	case CXIP_PROV_ERRNO_PTE:
+		return "CXIP_COLL_PTE_ERROR";
+	case CXIP_PROV_ERRNO_MCAST_INUSE:
+		return "CXIP_COLL_MCAST_IN_USE";
+	case CXIP_PROV_ERRNO_HWROOT_INUSE:
+		return "CXIP_COLL_HWROOT_IN_USE";
+	case CXIP_PROV_ERRNO_MCAST_INVALID:
+		return "CXIP_COLL_MCAST_INVALID";
+	case CXIP_PROV_ERRNO_HWROOT_INVALID:
+		return "CXIP_COLL_HWROOT_INVALID";
+	case CXIP_PROV_ERRNO_CURL:
+		return "CXIP_COLL_CURL_ERROR";
+	}
 	return cxi_rc_to_str(prov_errno);
 }
 

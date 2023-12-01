@@ -440,7 +440,7 @@ Test(coll_join, fail_ptlte) {
 	for (node = 0; node < 5; node++) {
 		cxip_trap_set(node, CXIP_TRAP_INITPTE, -FI_EFAULT);
 		_create_netsim_collective(5, true, FI_SUCCESS);
-		_wait_for_join(5, -FI_EAVAIL, C_RC_PTLTE_NOT_FOUND);
+		_wait_for_join(5, -FI_EAVAIL, CXIP_PROV_ERRNO_PTE);
 		_destroy_netsim_collective();
 		cxip_trap_close();
 	}
