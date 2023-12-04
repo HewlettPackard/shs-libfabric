@@ -177,6 +177,7 @@ export SFT_INSTALL_PATH="${ROOT_BUILD_PATH}/libfabric-sft/stable"
 export BATS_INSTALL_PATH="${ROOT_BUILD_PATH}/bats/stable/bin"
 export BATS_LOG_DIRECTORY="$WORKSPACE/logs"
 export IMB_BUILD_PATH="${ROOT_BUILD_PATH}/imb/v2019.6"
+export configure_opts="--enable-tcp --enable-udp --enable-rxm --enable-rxd --enable-hook_debug --enable-hook_hmem --enable-dmabuf_peer_mem --enable-only --enable-verbs  --enable-restricted-dl"
 # End pipeline variables
 
 # Start Prologue
@@ -197,7 +198,7 @@ if $BUILD ; then
 section_start 'build'
 # Start Build
 ./autogen.sh
-./configure --prefix=$LIBFABRIC_INSTALL_PATH
+./configure LDFLAGS=-Wl,--build-id --prefix=$LIBFABRIC_INSTALL_PATH $configure_opts
 make -j12
 make install
 # End Build
