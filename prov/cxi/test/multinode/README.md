@@ -77,10 +77,16 @@ A number of environment variables control the libfabric collective behavior:
 
 - **FI_CXI_COLL_JOB_ID** is an identifier unique to each job.
 
-- **FI_CXI_COLL_STEP_ID** is an identifier unique to each job-step.
+- **FI_CXI_COLL_JOB_STEP_ID** is an identifier unique to each job-step.
 
 - **FI_CXI_COLL_MCAST_TOKEN** is a security token used to authenticate the
 application to the fabric manager when using the REST API.
+
+- **FI_CXI_HWCOLL_ADDRS_PER_JOB** is the maximum number of multicast addresses
+  available to this job.
+
+- **FI_CXI_HWCOLL_MIN_NODES** is the minimum number of endpoints required to 
+support accelerated collectives.
 
 - **FI_CXI_COLL_FABRIC_MGR_URL** is the URL for the fabric manager REST API.
 

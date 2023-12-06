@@ -285,10 +285,12 @@ struct cxip_environment {
 	int cacheline_size;
 
 	char *coll_job_id;
-	char *coll_step_id;
+	char *coll_job_step_id;
 	size_t coll_timeout_usec;
 	char *coll_fabric_mgr_url;
-	char *coll_fabric_mgr_token;
+	char *coll_mcast_token;
+	size_t hwcoll_addrs_per_job;
+	size_t hwcoll_min_nodes;
 	int coll_use_dma_put;
 
 	char hostname[255];

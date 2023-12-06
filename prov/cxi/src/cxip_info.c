@@ -659,10 +659,12 @@ struct cxip_environment cxip_env = {
 	.rget_tc = FI_TC_UNSPEC,
 	.cacheline_size = CXIP_DEFAULT_CACHE_LINE_SIZE,
 	.coll_job_id = NULL,
-	.coll_step_id = NULL,
-	.coll_timeout_usec = 0,
+	.coll_job_step_id = NULL,
+	.coll_mcast_token = NULL,
+	.hwcoll_addrs_per_job = 0,
+	.hwcoll_min_nodes = -1,
 	.coll_fabric_mgr_url = NULL,
-	.coll_fabric_mgr_token = NULL,
+	.coll_timeout_usec = 0,
 	.coll_use_dma_put = false,
 	.telemetry_rgid = -1,
 	.disable_hmem_dev_register = 0,
@@ -1162,11 +1164,11 @@ static void cxip_env_init(void)
 	fi_param_get_str(&cxip_prov, "coll_job_id",
 			  &cxip_env.coll_job_id);
 
-	fi_param_define(&cxip_prov, "coll_step_id", FI_PARAM_STRING,
+	fi_param_define(&cxip_prov, "coll_job_step_id", FI_PARAM_STRING,
 		"Collective job-step identifier (default %s).",
-		cxip_env.coll_step_id);
-	fi_param_get_str(&cxip_prov, "coll_step_id",
-			  &cxip_env.coll_step_id);
+		cxip_env.coll_job_step_id);
+	fi_param_get_str(&cxip_prov, "coll_job_step_id",
+			  &cxip_env.coll_job_step_id);
 
 	fi_param_define(&cxip_prov, "coll_fabric_mgr_url", FI_PARAM_STRING,
 		"Fabric multicast REST API URL (default %s).",
@@ -1182,17 +1184,27 @@ static void cxip_env_init(void)
 		}
 	}
 
-	fi_param_define(&cxip_prov, "coll_fabric_mgr_token", FI_PARAM_STRING,
+	fi_param_define(&cxip_prov, "coll_mcast_token", FI_PARAM_STRING,
 		"Fabric multicast REST API TOKEN (default none).",
-		cxip_env.coll_fabric_mgr_token);
-	fi_param_get_str(&cxip_prov, "coll_fabric_mgr_token",
-			  &cxip_env.coll_fabric_mgr_token);
+		cxip_env.coll_mcast_token);
+	fi_param_get_str(&cxip_prov, "coll_mcast_token",
+			  &cxip_env.coll_mcast_token);
 
 	fi_param_define(&cxip_prov, "coll_use_dma_put", FI_PARAM_BOOL,
 		"Use DMA Put for collectives (default: %d).",
 		cxip_env.coll_use_dma_put);
 	fi_param_get_bool(&cxip_prov, "coll_use_dma_put",
 			  &cxip_env.coll_use_dma_put);
+
+	fi_param_define(&cxip_prov, "hwcoll_addrs_per_job", FI_PARAM_SIZE_T,
+		"Maximum hardware collective addresses allowed.");
+	fi_param_get_size_t(&cxip_prov, "hwcoll_addrs_per_job",
+			    &cxip_env.hwcoll_addrs_per_job);
+
+	fi_param_define(&cxip_prov, "hwcoll_min_nodes", FI_PARAM_SIZE_T,
+		"Minimum number of nodes required for hwcoll.");
+	fi_param_get_size_t(&cxip_prov, "hwcoll_min_nodes",
+			    &cxip_env.hwcoll_min_nodes);
 
 	fi_param_define(&cxip_prov, "coll_timeout_usec", FI_PARAM_SIZE_T,
 		"Nominal estimated compute cycle (usec) (default %d).",

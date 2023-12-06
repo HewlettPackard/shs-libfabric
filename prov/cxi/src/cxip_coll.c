@@ -2883,16 +2883,18 @@ static void _start_curl(void *ptr)
 	mac = NULL;
 
 	/* acquire the environment variables needed */
-	TRACE_JOIN("jobid  = %s\n", cxip_env.coll_job_id);
-	TRACE_JOIN("stepid = %s\n", cxip_env.coll_step_id);
-	TRACE_JOIN("fmurl  = %s\n", cxip_env.coll_fabric_mgr_url);
-	TRACE_JOIN("token  = %s\n", cxip_env.coll_fabric_mgr_token);
-	TRACE_JOIN("tmout  = %ld\n", cxip_env.coll_timeout_usec);
+	TRACE_JOIN("jobid   = %s\n", cxip_env.coll_job_id);
+	TRACE_JOIN("stepid  = %s\n", cxip_env.coll_job_step_id);
+	TRACE_JOIN("fmurl   = %s\n", cxip_env.coll_fabric_mgr_url);
+	TRACE_JOIN("token   = %s\n", cxip_env.coll_mcast_token);
+	TRACE_JOIN("maxadrs = %ld\n", cxip_env.hwcoll_addrs_per_job);
+	TRACE_JOIN("minnodes= %ld\n", cxip_env.hwcoll_min_nodes);
+	TRACE_JOIN("tmout   = %ld\n", cxip_env.coll_timeout_usec);
 
 	ret = -FI_EINVAL;
 	if (!cxip_env.coll_job_id ||
 	    !cxip_env.coll_fabric_mgr_url ||
-	    !cxip_env.coll_fabric_mgr_token) {
+	    !cxip_env.coll_mcast_token) {
 		TRACE_JOIN("Check environment variables\n");
 		goto quit;
 	}
@@ -2926,7 +2928,7 @@ static void _start_curl(void *ptr)
 	/* generate the CURL JSON request */
 	ret = asprintf(&jsonreq, json_fmt, mac,
 			cxip_env.coll_job_id,
-			cxip_env.coll_step_id,
+			cxip_env.coll_job_step_id,
 			cxip_env.coll_timeout_usec);
 	if (ret < 0)
 		goto quit;
@@ -2942,7 +2944,7 @@ static void _start_curl(void *ptr)
 	curl_usrptr->jstate = jstate;
 	if (cxip_trap_search(jstate->mynode_idx, CXIP_TRAP_CURLSND, &ret))
 		goto quit;
-	ret = cxip_curl_perform(url, jsonreq, cxip_env.coll_fabric_mgr_token, 0,
+	ret = cxip_curl_perform(url, jsonreq, cxip_env.coll_mcast_token, 0,
 				CURL_POST, false, _cxip_create_mcast_cb,
 				curl_usrptr);
 quit:

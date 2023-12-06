@@ -864,8 +864,10 @@ void frmwk_init(bool quiet)
 
 	/* Re-export these as libfabric equivalents */
 	setenv("FI_CXI_COLL_JOB_ID", frmwk_unique, 1);
-	setenv("FI_CXI_COLL_STEP_ID", "0", 1);
-	setenv("FI_CXI_COLL_MCAST_TOKEN", "what?", 1);
+	setenv("FI_CXI_COLL_JOB_STEP_ID", "0", 1);
+	setenv("FI_CXI_COLL_MCAST_TOKEN", "aaaaaa", 1);
+	setenv("FI_CXI_HWCOLL_MIN_NODES", "4", 1);
+	setenv("FI_CXI_HWCOLL_ADDRS_PER_JOB", "4", 1);
 	setenv("FI_CXI_COLL_FABRIC_MGR_URL", "what?", 1);
 
 	ret = 0;
