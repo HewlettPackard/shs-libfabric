@@ -426,6 +426,8 @@ done
 
 cd $DIR
 
+echo "Clearing output file: $(realpath $TEST_OUTPUT)"
+
 rm -f $TEST_OUTPUT
 touch $TEST_OUTPUT
 
