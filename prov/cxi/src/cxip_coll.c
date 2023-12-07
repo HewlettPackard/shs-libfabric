@@ -2727,7 +2727,6 @@ static int _initialize_mc(void *ptr)
 	mc_obj->rx_discard = jstate->rx_discard;
 	mc_obj->timeout.tv_sec = 1;
 	mc_obj->timeout.tv_nsec = 0;
-	mc_obj->tc = CXI_TC_BEST_EFFORT;
 	for (red_id = 0; red_id < CXIP_COLL_MAX_CONCUR; red_id++) {
 		struct cxip_coll_reduction *reduction;
 
@@ -2760,19 +2759,31 @@ static int _initialize_mc(void *ptr)
 
 	/* define the traffic class */
 	// TODO revisit for LOW_LATENCY
-	if (is_hw_root(mc_obj))
+	if (is_netsim(ep_obj)) {
+		/* NETSIM RANK model */
+		mc_obj->tc = CXI_TC_BEST_EFFORT;
 		mc_obj->tc_type = CXI_TC_TYPE_DEFAULT;
-	else if (is_netsim(ep_obj))
+	} else if (!jstate->is_mcast) {
+		/* UNICAST model */
+		mc_obj->tc = CXI_TC_BEST_EFFORT;
 		mc_obj->tc_type = CXI_TC_TYPE_DEFAULT;
-	else
+	} else if (is_hw_root(mc_obj)) {
+		/* MULTICAST model, hw_root */
+		mc_obj->tc = CXI_TC_BEST_EFFORT;
+		mc_obj->tc_type = CXI_TC_TYPE_DEFAULT;
+	} else {
+		/* MULTICAST model, leaves */
+		mc_obj->tc = CXI_TC_LOW_LATENCY;
 		mc_obj->tc_type = CXI_TC_TYPE_COLL_LEAF;
-
+	}
 	/* Set this now to instantiate cmdq CP */
 	cmdq = ep_obj->coll.tx_cmdq;
 	ret = cxip_txq_cp_set(cmdq, ep_obj->auth_key.vni,
 			      mc_obj->tc, mc_obj->tc_type);
-	if (ret)
+	if (ret) {
+		TRACE_JOIN("%s: cxip_txq_cp_set() = %d\n", __func__, ret);
 		goto fail;
+	}
 
 	/* index mc_obj by mcast_addr for fast lookup */
 	TRACE_JOIN("mc addr=%d obj=%p\n", mc_obj->mcast_addr, mc_obj);
