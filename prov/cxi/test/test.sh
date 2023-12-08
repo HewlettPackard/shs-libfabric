@@ -100,7 +100,7 @@ fc_eq_20_percent_test=(
 	"FI_CXI_CQ_FILL_PERCENT=20 FI_CXI_DEFAULT_CQ_SIZE=64 FI_CXI_DISABLE_EQ_HUGETLB=1 FI_CXI_RDZV_GET_MIN=0 FI_CXI_RDZV_THRESHOLD=2048 ./cxitest --filter=\"msg/fc_no_eq_space_expected_multi_recv\" --verbose -j 1 --tap=cxitest-fc-20%-eq-space.tap")
 
 fi_info_test=(
-	"FI_CXI_DEVICE_NAME=\"cxi1\" ../../../util/fi_info -p cxi")
+	"./fi_info_test.sh --tap=fi_info.tap")
 
 unoptimized_mr_test=(
 	"FI_CXI_OPTIMIZED_MRS=0 ./cxitest --filter=\"amo_hybrid_mr_desc/*\" -j 1 -f --verbose --tap=cxitest-hybrid_mr_desc_unopt_mrs.tap")

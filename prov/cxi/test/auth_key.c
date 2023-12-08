@@ -2240,7 +2240,7 @@ static struct fid_fabric *fab;
 static struct fid_domain *dom;
 static struct fid_cq *cq;
 static struct fid_av *av;
-static uint64_t rx_mr_buf;
+static volatile uint64_t rx_mr_buf;
 static struct fid_mr *rx_mr;
 static struct fid_ep *rx_ep;
 static fi_addr_t auth_keys[NUM_VNIS];
@@ -2254,7 +2254,7 @@ static struct fid_domain *tx_dom;
 static struct fid_cq *tx_cq;
 static struct fid_av *tx_av;
 static struct fid_ep *tx_ep[NUM_TX_EPS];
-static uint64_t tx_mr_buf[NUM_TX_EPS];
+static volatile uint64_t tx_mr_buf[NUM_TX_EPS];
 static struct fid_mr *tx_mr[NUM_TX_EPS];
 static fi_addr_t target_addr;
 
@@ -2809,7 +2809,7 @@ Test(data_transfer_av_auth_key, rma_write_successful_transfer)
 {
 	int i;
 	int ret;
-	uint64_t rma_value;
+	volatile uint64_t rma_value;
 
 	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false, false);
 	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
@@ -2820,13 +2820,15 @@ Test(data_transfer_av_auth_key, rma_write_successful_transfer)
 	for (i = 0; i < NUM_TX_EPS; i++) {
 		rma_value = i + 1;
 
-		ret = fi_write(tx_ep[i], &rma_value, sizeof(rma_value), NULL,
+		ret = fi_write(tx_ep[i],
+			       (void *) &rma_value, sizeof(rma_value), NULL,
 			       target_addr, 0, fi_mr_key(rx_mr), NULL);
 		cr_assert_eq(ret, FI_SUCCESS, "fi_write failed: %d", ret);
 
 		while (rx_mr_buf != rma_value) {}
 
-		ret = fi_write(rx_ep, &rma_value, sizeof(rma_value), NULL,
+		ret = fi_write(rx_ep,
+			       (void *) &rma_value, sizeof(rma_value), NULL,
 			       init_addrs[i], 0, fi_mr_key(tx_mr[i]), NULL);
 		cr_assert_eq(ret, FI_SUCCESS, "fi_write failed: %d", ret);
 
@@ -2841,7 +2843,7 @@ Test(data_transfer_av_auth_key, rma_read_successful_transfer)
 {
 	int i;
 	int ret;
-	uint64_t rma_value;
+	volatile uint64_t rma_value;
 
 	av_auth_key_test_rx_ep_init(false, NUM_VNIS, false, false);
 	av_auth_key_test_tx_ep_init(NUM_TX_EPS);
@@ -2852,14 +2854,16 @@ Test(data_transfer_av_auth_key, rma_read_successful_transfer)
 	for (i = 0; i < NUM_TX_EPS; i++) {
 		rx_mr_buf = i + 1;
 
-		ret = fi_read(tx_ep[i], &rma_value, sizeof(rma_value), NULL,
+		ret = fi_read(tx_ep[i],
+			      (void *) &rma_value, sizeof(rma_value), NULL,
 			      target_addr, 0, fi_mr_key(rx_mr), NULL);
 		cr_assert_eq(ret, FI_SUCCESS, "fi_read failed: %d", ret);
 
 		while (rx_mr_buf != rma_value) {}
 
 		tx_mr_buf[i] = i + 1;
-		ret = fi_read(rx_ep, &rma_value, sizeof(rma_value), NULL,
+		ret = fi_read(rx_ep,
+			      (void *) &rma_value, sizeof(rma_value), NULL,
 			       init_addrs[i], 0, fi_mr_key(tx_mr[i]), NULL);
 		cr_assert_eq(ret, FI_SUCCESS, "fi_read failed: %d", ret);
 
