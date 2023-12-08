@@ -2449,6 +2449,7 @@ void _proverr_to_bits(struct cxip_join_state *jstate)
 {
 	int bitno;
 
+	/* record error as a bit for this endpoint */
 	jstate->bcast_data.error_bits = 0L;
 	if (!jstate->bcast_data.valid) {
 		bitno = -jstate->prov_errno;
@@ -2463,18 +2464,23 @@ void _bits_to_proverr(struct cxip_join_state *jstate)
 {
 	int bitno;
 
-	/* invert bits, zbcoll reduce does AND */
+	/* zbcoll reduce does AND, invert bits */
 	jstate->bcast_data.error_bits ^= -1L;
+
+	/* if data is valid, bits do not represent errors */
 	if (jstate->bcast_data.valid) {
 		jstate->prov_errno = CXIP_PROV_ERRNO_OK;
 		return;
 	}
-	for (bitno = 42; bitno > 0; bitno--) {
-		if (jstate->bcast_data.error_bits &= (1 << bitno)) {
+
+	/* bits set represent multiple errors from endpoints */
+	for (bitno = -CXIP_PROV_ERRNO_OK; bitno < -CXIP_PROV_ERRNO_LAST; bitno++) {
+		if (jstate->bcast_data.error_bits & (1 << bitno)) {
 			jstate->prov_errno = -bitno;
-			return;
+			CXIP_WARN("join error %d seen\n", jstate->prov_errno);
 		}
 	}
+	/* returns most significant of multiple errors as jstate->prov_errno */
 }
 
 /* Close collective pte object - ep_obj->lock must be held */

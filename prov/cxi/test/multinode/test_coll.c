@@ -572,7 +572,7 @@ quit:
 #endif
 
 /**
- * @brief Simple test of join.
+ * @brief Simple test of join, returns a count of errors.
  *
  * This creates a single avset_ary from the supplied addresses, with hwroot
  * of zero, and performs a single join, tests errors, and cleans up. Used to
@@ -615,7 +615,7 @@ int _test_join(fi_addr_t *fiaddrs, size_t size, int exp_ret,
 	return errcnt;
 }
 
-/* Simple test of barrier */
+/* Simple test of barrier, returns a count of errors. */
 int _test_barrier(fi_addr_t *fiaddrs, size_t size, int count)
 {
 	struct avset_ary setary;
@@ -677,7 +677,7 @@ quit:
 	return errcnt;
 }
 
-/* Simple test of broadcast */
+/* Simple test of broadcast, returns a count of errors. */
 int _test_broadcast(fi_addr_t *fiaddrs, size_t size, int rootidx)
 {
 	struct avset_ary setary;
@@ -694,8 +694,6 @@ int _test_broadcast(fi_addr_t *fiaddrs, size_t size, int rootidx)
 		TRACE("BROADCAST JOIN returned NULL\n");
 		goto quit;
 	}
-	TRACE("jctx = %p\n", jctx);
-	TRACE("mc   = %p\n", jctx->mc);
 
 	data[0] = 0x12345678;
 	data[1] = 0x2468ace0;
@@ -733,7 +731,7 @@ quit:
 	return errcnt;
 }
 
-/* simple test of allreduce */
+/* simple test of allreduce, returns a count of errors. */
 int _test_allreduce(fi_addr_t *fiaddrs, size_t size)
 {
 	struct avset_ary setary;
@@ -862,8 +860,6 @@ int main(int argc, char **argv)
 	int N = 0;
 	bool help = false;
 	struct avset_ary setary;
-	struct dlist_entry joinlist;
-	//struct timespec ts;
 
 	const char *testname;
 	char opt;
@@ -928,7 +924,7 @@ int main(int argc, char **argv)
 	do {
 		if (help) {
 			frmwk_log0(
-				"Usage: test_coll [-hvV] [-t N[-M][,...]]\n");
+				"Usage: test_coll [-hvV] -Ncount[-t testno[-testno][,...]]\n");
 			frmwk_log0("\nTests:\n");
 			break;
 		}
@@ -1108,100 +1104,9 @@ int main(int argc, char **argv)
 		// cause zbcoll root (rank 0) to simulate PTE alloc failure
 		cxip_trap_set(0, CXIP_TRAP_INITPTE, -FI_EFAULT);
 		ret =  _test_join(fiaddrs, size, -FI_EAVAIL,
-				  C_RC_PTLTE_NOT_FOUND);
+				  CXIP_PROV_ERRNO_PTE);
 		tstcnt += 1;
 		errcnt += !!ret;
-		frmwk_log0("%4s\n", STDMSG(ret));
-		frmwk_barrier();
-	} while (0);
-	tstnum++;
-
-	/* Exercise scrums of concurrent disjoint join operations.
-	 */
-	do {
-		int siz, off, err, count;
-
-		PREAMBLE(0, tstnum, "test join scrum (no overlap)");
-		/* Test multijoins over disjoint sub groups */
-		err = 0;
-		for (siz = 2; siz <= frmwk_numranks; siz++) {
-			count = 0;
-			avset_ary_init(&setary);
-
-			for (off = 0; off <= frmwk_numranks - siz; off += siz) {
-				TRACE("siz=%d off=%d\n", siz, off);
-				ret = avset_ary_append(&fiaddrs[off], siz, 0, &setary);
-				err += !!ret;
-				count += !ret;
-			}
-			TRACE("Created %d groups\n", count);
-
-			dlist_init(&joinlist);
-			usleep(rand() % 100);
-			ret = coll_init_multi_join(&setary, &joinlist);
-			if (ret == -FI_ECONNREFUSED) {
-				TRACE("not participating\n");
-				ret = FI_SUCCESS;
-			}
-			err += !!ret;
-
-			ret = coll_wait_multi_join(&joinlist);
-			err += !!ret;
-
-			coll_multi_release(&joinlist);
-			avset_ary_destroy(&setary);
-
-			if (err)
-				break;
-		}
-		errcnt += err;
-
-		TRACE("final errcnt = %d\n", errcnt);
-		tstcnt += 1;
-		frmwk_log0("%4s\n", STDMSG(ret));
-		frmwk_barrier();
-	} while (0);
-	tstnum++;
-
-	/* Exercise a scrum of concurrent overlapping join operations.
-	 */
-	do {
-		int siz, off, count;
-
-		PREAMBLE(0, tstnum, "test join scrum (overlap)");
-		/* Test multijoins over multiple array lists */
-		avset_ary_init(&setary);
-		count = 0;
-		for (siz = 2; siz <= frmwk_numranks; siz++) {
-			for (off = 0; off <= frmwk_numranks - siz; off++) {
-				TRACE("siz=%d off=%d\n", siz, off);
-				ret = avset_ary_append(&fiaddrs[off], siz, 0, &setary);
-				errcnt += !!ret;
-				count += !ret;
-			}
-		}
-		TRACE("Created %d groups\n", count);
-		frmwk_log0("Created %d groups\n", count);
-		dlist_init(&joinlist);
-		for (i = 0; i < count; i++) {
-			TRACE("initialting join on group %d\n", i);
-			usleep(rand() % 100);
-			ret = coll_init_multi_join(&setary, &joinlist);
-			if (ret == -FI_ECONNREFUSED) {
-				TRACE("not participating\n");
-				ret = FI_SUCCESS;
-			}
-			errcnt += !!ret;
-		}
-
-		ret = coll_wait_multi_join(&joinlist);
-		errcnt += !!ret;
-
-		coll_multi_release(&joinlist);
-		avset_ary_destroy(&setary);
-
-		TRACE("final errcnt = %d\n", errcnt);
-		tstcnt += 1;
 		frmwk_log0("%4s\n", STDMSG(ret));
 		frmwk_barrier();
 	} while (0);

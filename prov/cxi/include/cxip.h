@@ -2436,6 +2436,7 @@ enum cxip_coll_prov_errno {
 	CXIP_PROV_ERRNO_MCAST_INVALID = -5,	// multicast invalid
 	CXIP_PROV_ERRNO_HWROOT_INVALID = -6,	// hwroot invalid
 	CXIP_PROV_ERRNO_CURL = -7,		// CURL failure
+	CXIP_PROV_ERRNO_LAST = -8,		// last error code (unused)
 };
 
 /* Rosetta reduction engine error codes */
