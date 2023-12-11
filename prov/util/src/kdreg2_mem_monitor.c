@@ -42,8 +42,7 @@
 #define INFINITE_TIMEOUT -1
 
 static int kdreg2_monitor_subscribe(struct ofi_mem_monitor *monitor,
-				    const void *addr,
-				    size_t len,
+				    const void *addr, size_t len,
 				    union ofi_mr_hmem_info *hmem_info)
 {
 	struct ofi_kdreg2 *kdreg2 = container_of(monitor,
@@ -93,18 +92,10 @@ static bool kdreg2_monitor_valid(struct ofi_mem_monitor *monitor,
 						 struct ofi_kdreg2,
 						 monitor);
 
-	return !kdreg2_mapping_changed(kdreg2->status_data,
-				       &entry->hmem_info.kdreg2.monitoring_params);
-}
+	struct kdreg2_monitoring_params *params =
+		&entry->hmem_info.kdreg2.monitoring_params;
 
-static void kdreg2_evictor_cleanup(void *arg)
-{
-	/* It's possible that we kill the evictor while it holds
-	 * one or both of the mm locks.
-	 */
-
-	pthread_mutex_unlock(&mm_lock);
-	pthread_rwlock_unlock(&mm_list_rwlock);
+	return !kdreg2_mapping_changed(kdreg2->status_data, params);
 }
 
 static int kdreg2_read_evictions(struct ofi_kdreg2 *kdreg2)
@@ -138,19 +129,6 @@ static int kdreg2_read_evictions(struct ofi_kdreg2 *kdreg2)
 		switch (event.type) {
 		case KDREG2_EVENT_MAPPING_CHANGE:
 
-			/* pthread_cancel() is employed to stop this thread.
-			 * Since functions called by ofi_monitor_notify() may
-			 * be cancellation points, we need to push a cleanup
-			 * function onto the stack to release the rwlock and
-			 * mutex.
-			 *
-			 * Note: pthread_rwlock_rdlock(), pthread_mutex_lock()
-			 * and their unlock() counterparts are not cancellation
-			 * points.
-			 */
-
-			pthread_cleanup_push(kdreg2_evictor_cleanup, kdreg2);
-
 			pthread_rwlock_rdlock(&mm_list_rwlock);
 			pthread_mutex_lock(&mm_lock);
 
@@ -160,8 +138,6 @@ static int kdreg2_read_evictions(struct ofi_kdreg2 *kdreg2)
 
 			pthread_mutex_unlock(&mm_lock);
 			pthread_rwlock_unlock(&mm_list_rwlock);
-
-			pthread_cleanup_pop(0);
 
 			break;
 
@@ -174,21 +150,41 @@ static int kdreg2_read_evictions(struct ofi_kdreg2 *kdreg2)
 	return 0;
 }
 
+static void kdreg2_close_pipe(struct ofi_kdreg2 *kdreg2)
+{
+	close(kdreg2->exit_pipe[0]);
+	close(kdreg2->exit_pipe[1]);
+	kdreg2->exit_pipe[0] = -1;
+	kdreg2->exit_pipe[1] = -1;
+}
+
+static void kdreg2_close_fd(struct ofi_kdreg2 *kdreg2)
+{
+	close(kdreg2->fd);
+	kdreg2->fd = -1;
+	kdreg2->status_data = NULL;
+}
+
 static void *kdreg2_evictor(void *arg)
 {
 	struct ofi_kdreg2 *kdreg2 = (struct ofi_kdreg2 *) arg;
 	int ret;
 
-	struct pollfd pollfd = {
-		.fd = kdreg2->fd,
-		.events = POLLIN,
+	struct pollfd pollfd[2] = {
+		{
+			.fd = kdreg2->fd,
+			.events = POLLIN,
+		},
+		{	.fd = kdreg2->exit_pipe[0],
+			.events = POLLIN,
+		},
 	};
 
 	while (1) {
 
 		/* wait until there are events to read */
 
-		int n = poll(&pollfd, 1, INFINITE_TIMEOUT);
+		int n = poll(pollfd, 2, INFINITE_TIMEOUT);
 
 		if (0 == n)           /* timeout(?) */
 			continue;
@@ -201,6 +197,12 @@ static void *kdreg2_evictor(void *arg)
 				ret = -errno;
 				goto error_ret;
 			}
+		}
+
+		/* look for exit message on second fd */
+		if (pollfd[1].revents) {
+			ret = 0;
+			goto error_ret;
 		}
 
 		ret = kdreg2_read_evictions(kdreg2);
@@ -228,13 +230,22 @@ static int kdreg2_monitor_start(struct ofi_mem_monitor *monitor)
 
 	ofi_atomic_initialize64(&kdreg2->next_cookie, 1);
 
+	ret = pipe(kdreg2->exit_pipe);
+	if (ret) {
+		FI_WARN(&core_prov, FI_LOG_MR,
+			"Failed to create pipe for kdreg2: %s\n",
+			strerror(errno));
+		return -errno;
+	}
+
 	kdreg2->fd = open(KDREG2_DEVICE_NAME, O_RDWR);
 
 	if (kdreg2->fd < 0) {
 		FI_WARN(&core_prov, FI_LOG_MR,
-			"Failed to open %s for monitor kdreg2: %d.\n",
-			KDREG2_DEVICE_NAME, errno);
-		return -errno;
+			"Failed to open %s for monitor kdreg2: %s.\n",
+			KDREG2_DEVICE_NAME, strerror(errno));
+		ret = -errno;
+		goto close_pipe;
 	}
 
 	/* configure the monitor with the maximum number of entries */
@@ -242,7 +253,7 @@ static int kdreg2_monitor_start(struct ofi_mem_monitor *monitor)
 	config_data.max_regions = cache_params.max_cnt;
 	if (!config_data.max_regions) {
 		ret = -FI_ENOSPC;
-		goto exit_close;
+		goto close_fd;
 	}
 
 	ret = ioctl(kdreg2->fd, KDREG2_IOCTL_CONFIG_DATA, &config_data);
@@ -251,7 +262,7 @@ static int kdreg2_monitor_start(struct ofi_mem_monitor *monitor)
 			"Failed to get module config data for kdreg2 monitor: %d.\n",
 			errno);
 		ret = -errno;
-		goto exit_close;
+		goto close_fd;
 	}
 
 	/* Configuring the monitor allocates the status data.  Save the address. */
@@ -267,7 +278,7 @@ static int kdreg2_monitor_start(struct ofi_mem_monitor *monitor)
 		FI_WARN(&core_prov, FI_LOG_MR,
 			"Failed to start thread for kdreg2 monitor: %d.\n",
 			ret);
-		goto exit_close;
+		goto close_fd;
 	}
 
 	FI_INFO(&core_prov, FI_LOG_MR,
@@ -275,10 +286,13 @@ static int kdreg2_monitor_start(struct ofi_mem_monitor *monitor)
 
 	return 0;
 
-exit_close:
+close_fd:
 
-	close(kdreg2->fd);
-	kdreg2->fd = -1;
+	kdreg2_close_fd(kdreg2);
+
+close_pipe:
+
+	kdreg2_close_pipe(kdreg2);
 
 	FI_WARN(&core_prov, FI_LOG_MR,
 		"Kdreg2 memory monitor failed to start: %i.\n", ret);
@@ -288,6 +302,8 @@ exit_close:
 
 static void kdreg2_monitor_stop(struct ofi_mem_monitor *monitor)
 {
+	ssize_t   num_written;
+
 	struct ofi_kdreg2 *kdreg2 = container_of(monitor,
 						 struct ofi_kdreg2,
 						 monitor);
@@ -296,12 +312,22 @@ static void kdreg2_monitor_stop(struct ofi_mem_monitor *monitor)
 	if (kdreg2->fd < 0)
 		return;
 
-	pthread_cancel(kdreg2->thread);
+	num_written = write(kdreg2->exit_pipe[1], "X", 1);
+	if (num_written != 1) {
+		FI_WARN(&core_prov, FI_LOG_MR,
+			"Unable to write to kdreg2 exit pipe: %s\n",
+			strerror(errno));
+		/* We could call pthread cancel here.  The thread
+		 * has probably already exited.  Cancelling would be
+		 * benign.  But calling join on an exited thread is
+		 * also legal.
+		 */
+	}
+
 	pthread_join(kdreg2->thread, NULL);
 
-	close(kdreg2->fd);
-	kdreg2->fd = -1;
-	kdreg2->status_data = NULL;
+	kdreg2_close_fd(kdreg2);
+	kdreg2_close_pipe(kdreg2);
 
 	FI_INFO(&core_prov, FI_LOG_MR,
 		"Kdreg2 memory monitor stopped.\n");
@@ -323,7 +349,7 @@ static void kdreg2_monitor_unsubscribe(struct ofi_mem_monitor *monitor,
 {
 }
 
-static bool kdreg2_monitor_valid(struct ofi_mem_monitor *notifier,
+static bool kdreg2_monitor_valid(struct ofi_mem_monitor *monitor,
 				 const struct ofi_mr_info *info,
 				 struct ofi_mr_entry *entry)
 {
@@ -352,6 +378,7 @@ static struct ofi_kdreg2 kdreg2_mm = {
 	.monitor.unsubscribe = kdreg2_monitor_unsubscribe,
 	.monitor.valid       = kdreg2_monitor_valid,
 	.fd                  = -1,
+	.exit_pipe           = { -1, -1 },
 	.status_data         = NULL,
 };
 

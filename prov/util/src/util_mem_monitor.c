@@ -187,6 +187,8 @@ static struct ofi_mem_monitor *find_monitor(const char *name)
 		  .monitor = uffd_monitor },
 		{ .name = "memhooks",
 		  .monitor = memhooks_monitor },
+		{ .name = "kdreg2",
+		  .monitor = kdreg2_monitor },
 		{ .name = "disabled",
 		  .monitor = NULL
 		},
@@ -215,6 +217,7 @@ void ofi_monitors_init(void)
 
 	uffd_monitor->init(uffd_monitor);
 	memhooks_monitor->init(memhooks_monitor);
+	kdreg2_monitor->init(kdreg2_monitor);
 	cuda_monitor->init(cuda_monitor);
 	cuda_ipc_monitor->init(cuda_ipc_monitor);
 	rocr_monitor->init(rocr_monitor);
@@ -238,10 +241,12 @@ void ofi_monitors_init(void)
 	fi_param_define(NULL, "mr_cache_monitor", FI_PARAM_STRING,
 			"Define a default memory registration monitor."
 			" The monitor checks for virtual to physical memory"
-			" address changes.  Options are: userfaultfd, memhooks"
-			" and disabled.  Userfaultfd is a Linux kernel feature."
-			" Memhooks operates by intercepting memory allocation"
-			" and free calls."
+			" address changes.  Options are:"
+			" kdreg2, memhooks, userfaultfd and disabled."
+			" Kdreg2 is supplied as a loadable Linux kernel module."
+			" Memhooks operates by"
+			" intercepting memory allocation and free calls."
+			" Userfaultfd is a Linux kernel feature."
 			" '" MR_CACHE_MONITOR_DEFAULT "'"
 			" is the default if available on the system."
 			" The 'disabled' option disables memory caching.");
@@ -297,6 +302,7 @@ void ofi_monitors_cleanup(void)
 {
 	uffd_monitor->cleanup(uffd_monitor);
 	memhooks_monitor->cleanup(memhooks_monitor);
+	kdreg2_monitor->cleanup(kdreg2_monitor);
 	cuda_monitor->cleanup(cuda_monitor);
 	rocr_monitor->cleanup(rocr_monitor);
 	ze_monitor->cleanup(ze_monitor);

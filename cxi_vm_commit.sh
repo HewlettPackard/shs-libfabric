@@ -49,7 +49,9 @@ set -e
 	--with-criterion=$(realpath ../Criterion/build/install/) \
 	--with-cassini-headers=$(realpath ../cassini-headers/install) \
 	--with-cxi-uapi-headers=$(realpath ../cxi-driver) \
-	--enable-cxi=$(realpath ../libcxi/install)
+	--enable-cxi=$(realpath ../libcxi/install) \
+	--with-kdreg2=$(realpath ../kdreg2/include)
+
 
 make clean
 make -j 8 install
