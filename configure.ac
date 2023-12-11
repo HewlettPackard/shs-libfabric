@@ -2,7 +2,7 @@ dnl
 dnl Copyright (c) 2016 Cisco Systems, Inc.  All rights reserved.
 dnl Copyright (c) 2019-2021 Intel, Inc.  All rights reserved.
 dnl Copyright (c) 2019-2020 Amazon.com, Inc. or its affiliates. All rights reserved.
-dnl (C) Copyright 2020 Hewlett Packard Enterprise Development LP
+dnl (C) Copyright 2020-2023 Hewlett Packard Enterprise Development LP
 dnl Copyright (c) 2022 DataDirect Networks, Inc. All rights reserved.
 dnl Copyright (c) 2023 Tactical Computing Labs, LLC. All rights reserved.
 dnl
@@ -852,6 +852,31 @@ AC_ARG_ENABLE([uffd-monitor],
 AC_DEFINE_UNQUOTED(ENABLE_UFFD_MONITOR, [$enable_uffd],
 	[Define to 1 to enable uffd memory monitor])
 
+
+dnl Set the default monitor
+
+default_monitor=memhooks
+AC_ARG_WITH([default-monitor],
+	[AS_HELP_STRING([--with-default-monitor=<memhooks|uffd|disabled>],
+			[Select the default memory monitor.])],
+	[AS_CASE([$with_default_monitor],
+		[memhooks],[default_monitor=memhooks],
+		[uffd],[default_monitor=uffd],
+		[disabled], [default_monitor=disabled],
+		[AC_MSG_ERROR([Unknown monitor specified: $with_default_monitor.  Choices are memhooks, uffd, or disabled.])])
+	],
+	[])
+
+bad_default=0
+AS_CASE([$default_monitor],
+	[memhooks], [AS_IF([test "$enable_memhooks" != "1"], [bad_default=1])],
+	[uffd], [AS_IF([test "$enable_uffd" != "1"], [bad_default=1])],
+	[])
+
+AS_IF([test "$bad_default" != "0"],
+	    [AC_MSG_ERROR(["Default memory monitor is not available: $default_monitor."])])
+
+AC_DEFINE_UNQUOTED([MR_CACHE_MONITOR_DEFAULT], ["$default_monitor"], [Default memory monitor])
 
 AH_BOTTOM([
 #if defined(__linux__) && (defined(__x86_64__) || defined(__amd64__) || defined(__aarch64__) || (defined(__riscv) && __riscv_xlen == 64)) && ENABLE_MEMHOOKS_MONITOR

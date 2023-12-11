@@ -3,7 +3,7 @@
  * Copyright (c) 2017-2021 Intel Inc. All rights reserved.
  * Copyright (c) 2019-2021 Amazon.com, Inc. or its affiliates.
  *                         All rights reserved.
- * (C) Copyright 2020 Hewlett Packard Enterprise Development LP
+ * (C) Copyright 2020-2023 Hewlett Packard Enterprise Development LP
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -132,7 +132,8 @@ static int ofi_monitors_update(struct ofi_mem_monitor **monitors)
 				monitor->state = FI_MM_STATE_IDLE;
 				FI_WARN(&core_prov, FI_LOG_MR,
 					"Failed to start %s memory monitor: %s\n",
-					fi_tostr(&iface, FI_TYPE_HMEM_IFACE), fi_strerror(-ret));
+					fi_tostr(&iface, FI_TYPE_HMEM_IFACE),
+					fi_strerror(-ret));
 
 				goto out;
 			}
@@ -162,6 +163,45 @@ void ofi_monitor_cleanup(struct ofi_mem_monitor *monitor)
 {
 	assert(dlist_empty(&monitor->list));
 	assert(monitor->state == FI_MM_STATE_IDLE);
+}
+
+static struct ofi_mem_monitor *find_monitor(const char *name)
+{
+	/* Note: this array can not be static as the monitor pointers
+	 * may not be initialized.
+	 *
+	 * Note 2: the userfaultfd monitor is unfortunately referenced
+	 * by 2 names:
+	 *   --disable-uffd-monitor in the configure script
+	 *   environment variable FI_MR_CACHE_MONITOR = userfaultfd
+	 * This code accepts both.
+	 */
+
+	struct {
+		const char             *name;
+		struct ofi_mem_monitor *monitor;
+	} monitor_values[] = {
+		{ .name = "userfaultfd",
+		  .monitor = uffd_monitor },
+		{ .name = "uffd",
+		  .monitor = uffd_monitor },
+		{ .name = "memhooks",
+		  .monitor = memhooks_monitor },
+		{ .name = "disabled",
+		  .monitor = NULL
+		},
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(monitor_values); i++) {
+		if (strcmp(name, monitor_values[i].name))
+			continue;
+		return monitor_values[i].monitor;
+	}
+
+	FI_WARN(&core_prov, FI_LOG_MR,
+		"Memory monitor not found: %s.\n", name);
+
+	return NULL;
 }
 
 /*
@@ -201,9 +241,10 @@ void ofi_monitors_init(void)
 			" address changes.  Options are: userfaultfd, memhooks"
 			" and disabled.  Userfaultfd is a Linux kernel feature."
 			" Memhooks operates by intercepting memory allocation"
-			" and free calls.  Userfaultfd is the default if"
-			" available on the system. 'disabled' option disables"
-			" memory caching.");
+			" and free calls."
+			" '" MR_CACHE_MONITOR_DEFAULT "'"
+			" is the default if available on the system."
+			" The 'disabled' option disables memory caching.");
 	fi_param_define(NULL, "mr_cuda_cache_monitor_enabled", FI_PARAM_BOOL,
 			"Enable or disable the CUDA cache memory monitor."
 			"Enabled by default.");
@@ -231,35 +272,10 @@ void ofi_monitors_init(void)
 	 * At this time, the import monitor could have set the default monitor,
 	 * do not override
 	 */
-	if (!default_monitor) {
-#if HAVE_MEMHOOKS_MONITOR
-		default_monitor = memhooks_monitor;
-#elif HAVE_UFFD_MONITOR
-		default_monitor = uffd_monitor;
-#else
-		default_monitor = NULL;
-#endif
-	}
-
-	if (cache_params.monitor != NULL) {
-		if (!strcmp(cache_params.monitor, "userfaultfd")) {
-#if HAVE_UFFD_MONITOR
-			default_monitor = uffd_monitor;
-#else
-			FI_WARN(&core_prov, FI_LOG_MR, "userfaultfd monitor not available\n");
-			default_monitor = NULL;
-#endif
-		} else if (!strcmp(cache_params.monitor, "memhooks")) {
-#if HAVE_MEMHOOKS_MONITOR
-			default_monitor = memhooks_monitor;
-#else
-			FI_WARN(&core_prov, FI_LOG_MR, "memhooks monitor not available\n");
-			default_monitor = NULL;
-#endif
-		} else if (!strcmp(cache_params.monitor, "disabled")) {
-			default_monitor = NULL;
-		}
-	}
+	if (!default_monitor)
+		default_monitor = (cache_params.monitor) ?
+			find_monitor(cache_params.monitor) :
+			find_monitor(MR_CACHE_MONITOR_DEFAULT);
 
 	if (cache_params.cuda_monitor_enabled)
 		default_cuda_monitor = cuda_monitor;
@@ -405,7 +421,6 @@ void ofi_monitors_del_cache(struct ofi_mr_cache *cache)
 
 
 	ofi_monitors_update(stop_list);
-	return;
 }
 
 /* Must be called with locks in place like following
