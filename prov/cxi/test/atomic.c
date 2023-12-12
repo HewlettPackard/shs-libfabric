@@ -39,7 +39,7 @@ static void *_cxit_create_mr(struct mem_region *mr, uint64_t *key)
 	ret = fi_mr_bind(mr->mr, &cxit_ep->fid, 0);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind(ep) failed %d", ret);
 
-	if (cxit_rem_cntr) {
+	if (cxit_fi->caps & FI_RMA_EVENT && cxit_rem_cntr) {
 		ret = fi_mr_bind(mr->mr, &cxit_rem_cntr->fid, FI_REMOTE_WRITE);
 		cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind(cntr) failed %d",
 			     ret);

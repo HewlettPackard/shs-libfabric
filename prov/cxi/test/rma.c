@@ -566,8 +566,18 @@ Test(rma_nofence, nofence,
 	free(send_buf);
 }
 
+void cxit_rma_setup_no_rma_events(void)
+{
+	cxit_setup_getinfo();
+
+	cxit_fi_hints->caps = FI_RMA | FI_ATOMIC;
+	cxit_setup_rma();
+}
+
 /* Test HRP Put */
-Test(rma_opt, hrp)
+Test(rma_opt, hrp,
+     .init = cxit_rma_setup_no_rma_events,
+     .fini = cxit_teardown_rma)
 {
 	int ret;
 	uint64_t hrp_acks_start;

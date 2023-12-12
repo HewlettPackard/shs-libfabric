@@ -1079,7 +1079,7 @@ int mr_create_ext(size_t len, uint64_t access, uint8_t seed, uint64_t *key,
 	ret = fi_mr_bind(mr->mr, &cxit_ep->fid, 0);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind(ep) failed %d", ret);
 
-	if (cntr) {
+	if (cxit_fi->caps & FI_RMA_EVENT && cntr) {
 		ret = fi_mr_bind(mr->mr, &cntr->fid, FI_REMOTE_WRITE);
 		cr_assert_eq(ret, FI_SUCCESS, "fi_mr_bind(cntr) failed %d",
 			     ret);
