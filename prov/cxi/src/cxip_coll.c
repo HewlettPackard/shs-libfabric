@@ -504,6 +504,9 @@ int _get_cxi_data_bytcnt(cxip_coll_op_t cxi_opcode,
 	case FI_UINT64:
 		size = sizeof(uint64_t);
 		break;
+	case FI_FLOAT:
+		size = sizeof(float);
+		break;
 	case FI_DOUBLE:
 		size = sizeof(double);
 		break;
