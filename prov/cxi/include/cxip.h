@@ -1460,6 +1460,7 @@ struct cxip_ep_coll_obj {
 	size_t buffer_size;		// size of receive buffers
 	size_t buffer_count;		// count of receive buffers
 	bool join_busy;			// serialize joins on a node
+	bool is_hwroot;			// set if ep is hw_root
 	bool enabled;			// enabled
 };
 

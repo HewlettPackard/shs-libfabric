@@ -301,7 +301,7 @@ static void _wait_for_join(int count, int eq_err, int prov_errno)
 			err = eqd.err;
 			event = eqd.data;
 			if (eqd.prov_errno != prov_errno) {
-				printf("prov_err exp=%d saw=%d\n",
+				TRACE("prov_err exp=%d saw=%d\n",
 					prov_errno, eqd.prov_errno);
 				provcnt++;
 			}

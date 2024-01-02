@@ -141,6 +141,7 @@ static void *_poll_cqs(void)
 	}
 	if (size != -FI_EAGAIN)
 		TRACE("tx ERROR seen = %ld\n", size);
+	TRACE("%s return NULL\n", __func__);
 	return NULL;
 }
 
@@ -152,70 +153,6 @@ static void _wait_cqs(void *pcontext)
 		if (pcontext == _poll_cqs())
 			break;
 	} while (true);
-}
-
-/* poll the collective eq once, return context, event, and provider errno */
-static int _poll_eq(void **pcontext, uint32_t *pevent, int *pprov_errno)
-{
-	struct cxip_ep *ep;
-	struct fid_eq *eq;
-	struct fi_eq_err_entry eqd = {};
-	int ret;
-
-	ep = container_of(cxit_ep, struct cxip_ep, ep);
-	eq = &ep->ep_obj->coll.eq->util_eq.eq_fid;
-
-	*pcontext = NULL;
-	*pevent = -1;
-	*pprov_errno = 0;
-
-	ret = fi_eq_read(eq, pevent, &eqd, sizeof(eqd), 0);
-	if (ret >= 0) {
-		TRACE("read EQ = %d\n", ret);
-		if (ret < sizeof(struct fi_eq_entry)) {
-			TRACE("fi_eq_read()=%d, exp=%ld\n",
-				ret, sizeof(struct fi_eq_entry));
-			return -FI_EINVAL;
-		}
-		TRACE("=== EQ SUCCESS\n");
-		TRACE("  size    = %d\n", ret);
-		TRACE("  event   = %d\n", *pevent);
-		TRACE("  fid     = %p\n", eqd.fid);
-		TRACE("  context = %p\n", eqd.context);
-		TRACE("  data    = %lx\n", eqd.data);
-		*pcontext = eqd.context;
-		return FI_SUCCESS;
-	}
-	if (ret == -FI_EAVAIL) {
-		TRACE("read EQ = %d\n", ret);
-		ret = fi_eq_readerr(eq, &eqd, 0);
-		if (ret < sizeof(struct fi_eq_err_entry)) {
-			TRACE("fi_eq_readerr()=%d, exp=%ld\n",
-			      ret, sizeof(struct fi_eq_err_entry));
-			return -FI_EINVAL;
-		}
-		TRACE("=== EQ error available\n");
-		TRACE("  size    = %d\n", ret);
-		TRACE("  event   = %d\n", *pevent);
-		TRACE("  fid     = %p\n", eqd.fid);
-		TRACE("  context = %p\n", eqd.context);
-		TRACE("  data    = %lx\n", eqd.data);
-		TRACE("  err     = %s (%d)\n",
-			fi_strerror(-eqd.err), eqd.err);
-		TRACE("  prov_err= %d\n", eqd.prov_errno);
-		TRACE("  err_data= %p\n", eqd.err_data);
-		TRACE("  err_size= %ld\n", eqd.err_data_size);
-		*pcontext = eqd.context;
-		*pprov_errno = eqd.prov_errno;
-		return -FI_EAVAIL;
-	}
-	if (ret != -FI_EAGAIN) {
-		TRACE("read EQ = %d\n", ret);
-		TRACE("=== EQ other\n");
-		TRACE("  size    = %d\n", ret);
-		TRACE("  event   = %d\n", *pevent);
-	}
-	return ret;
 }
 
 /**
@@ -261,13 +198,15 @@ void avset_ary_destroy(struct avset_ary *setary)
 }
 
 /* create a single avset using fiaddrs, size, and append it to the setary */
-int avset_ary_append(fi_addr_t *fiaddrs, size_t size, int rootidx,
+int avset_ary_append(fi_addr_t *fiaddrs, size_t size,
+		     int mcast_addr, int root_idx,
 		     struct avset_ary *setary)
 {
 	struct cxip_comm_key comm_key = {
 		.keytype = (cxip_env.coll_fabric_mgr_url) ?
 			    COMM_KEY_NONE : COMM_KEY_UNICAST,
-		.ucast.hwroot_idx = rootidx
+		.ucast.mcast_addr = mcast_addr,
+		.ucast.hwroot_idx = root_idx
 	};
 	struct fi_av_set_attr attr = {
 		.count = 0,
@@ -364,7 +303,7 @@ quit:
  *
  * A join failure on an endpoint that is part of the collective group will
  * result in an error propagated to all members of that group through zbcoll,
- * so all endpoints will fail the join operation.
+ * so all endpoints will fail the join operation with the same error code.
  */
 struct join_item {
 	struct dlist_entry entry;
@@ -372,7 +311,78 @@ struct join_item {
 	struct fid_mc *mc;
 	int prov_errno;
 	int retval;
+	int trace_no;
 };
+
+/* poll the collective eq once, count of completions (0 or 1) */
+static int _poll_eq(void)
+{
+	struct cxip_ep *ep;
+	struct fid_eq *eq;
+	struct fi_eq_err_entry eqd = {};
+	struct join_item *jctx;
+	uint32_t event;
+	int ret;
+
+	ep = container_of(cxit_ep, struct cxip_ep, ep);
+	eq = &ep->ep_obj->coll.eq->util_eq.eq_fid;
+
+	jctx = NULL;
+	ret = fi_eq_read(eq, &event, &eqd, sizeof(eqd), 0);
+	if (ret >= 0) {
+		TRACE("read EQ = %d\n", ret);
+		if (ret < sizeof(struct fi_eq_entry)) {
+			TRACE("fi_eq_read()=%d, exp=%ld\n",
+				ret, sizeof(struct fi_eq_entry));
+			return -FI_EINVAL;
+		}
+		TRACE("=== EQ SUCCESS\n");
+		TRACE("  size    = %d\n", ret);
+		TRACE("  event   = %d\n", event);
+		TRACE("  fid     = %p\n", eqd.fid);
+		TRACE("  context = %p\n", eqd.context);
+		TRACE("  data    = %lx\n", eqd.data);
+		if (eqd.context && event == FI_JOIN_COMPLETE) {
+			jctx = eqd.context;
+			jctx->retval = 0;
+			jctx->prov_errno = 0;
+			return 1;
+		}
+	}
+	if (ret == -FI_EAVAIL) {
+		TRACE("read EQ = %d\n", ret);
+		ret = fi_eq_readerr(eq, &eqd, 0);
+		if (ret < sizeof(struct fi_eq_err_entry)) {
+			TRACE("fi_eq_readerr()=%d, exp=%ld\n",
+			      ret, sizeof(struct fi_eq_err_entry));
+			return -FI_EINVAL;
+		}
+		TRACE("=== EQ error available\n");
+		TRACE("  size    = %d\n", ret);
+		TRACE("  event   = %d\n", event);
+		TRACE("  fid     = %p\n", eqd.fid);
+		TRACE("  context = %p\n", eqd.context);
+		TRACE("  data    = %lx\n", eqd.data);
+		TRACE("  err     = %s (%d)\n",
+			fi_strerror(-eqd.err), eqd.err);
+		TRACE("  prov_err= %d\n", eqd.prov_errno);
+		TRACE("  err_data= %p\n", eqd.err_data);
+		TRACE("  err_size= %ld\n", eqd.err_data_size);
+		if (eqd.context) {
+			jctx = eqd.context;
+			jctx->retval = eqd.err;
+			jctx->prov_errno = eqd.prov_errno;
+			return 1;
+		}
+	}
+	if (ret != -FI_EAGAIN) {
+		TRACE("read EQ = %d\n", ret);
+		TRACE("=== EQ other\n");
+		TRACE("  size    = %d\n", ret);
+		TRACE("  event   = %d\n", event);
+	}
+	return 0;
+}
 
 /* close a list of collectives */
 void coll_multi_release(struct dlist_entry *joinlist)
@@ -391,28 +401,27 @@ void coll_multi_release(struct dlist_entry *joinlist)
 	TRACE("return\n");
 }
 
-/* initiate join on all sets in setary in parallel, and append to joinlist */
-int coll_init_multi_join(struct avset_ary *setary,
-			 struct dlist_entry *joinlist)
+/* initiate join on all sets in setary, and append to joinlist */
+int coll_multi_join(struct avset_ary *setary, struct dlist_entry *joinlist)
 {
 	struct join_item *jctx;
-	int i, ret, count;
+	int i, ret, total, count;
 
 	TRACE("ENTRY %s\n", __func__);
 
-	// initiate collective joins, repeating on -FI_EAGAIN
+	// perform collective joins from setary
+	total = setary->avset_cnt;
 	count = 0;
-	for (i = 0; i < setary->avset_cnt; i++) {
+	for (i = 0; i < total; i++) {
 		jctx = calloc(1, sizeof(*jctx));
-		dlist_init(&jctx->entry);
+		jctx->trace_no = i;
 		jctx->avset = setary->avset[i];
-		TRACE("join %d of %d initiating\n", i, setary->avset_cnt);
-		do {
-			_poll_cqs();
-			ret = fi_join_collective(cxit_ep, FI_ADDR_NOTAVAIL,
-						 setary->avset[i], 0L,
-						 &jctx->mc, jctx);
-		} while (ret == -FI_EAGAIN);
+		dlist_init(&jctx->entry);
+		TRACE("join %d of %d initiating\n", i, total);
+		ret = fi_join_collective(cxit_ep, FI_ADDR_NOTAVAIL,
+						setary->avset[i], 0L,
+						&jctx->mc, jctx);
+		/* node is not participating in this join */
 		if (ret == -FI_ECONNREFUSED) {
 			free(jctx);
 			continue;
@@ -422,10 +431,15 @@ int coll_init_multi_join(struct avset_ary *setary,
 			TRACE("join %d FAILED\n", ret);
 			goto fail;
 		}
+		/* wait for join to complete */
+		do {
+			_poll_cqs();
+			ret = _poll_eq();
+		} while (ret == 0);
 		dlist_insert_tail(&jctx->entry, joinlist);
 		count++;
 	}
-	TRACE("DONE %s initiated %d joins\n", __func__, count);
+	TRACE("DONE %s completed %d joins\n", __func__, count);
 	return FI_SUCCESS;
 
 fail:
@@ -434,56 +448,29 @@ fail:
 	return ret;
 }
 
-/* await completion of all joins in joinlist */
-int coll_wait_multi_join(struct dlist_entry *joinlist)
-{
-	struct join_item *jctx;
-	uint32_t event;
-	struct dlist_entry *item;
-	int count;
-	int prov_errno;
-	int ret;
-
-	// wait for completion, may occur in any order
-	TRACE("ENTRY %s\n", __func__);
-	assert(joinlist);
-	count = 0;
-	dlist_foreach(joinlist, item)
-		count++;
-	while (count > 0) {
-		TRACE("waiting count = %d\n", count);
-		do {
-			_poll_cqs();
-			ret = _poll_eq((void **)&jctx, &event, &prov_errno);
-		} while (ret == -FI_EAGAIN);
-		if (!jctx) {
-			TRACE("EQ poll returned NULL context\n");
-			return -FI_EINVAL;
-		}
-		if (!ret && event != FI_JOIN_COMPLETE) {
-			TRACE("EQ poll returned event %d on SUCCESS\n", event);
-			return -FI_EINVAL;
-		}
-		jctx->retval = ret;
-		jctx->prov_errno = prov_errno;
-		count--;
-	}
-	TRACE("FINISH %s\n", __func__);
-	return FI_SUCCESS;
-}
-
 /* Perform cleanup on a multijoin */
-void coll_join_cleanup(struct avset_ary *setary,
-		       struct dlist_entry *joinlist)
+void coll_join_cleanup(struct avset_ary *setary, struct dlist_entry *joinlist)
 {
 	coll_multi_release(joinlist);
 	avset_ary_destroy(setary);
 }
 
+struct join_item *coll_join_item(struct dlist_entry *joinlist, int index)
+{
+	struct join_item *jctx;
+
+	dlist_foreach_container(joinlist, struct join_item, jctx, entry) {
+		if (!index--)
+			return jctx;
+	}
+	return NULL;
+}
+
+
 /* Utility function to create a single join with no errors */
-struct join_item *coll_single_join(fi_addr_t *fiaddrs,
-				   size_t size,
-				   int rootidx,
+struct join_item *coll_single_join(fi_addr_t *fiaddrs, size_t size,
+				   int mcast_addr, int root_idx,
+				   int exp_retval, int exp_prov_errno,
 				   struct avset_ary *setary,
 				   struct dlist_entry *joinlist,
 				   const char *msg)
@@ -492,22 +479,16 @@ struct join_item *coll_single_join(fi_addr_t *fiaddrs,
 	int ret;
 
 	avset_ary_init(setary);
-	ret = avset_ary_append(fiaddrs, size, rootidx, setary);
+	ret = avset_ary_append(fiaddrs, size, mcast_addr, root_idx, setary);
 	if (ret) {
 		TRACE("%s JOIN avset_ary_append()=%d\n", msg, ret);
 		goto quit;
 	}
 
 	dlist_init(joinlist);
-	ret = coll_init_multi_join(setary, joinlist);
+	ret = coll_multi_join(setary, joinlist);
 	if (ret) {
-		TRACE("%s JOIN coll_init_multi_join()=%d\n", msg, ret);
-		goto quit;
-	}
-
-	ret = coll_wait_multi_join(joinlist);
-	if (ret) {
-		TRACE("%s JOIN coll_wait_multi_join()=%d\n", msg, ret);
+		TRACE("%s JOIN coll_multi_join()=%d\n", msg, ret);
 		goto quit;
 	}
 
@@ -517,9 +498,10 @@ struct join_item *coll_single_join(fi_addr_t *fiaddrs,
 		goto quit;
 	}
 
-	if (jctx->retval || jctx->prov_errno) {
-		TRACE("%s JOIN ret=%d prov_errno=%d\n",
-		      msg, jctx->retval, jctx->prov_errno);
+	if (jctx->retval != exp_retval || jctx->prov_errno != exp_prov_errno) {
+		TRACE("%s JOIN ret=%d,exp=%d prov_errno=%d,exp=%d\n", msg,
+		      jctx->retval, exp_retval,
+		      jctx->prov_errno, exp_prov_errno);
 		goto quit;
 	}
 	TRACE("%s JOIN SUCCESS\n", msg);
@@ -588,14 +570,11 @@ int _test_join(fi_addr_t *fiaddrs, size_t size, int exp_ret,
 
 	errcnt = 0;
 	avset_ary_init(&setary);
-	ret = avset_ary_append(fiaddrs, size, 0, &setary);
+	ret = avset_ary_append(fiaddrs, size, 0, 1, &setary);
 	errcnt += !!ret;
 
 	dlist_init(&joinlist);
-	ret = coll_init_multi_join(&setary, &joinlist);
-	errcnt += !!ret;
-
-	ret = coll_wait_multi_join(&joinlist);
+	ret = coll_multi_join(&setary, &joinlist);
 	errcnt += !!ret;
 
 	dlist_foreach_container(&joinlist, struct join_item, jctx, entry) {
@@ -627,7 +606,7 @@ int _test_barrier(fi_addr_t *fiaddrs, size_t size, int count)
 	errcnt = 0;
 	total = 0;
 	avset_ary_init(&setary);
-	ret = avset_ary_append(fiaddrs, size, 1, &setary);
+	ret = avset_ary_append(fiaddrs, size, 0, 1, &setary);
 	errcnt += !!ret;
 	if (ret) {
 		TRACE("BARRIER avset not created\n");
@@ -635,17 +614,10 @@ int _test_barrier(fi_addr_t *fiaddrs, size_t size, int count)
 	}
 
 	dlist_init(&joinlist);
-	ret = coll_init_multi_join(&setary, &joinlist);
+	ret = coll_multi_join(&setary, &joinlist);
 	errcnt += !!ret;
 	if (ret) {
 		TRACE("BARRIER JOIN not initiated\n");
-		goto quit;
-	}
-
-	ret = coll_wait_multi_join(&joinlist);
-	errcnt += !!ret;
-	if (ret) {
-		TRACE("BARRIER JOIN failed\n");
 		goto quit;
 	}
 	TRACE("BARRIER JOIN COMPLETE\n");
@@ -688,7 +660,7 @@ int _test_broadcast(fi_addr_t *fiaddrs, size_t size, int rootidx)
 	int i, ret, errcnt;
 
 	errcnt = 0;
-	jctx = coll_single_join(fiaddrs, size, rootidx,
+	jctx = coll_single_join(fiaddrs, size, 0, rootidx, 0, 0,
 				&setary, &joinlist, "BROADCAST");
 	if (!jctx) {
 		TRACE("BROADCAST JOIN returned NULL\n");
@@ -743,7 +715,7 @@ int _test_allreduce(fi_addr_t *fiaddrs, size_t size)
 
 	errcnt = 0;
 	avset_ary_init(&setary);
-	ret = avset_ary_append(fiaddrs, size, 1, &setary);
+	ret = avset_ary_append(fiaddrs, size, 0, 1, &setary);
 	errcnt += !!ret;
 	if (ret) {
 		TRACE("ALLREDUCE avset not created\n");
@@ -751,20 +723,12 @@ int _test_allreduce(fi_addr_t *fiaddrs, size_t size)
 	}
 
 	dlist_init(&joinlist);
-	ret = coll_init_multi_join(&setary, &joinlist);
+	ret = coll_multi_join(&setary, &joinlist);
 	errcnt += !!ret;
 	if (ret) {
 		TRACE("ALLREDUCE JOIN not initiated\n");
 		goto quit;
 	}
-
-	ret = coll_wait_multi_join(&joinlist);
-	errcnt += !!ret;
-	if (ret) {
-		TRACE("ALLREDUCE JOIN failed\n");
-		goto quit;
-	}
-	TRACE("ALLREDUCE JOIN COMPLETE\n");
 
 	jctx = dlist_first_entry_or_null(&joinlist, struct join_item, entry);
 	TRACE("jctx = %p\n", jctx);
@@ -847,7 +811,7 @@ static uint64_t testmask = 0L;
 
 int main(int argc, char **argv)
 {
-	bool trace_enabled = false;
+	bool trace_enabled = true;
 	fi_addr_t *fiaddrs = NULL;
 	fi_addr_t myaddr;
 	struct cxip_addr mycaddr;
@@ -859,7 +823,10 @@ int main(int argc, char **argv)
 	int ret = 0;
 	int N = 0;
 	bool help = false;
+	struct join_item *jctx;
 	struct avset_ary setary;
+	struct dlist_entry joinlist;
+
 
 	const char *testname;
 	char opt;
@@ -869,6 +836,7 @@ int main(int argc, char **argv)
 	testmask = -1L;
 	testname = NULL;
 
+	TRACE("enter main\n");
 	while ((opt = getopt(argc, argv, "hvVt:N:")) != -1) {
 		char *str, *s, *p;
 
@@ -981,7 +949,7 @@ int main(int argc, char **argv)
 		// Test multijoins over one array list
 		TRACE("======= %s\n", testname);
 		avset_ary_init(&setary);
-		ret = avset_ary_append(fiaddrs, size, 0, &setary);
+		ret = avset_ary_append(fiaddrs, size, 0, 0, &setary);
 		errcnt += !!ret;
 
 		avset_ary_destroy(&setary);
@@ -997,10 +965,11 @@ int main(int argc, char **argv)
 		PREAMBLE(0, tstnum, "create av_set list 10");
 		// Exercise creating av_set lists
 		avset_ary_init(&setary);
+		dlist_init(&joinlist);
 
 		ret = 0;
 		for (i = 0; !ret && i < 10; i++)
-			ret = avset_ary_append(fiaddrs, size, 0, &setary);
+			ret = avset_ary_append(fiaddrs, size, 0, 0, &setary);
 		TRACE("ret=%d cnt=%d siz=%d\n", ret,
 		      setary.avset_cnt, setary.avset_siz);
 		errcnt += !!ret;
@@ -1022,8 +991,10 @@ int main(int argc, char **argv)
 		PREAMBLE(0, tstnum, "test join (simple)");
 		// Test single join over one array list
 		TRACE("======= %s\n", testname);
-		ret =  _test_join(fiaddrs, size, 0, 0);
-		errcnt += !!ret;
+		jctx = coll_single_join(fiaddrs, size, 0, 0, 0, 0,
+					&setary, &joinlist, "simple");
+		coll_join_cleanup(&setary, &joinlist);
+		errcnt += !!!jctx;
 		tstcnt += 1;
 		frmwk_log0("%4s\n", STDMSG(ret));
 		frmwk_barrier();
@@ -1037,9 +1008,11 @@ int main(int argc, char **argv)
 		// cause slow root rank
 		if (frmwk_rank == 0)
 			usleep(1000000);
-		ret =  _test_join(fiaddrs, size, 0, 0);
+		jctx = coll_single_join(fiaddrs, size, 0, 0, 0, 0,
+					&setary, &joinlist, "slow root");
+		coll_join_cleanup(&setary, &joinlist);
+		errcnt += !!!jctx;
 		tstcnt += 1;
-		errcnt += !!ret;
 		frmwk_log0("%4s\n", STDMSG(ret));
 		frmwk_barrier();
 	} while (0);
@@ -1052,9 +1025,11 @@ int main(int argc, char **argv)
 		// cause slow leaf rank
 		if (frmwk_rank == (frmwk_numranks - 1))
 			usleep(1000000);
-		ret =  _test_join(fiaddrs, size, 0, 0);
+		jctx = coll_single_join(fiaddrs, size, 0, 0, 0, 0,
+					&setary, &joinlist, "slow leaf");
+		coll_join_cleanup(&setary, &joinlist);
+		errcnt += !!!jctx;
 		tstcnt += 1;
-		errcnt += !!ret;
 		frmwk_log0("%4s\n", STDMSG(ret));
 		frmwk_barrier();
 	} while (0);
@@ -1067,9 +1042,11 @@ int main(int argc, char **argv)
 		// cause non-root ranks attempt zbcoll getgroup first
 		if (frmwk_rank == 0)
 			usleep(10000);
-		ret =  _test_join(fiaddrs, size, 0, 0);
+		jctx = coll_single_join(fiaddrs, size, 0, 0, 0, 0,
+					&setary, &joinlist, "FI_EAGAIN root");
+		coll_join_cleanup(&setary, &joinlist);
+		errcnt += !!!jctx;
 		tstcnt += 1;
-		errcnt += !!ret;
 		frmwk_log0("%4s\n", STDMSG(ret));
 		frmwk_barrier();
 	} while (0);
@@ -1079,9 +1056,12 @@ int main(int argc, char **argv)
 		PREAMBLE(0, tstnum, "force -FI_EAGAIN on root broadcast");
 		// cause zbcoll root (rank 0) to reject broadcast requests once
 		cxip_trap_set(0, CXIP_TRAP_BCAST, -FI_EAGAIN);
-		ret =  _test_join(fiaddrs, size, 0, 0);
+		jctx = coll_single_join(fiaddrs, size, 0, 0, 0, 0,
+					&setary, &joinlist,
+					"FI_EAGAIN root bcast");
+		coll_join_cleanup(&setary, &joinlist);
+		errcnt += !!!jctx;
 		tstcnt += 1;
-		errcnt += !!ret;
 		frmwk_log0("%4s\n", STDMSG(ret));
 		frmwk_barrier();
 	} while (0);
@@ -1091,9 +1071,12 @@ int main(int argc, char **argv)
 		PREAMBLE(0, tstnum, "force -FI_EAGAIN on root reduce");
 		// cause zbcoll root (rank 0) to reject join reduce once
 		cxip_trap_set(0, CXIP_TRAP_REDUCE, -FI_EAGAIN);
-		ret =  _test_join(fiaddrs, size, 0, 0);
+		jctx = coll_single_join(fiaddrs, size, 0, 0, 0, 0,
+					&setary, &joinlist,
+					"FI_EAGAIN root reduce");
+		coll_join_cleanup(&setary, &joinlist);
+		errcnt += !!!jctx;
 		tstcnt += 1;
-		errcnt += !!ret;
 		frmwk_log0("%4s\n", STDMSG(ret));
 		frmwk_barrier();
 	} while (0);
@@ -1154,6 +1137,253 @@ int main(int argc, char **argv)
 		frmwk_barrier();
 	} while (0);
 	tstnum++;
+
+	do {
+		PREAMBLE(0, tstnum, "test mcast dup");
+		avset_ary_init(&setary);
+		TRACE("avset initialized\n");
+		ret = avset_ary_append(fiaddrs, size, 0, 0, &setary);
+		TRACE("avset append 1 = %d\n", ret);
+		ret = avset_ary_append(fiaddrs, size, 0, 1, &setary);
+		TRACE("avset append 2 = %d\n", ret);
+
+		dlist_init(&joinlist);
+		ret = coll_multi_join(&setary, &joinlist);
+		TRACE("join = %d\n", ret);
+
+		jctx = coll_join_item(&joinlist, 0);
+		TRACE("item 0 mc=%p retval=%d prov_errno=%d\n",
+		      jctx->mc, jctx->retval, jctx->prov_errno);
+		if (jctx->retval || jctx->prov_errno) {
+			TRACE("unexpected result on coll 0\n");
+			errcnt++;
+		}
+		jctx = coll_join_item(&joinlist, 1);
+		TRACE("item 1 mc=%p retval=%d prov_errno=%d\n",
+		      jctx->mc, jctx->retval, jctx->prov_errno);
+		if (jctx->retval != -FI_EAVAIL ||
+		    jctx->prov_errno != CXIP_PROV_ERRNO_MCAST_INUSE) {
+			TRACE("unexpected result on coll 1\n");
+			errcnt++;
+		}
+		tstcnt += 1;
+
+		frmwk_log0("%4s\n", STDMSG(ret));
+		coll_multi_release(&joinlist);
+		avset_ary_destroy(&setary);
+	} while (0);
+	tstnum++;
+
+	do {
+		PREAMBLE(0, tstnum, "test hwroot dup");
+		avset_ary_init(&setary);
+		TRACE("avset initialized\n");
+		ret = avset_ary_append(fiaddrs, size, 0, 0, &setary);
+		TRACE("avset append 1 = %d\n", ret);
+		ret = avset_ary_append(fiaddrs, size, 1, 0, &setary);
+		TRACE("avset append 2 = %d\n", ret);
+
+		dlist_init(&joinlist);
+		ret = coll_multi_join(&setary, &joinlist);
+		TRACE("join = %d\n", ret);
+
+		jctx = coll_join_item(&joinlist, 0);
+		TRACE("item 0 mc=%p retval=%d prov_errno=%d\n",
+		      jctx->mc, jctx->retval, jctx->prov_errno);
+		if (jctx->retval || jctx->prov_errno) {
+			TRACE("unexpected result on coll 0\n");
+			errcnt++;
+		}
+		jctx = coll_join_item(&joinlist, 1);
+		TRACE("item 1 mc=%p retval=%d prov_errno=%d\n",
+		      jctx->mc, jctx->retval, jctx->prov_errno);
+		if (jctx->retval != -FI_EAVAIL ||
+		    jctx->prov_errno != CXIP_PROV_ERRNO_HWROOT_INUSE) {
+			TRACE("unexpected result on coll 1\n");
+			errcnt++;
+		}
+		tstcnt += 1;
+
+		frmwk_log0("%4s\n", STDMSG(ret));
+		coll_multi_release(&joinlist);
+		avset_ary_destroy(&setary);
+	} while (0);
+	tstnum++;
+
+	do {
+		PREAMBLE(0, tstnum, "test hwroot and mcast dup");
+		avset_ary_init(&setary);
+		TRACE("avset initialized\n");
+		ret = avset_ary_append(fiaddrs, size, 0, 0, &setary);
+		TRACE("avset append 1 = %d\n", ret);
+		ret = avset_ary_append(fiaddrs, size, 0, 0, &setary);
+		TRACE("avset append 2 = %d\n", ret);
+
+		dlist_init(&joinlist);
+		ret = coll_multi_join(&setary, &joinlist);
+		TRACE("join = %d\n", ret);
+
+		jctx = coll_join_item(&joinlist, 0);
+		TRACE("item 0 mc=%p retval=%d prov_errno=%d\n",
+		      jctx->mc, jctx->retval, jctx->prov_errno);
+		if (jctx->retval || jctx->prov_errno) {
+			TRACE("unexpected result on coll 0\n");
+			errcnt++;
+		}
+		jctx = coll_join_item(&joinlist, 1);
+		TRACE("item 1 mc=%p retval=%d prov_errno=%d\n",
+		      jctx->mc, jctx->retval, jctx->prov_errno);
+		if (jctx->retval != -FI_EAVAIL ||
+		    jctx->prov_errno != CXIP_PROV_ERRNO_HWROOT_INUSE) {
+			TRACE("unexpected result on coll 1\n");
+			errcnt++;
+		}
+		tstcnt += 1;
+
+		frmwk_log0("%4s\n", STDMSG(ret));
+		coll_multi_release(&joinlist);
+		avset_ary_destroy(&setary);
+	} while (0);
+	tstnum++;
+
+	do {
+		PREAMBLE(0, tstnum, "test multiple join");
+		avset_ary_init(&setary);
+		TRACE("avset initialized\n");
+
+		for (i = 0; i < N; i++) {
+			ret = avset_ary_append(fiaddrs, size, i, i, &setary);
+			TRACE("avset append %d = %d\n", i, ret);
+		}
+
+		dlist_init(&joinlist);
+		ret = coll_multi_join(&setary, &joinlist);
+		TRACE("multijoin = %d\n", ret);
+
+		for (i = 0; i < N; i++) {
+			int exp_ret = (i < size) ? 0 : -FI_EAVAIL;
+			int exp_errno = (i < size) ? 0 : CXIP_PROV_ERRNO_HWROOT_INUSE;
+			int good;
+
+			jctx = coll_join_item(&joinlist, i);
+			if (!jctx) {
+				TRACE("no join item\n");
+				continue;
+			}
+			good = (jctx->retval == exp_ret &&
+				jctx->prov_errno == exp_errno);
+			errcnt += !good;
+			TRACE("item %d mc=%p retval=%d prov_errno=%d %s\n",
+			      i, jctx->mc, jctx->retval, jctx->prov_errno,
+			      good ? "ok" : "bad");
+		}
+		tstcnt += 1;
+
+		frmwk_log0("%4s\n", STDMSG(ret));
+		coll_multi_release(&joinlist);
+		avset_ary_destroy(&setary);
+	} while (0);
+	tstnum++;
+
+
+	do {
+		PREAMBLE(0, tstnum, "test multiple broadcast");
+
+		uint64_t **datary, *ctxary, *ctxptr;
+		int in_progress, tree, root, i, j;
+
+		/* set up maximum number of trees possible */
+		avset_ary_init(&setary);
+		for (tree = 0; tree < size; tree++) {
+			ret = avset_ary_append(fiaddrs, size, tree, tree, &setary);
+			TRACE("avset append group %d = %d\n", tree, ret);
+		}
+		TRACE("avset initialized\n");
+
+		dlist_init(&joinlist);
+		ret = coll_multi_join(&setary, &joinlist);
+		TRACE("multijoin = %d\n", ret);
+
+		/* context and data for each collective tree */
+		ctxary = calloc(size, sizeof(uint64_t));
+		datary = calloc(size, sizeof(void *));
+		for (tree = 0; tree < size; tree++) {
+			datary[tree] = calloc(4, sizeof(uint64_t));
+			ctxary[tree] = tree;
+		}
+
+		/* repeat the collective N times as requested*/
+		for (i = 0; i < N; i++) {
+			in_progress = 0;
+
+			/* rotate root every time */
+			root = i%size;
+
+			/* start a broadcast on every tree */
+			for (tree = 0; tree < size; tree++) {
+				uint64_t id = (uint64_t)tree << 32;
+
+				/* prepare the data */
+				memset(datary[tree], 0, 4*sizeof(uint64_t));
+				if (frmwk_rank == root) {
+					for (j = 0; j < 4; j++)
+						datary[tree][j] = id|root;
+				}
+				TRACE("strt=%d tree=%d\n", i, tree);
+				for (j = 0; j < 4; j++)
+					TRACE("  %016lx\n", datary[tree][j]);
+
+			}
+			for (tree = 0; tree < size; tree++) {
+				int tree2 = (tree + frmwk_rank)%size;
+
+				usleep(rand() % 100);
+				jctx = coll_join_item(&joinlist, tree2);
+				ret = fi_broadcast(cxit_ep, datary[tree2], 4, NULL,
+						   (fi_addr_t )jctx->mc,
+						   fiaddrs[root], FI_UINT64,
+						   0L, &ctxary[tree2]);
+				in_progress++;
+				TRACE("in_progress=%d\n", in_progress);
+				if ((ctxptr = _poll_cqs())) {
+					in_progress--;
+					TRACE("ctxptr=%ld in_progress=%d\n",
+					      *ctxptr, in_progress);
+				}
+			}
+			while (in_progress > 0) {
+				if ((ctxptr = _poll_cqs())) {
+					in_progress--;
+					TRACE("ctxptr=%ld in_progress=%d\n",
+					      *ctxptr, in_progress);
+				}
+			}
+			for (tree = 0; tree < size; tree++) {
+				TRACE("rslt=%d tree=%d\n", i, tree);
+				for (j = 0; j < 4; j++)
+					TRACE("  %016lx\n", datary[tree][j]);
+
+			}
+		}
+		tstcnt += 1;
+
+		frmwk_log0("%4s\n", STDMSG(ret));
+		coll_multi_release(&joinlist);
+		avset_ary_destroy(&setary);
+	} while (0);
+	tstnum++;
+
+#if 0
+	do {
+		PREAMBLE(0, tstnum, "title of test");
+		ret = 0;	// some test
+		errcnt += !!ret;
+		tstcnt += 1;
+		frmwk_log0("%4s\n", STDMSG(ret));
+		frmwk_barrier();
+	} while (0);
+	tstnum++;
+#endif
 
 	if (help)
 		return (errcnt);

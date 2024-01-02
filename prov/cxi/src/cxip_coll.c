@@ -83,12 +83,9 @@
  *
  * The cookie is ignored by reduction hardware, and is used as follows:
  *
- * mcast_id is the 13-bit multicast hardware address. This is not necessary
- * given one PTE per multicast address: all request structures used for posting
- * receive buffers will receive events from only that multicast. If underlying
- * drivers are changed to allow a single PTE to be mapped to multiple multicast
- * addresses, the mcast_id field can be used to disambiguate packets intended
- * for different collective trees. It's also useful when debugging.
+ * mcast_id is the 13-bit multicast address used to disambiguate multiple
+ * multicast trees, since all incoming collective traffic is received by a
+ * single PTE bound to the endpoint.
  *
  * red_id is used to disambiguate packets delivered for different concurrent
  * reductions.
@@ -2424,11 +2421,11 @@ struct cxip_join_state {
 	uint64_t join_flags;		// user-supplied libfabric join flags
 	union pack_mcast bcast_data;	// packed multicast data
 	bool rx_discard;		// set if RX events should be discarded
-	bool is_rank;			// set if using COLL simulation model
+	bool is_rank;			// set if using COLL_RANK simulation model
 	bool is_mcast;			// set if using Rosetta multicast tree
 	bool create_mcast;		// set to create Rosetta multicast tree
 	bool creating_mcast;		// set once CURL has been initiated
-	bool created_mcast;		// set once CURL has been completed
+	bool finished_mcast;		// set once CURL has been completed
 	bool created_ptlte;		// set once PtlTE is initialized
 	int mynode_idx;			// index within the fi_addr[] list
 	int mynode_fiaddr;		// fi_addr of this node
@@ -2563,6 +2560,7 @@ static void _close_mc(struct cxip_coll_mc *mc_obj)
 		return;
 	/* clear the mcast_addr -> mc_obj reference*/
 	ofi_idm_clear(&mc_obj->ep_obj->coll.mcast_map, mc_obj->mcast_addr);
+	mc_obj->ep_obj->coll.is_hwroot = false;
 
 	/* clear the avset alteration lockout */
 	mc_obj->av_set_obj->mc_obj = NULL;
@@ -2748,12 +2746,17 @@ static int _initialize_mc(void *ptr)
 	}
 
 	/* index mc_obj by mcast_addr for fast lookup */
-	TRACE_JOIN("mc addr=%d obj=%p\n", mc_obj->mcast_addr, mc_obj);
+	TRACE_JOIN("%s: mc addr=%d obj=%p\n", __func__, mc_obj->mcast_addr, mc_obj);
 	ret =  ofi_idm_set(&ep_obj->coll.mcast_map,
 			   mc_obj->mcast_addr, mc_obj);
 	if (ret < 0) {
 		TRACE_JOIN("%s: idm set failed %d\n", __func__, ret);
 		goto fail;
+	}
+	/* lock out reuse of this endpoint as hw_root for any multicast addr */
+	if (mc_obj->hwroot_idx == mc_obj->mynode_idx) {
+		TRACE_JOIN("%s: set is_hwroot\n", __func__);
+		ep_obj->coll.is_hwroot = true;
 	}
 #if ENABLE_DEBUG
 	struct cxip_coll_mc *mc_obj_chk;
@@ -2784,7 +2787,7 @@ fail:
 /**
  * CURL callback function upon completion of a request.
  *
- * This sets jstate->created_mcast, even if the operation fails.
+ * This sets jstate->finished_mcast, even if the operation fails.
  * This sets jstate->bcast_data.valid if the address is valid.
  */
 static void _cxip_create_mcast_cb(struct cxip_curl_handle *handle)
@@ -2800,7 +2803,7 @@ static void _cxip_create_mcast_cb(struct cxip_curl_handle *handle)
 
 	/* Creation process is done */
 	TRACE_JOIN("CURL COMPLETED!\n");
-	jstate->created_mcast = true;
+	jstate->finished_mcast = true;
 
 	switch (handle->status) {
 	case 200:
@@ -2838,20 +2841,11 @@ static void _cxip_create_mcast_cb(struct cxip_curl_handle *handle)
 			jstate->prov_errno = CXIP_PROV_ERRNO_HWROOT_INVALID;
 			break;
 		}
-		if (mcaddr >= 8192) {
-			/* Flask test API: switch to UNICAST */
-			jstate->bcast_data.valid = true;
-			jstate->bcast_data.hwroot_idx = i;
-			jstate->bcast_data.mcast_addr =
-				jstate->ep_obj->src_addr.nic;
-			jstate->is_mcast = false;
-		} else {
-			/* Production MCAST address */
-			jstate->bcast_data.valid = true;
-			jstate->bcast_data.hwroot_idx = i;
-			jstate->bcast_data.mcast_addr = (uint32_t)mcaddr;
-			jstate->is_mcast = true;
-		}
+		/* Production MCAST address */
+		jstate->bcast_data.valid = true;
+		jstate->bcast_data.hwroot_idx = i;
+		jstate->bcast_data.mcast_addr = (uint32_t)mcaddr;
+		jstate->is_mcast = true;
 		/* This succeeded */
 		TRACE_JOIN("curl: mcaddr   =%08x\n",
 			   jstate->bcast_data.mcast_addr);
@@ -2867,13 +2861,12 @@ static void _cxip_create_mcast_cb(struct cxip_curl_handle *handle)
 		break;
 	}
 	free(curl_usrptr);
+	TRACE_JOIN("CURL COMPLETED!\n");
+	jstate->finished_mcast = true;
 }
 
 /**
  * Start a CURL request for a multicast address.
- *
- * This sets jstate->created_mcast if the operation does not start.
- * This jstate->bcast_data.valid will remain false.
  */
 static void _start_curl(void *ptr)
 {
@@ -2976,8 +2969,7 @@ quit:
 	if (ret < 0) {
 		TRACE_JOIN("CURL execution failed\n");
 		free(curl_usrptr);
-		jstate->created_mcast = true;
-		/* jstate->bcast_data.valid == false */
+		jstate->finished_mcast = true;
 	}
 }
 
@@ -3085,21 +3077,23 @@ static void _start_bcast(void *ptr)
 
 	/* error will indicate that the multicast request fails */
 	jstate->prov_errno = C_RC_INVALID_DFA_FORMAT;
-	/* presume bcast_data is valid from static initialization */
-	jstate->bcast_data.valid = true;
-	/* at most one endpoint will have create_mcast == true */
-	if (jstate->create_mcast) {
-		/* first call (only) initiates CURL request */
-		if (!jstate->creating_mcast) {
-			/* presume bcast_data is invalid until created */
-			jstate->bcast_data.valid = false;
-			jstate->creating_mcast = true;
-			_start_curl(jstate);
-		}
-		/* every call checks to see if CURL is complete */
-		if (!jstate->created_mcast) {
-			zb->error = -FI_EAGAIN;
-			goto quit;
+	/* rank 0 always does the work here */
+	if (jstate->mynode_idx == 0) {
+		if (jstate->create_mcast) {
+			/* first call (only) initiates CURL request */
+			if (!jstate->creating_mcast) {
+				jstate->creating_mcast = true;
+				_start_curl(jstate);
+			}
+			/* every retry call checks to see if CURL is complete */
+			if (!jstate->finished_mcast) {
+				zb->error = -FI_EAGAIN;
+				goto quit;
+			}
+			/* bcast_data.valid is set by curl callback */
+		} else {
+			/* static bcast data is presumed correct */
+			jstate->bcast_data.valid = true;
 		}
 	}
 	/* speculative prov_errno for trap */
@@ -3119,12 +3113,50 @@ static void _finish_bcast(void *ptr)
 {
 	struct cxip_join_state *jstate = ptr;
 	struct cxip_zbcoll_obj *zb = jstate->zb;
+	bool is_hwroot;
 	int ret;
 
-	/* all NICs have same data, if invalid, fail */
+	TRACE_JOIN("%s: mc addr=%d hw_root=%d valid=%d\n", __func__,
+		   jstate->bcast_data.mcast_addr,
+		   jstate->bcast_data.hwroot_idx,
+		   jstate->bcast_data.valid);
+	/* all NICs now have same mc_addr data, if invalid, fail */
+	/* jstate->prov_errno is presumed set if not valid */
 	if (!jstate->bcast_data.valid)
 		goto quit;
 	/* error indicates that attempt to configure fails */
+
+	/* check for invalid hwroot index */
+	TRACE_JOIN("check hwroot\n");
+	if (jstate->bcast_data.hwroot_idx >=
+	    jstate->av_set_obj->fi_addr_cnt) {
+		TRACE_JOIN("%s: reject invalid hwroot_idx\n", __func__);
+		jstate->prov_errno = CXIP_PROV_ERRNO_HWROOT_INVALID;
+		ret = -FI_EINVAL;
+		goto quit;
+	}
+
+	/* check for hwroot overlap on this node */
+	is_hwroot = (jstate->bcast_data.hwroot_idx == jstate->mynode_idx);
+	if (is_hwroot && jstate->ep_obj->coll.is_hwroot) {
+		TRACE_JOIN("%s: reject join, hwroot in use\n", __func__);
+		jstate->prov_errno = CXIP_PROV_ERRNO_HWROOT_INUSE;
+		ret = -FI_EINVAL;
+		goto quit;
+
+	}
+	/* check for mcast_addr overlap */
+	TRACE_JOIN("check mcast addr\n");
+	if (!jstate->is_rank &&
+	    ofi_idm_lookup(&jstate->ep_obj->coll.mcast_map,
+			   jstate->bcast_data.mcast_addr)) {
+		TRACE_JOIN("%s: reject join, mcast %d in use\n", __func__,
+			   jstate->bcast_data.mcast_addr);
+		jstate->prov_errno = CXIP_PROV_ERRNO_MCAST_INUSE;
+		ret = -FI_EINVAL;
+		goto quit;
+	}
+	/* speculative prov_errno for trap */
 	jstate->prov_errno = CXIP_PROV_ERRNO_PTE;
 	if (cxip_trap_search(jstate->mynode_idx, CXIP_TRAP_INITPTE, &ret))
 		goto quit;
@@ -3350,21 +3382,23 @@ static unsigned int _caddr_to_idx(struct cxip_av_set *av_set_obj,
  * 6) reduce error mask across all NICs
  * 7) cleanup
  *
- * This needs to be a non-blocking process, to support concurrent joins that are
- * driven by CQ/EQ polling. If the initial fi_join_collective() call returns
- * success, meaning the operation was initiated, actual completion success or
- * failure must be captured through TX/RX CQ progression and EQ polling.
+ * Joins are non-concurrent, and return FI_EAGAIN until any active join
+ * completes. The final return code of a join is not known to all nodes until
+ * the final state completes.
  *
- * Any transient errors associated with collective communications should be
- * retried internally, and indefinitely: once into the join state machine, there
- * is no reasonable way to re-enter, and if there is a synchronization delay,
- * there is no "reasonable" upper bound on the delay. If a NIC is unresponsive,
- * for instance, this will wait forever.
+ * Joins are progressed by polling TX/RX CQs, and completion status is
+ * returned by polling the endpoint EQ.
  *
- * Non-transient errors, such as failure to create the multicast address, or
- * setting up the multicast support, are distributed to all NICs through the
- * final zbcoll reduce function, and result in an immediate failure of the join
- * across all NICs.
+ * CPU errors like -FI_ENOMEM will likely occur on individual endpoints,
+ * and the correct response is to exit the application. There is no
+ * reasonable way to re-enter the state machine once any participant has
+ * unexpectedly failed.
+ *
+ * Internal errors, such as inability to acquire a multicast address, are
+ * are represented by a CXIP_PROV_ERRNO value, which is returned through the
+ * EQ polling with an error of -FI_EAVAIL, and the CXIP_PROV_ERRNO value.
+ * These values are ranked, and if multiple nodes show different errors, the
+ * returned error will be the most-significant (most-negative) value.
  *
  * There are four operational models, one for production, and three for testing.
  *
@@ -3522,8 +3556,9 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		jstate->pid_idx = CXIP_PTL_IDX_COLL;
 		jstate->bcast_data.hwroot_idx =
 			av_set_obj->comm_key.ucast.hwroot_idx;
-		jstate->bcast_data.mcast_addr = ep_obj->src_addr.nic;
-		jstate->bcast_data.valid = true;
+		jstate->bcast_data.mcast_addr =
+			av_set_obj->comm_key.ucast.mcast_addr;
+		jstate->bcast_data.valid = false;
 		jstate->is_rank = false;
 		jstate->is_mcast = false;
 		jstate->create_mcast = false;

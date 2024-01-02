@@ -391,6 +391,7 @@ struct cxip_coll_mcast_key {
 
 struct cxip_coll_unicast_key {
 	uint32_t hwroot_idx;		// index of hwroot in av_set list
+	uint32_t mcast_addr;		// 13-bit simulated multcast address
 };
 
 struct cxip_coll_rank_key {
