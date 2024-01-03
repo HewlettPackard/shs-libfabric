@@ -1485,15 +1485,27 @@ a fixed, system-dependent value.
 .TP
 \f[I]FI_CXI_COLL_TIMEOUT_USEC\f[R]
 \f[B]accelerated collectives:\f[R] Specify the reduction engine timeout.
-This should be larger than the maximum expected compute cycle in
-repeated reductions, or acceleration can create incast congestion in the
-switches.
+Upon expiration, reduction engines in hardware will deliver any partial
+results and expire. Any remaining results will arrive individually, without
+hardware reduction, unless the retry period (below) expires and re-arms
+the reduction.
 The relative performance benefit of acceleration declines with
 increasing compute cycle time, dropping below one percent at 32 msec
 (32000).
 Using acceleration with compute cycles larger than 32 msec is not
 recommended except for experimental purposes.
-Default is 32 msec (32000), maximum is 20 sec (20000000).
+.TP
+\f[I]FI_CXI_COLL_RETRY_USEC\f[R]
+\f[B]accelerated collectives:\f[R] Specify the reduction engine retry
+period. Upon expiration, incomplete reductions will be automatically
+restarted, forcing partial results from leaf endpoints to be sent again. This
+allows dropped packets to be recovered, and prevents potential incast at the
+root if many nodes submit late results (unexpectedly long compute cycles).
+The relative performance benefit of acceleration declines with
+increasing compute cycle time, dropping below one percent at 32 msec
+(32000).
+Using acceleration with compute cycles larger than 32 msec is not
+recommended except for experimental purposes.
 .TP
 \f[I]FI_CXI_COLL_USE_DMA_PUT\f[R]
 \f[B]accelerated collectives:\f[R] Use DMA for collective packet put.

@@ -85,14 +85,15 @@ application to the fabric manager when using the REST API.
 - **FI_CXI_HWCOLL_ADDRS_PER_JOB** is the maximum number of multicast addresses
   available to this job.
 
-- **FI_CXI_HWCOLL_MIN_NODES** is the minimum number of endpoints required to 
-support accelerated collectives.
+- **FI_CXI_HWCOLL_MIN_NODES** is the minimum number of endpoints required to support accelerated collectives.
 
 - **FI_CXI_COLL_FABRIC_MGR_URL** is the URL for the fabric manager REST API.
 
-- **FI_CXI_COLL_TIMEOUT_USEC** is the length of time reduction engines will be
-reserved in the reduction tree, and must be larger than the longest compute
-cycle in the application.
+- **FI_CXI_COLL_RETRY_USEC** is the time spent waiting for reduction
+  completion before performing a retry.
+
+- **FI_CXI_COLL_TIMEOUT_USEC** is the length of time hardware reduction engines
+  will be reserved before timing out and delivering a partial result.
 
 - **FI_CXI_COLL_USE_DMA_PUT** (experimental) uses Cassini DMA to initiate sends
 for reduction packets.

@@ -2685,8 +2685,10 @@ static int _initialize_mc(void *ptr)
 	mc_obj->max_red_id = CXIP_COLL_MAX_CONCUR;
 	mc_obj->arm_disable = false;
 	mc_obj->rx_discard = jstate->rx_discard;
-	mc_obj->timeout.tv_sec = 1;
-	mc_obj->timeout.tv_nsec = 0;
+	mc_obj->timeout.tv_sec =
+		cxip_env.coll_retry_usec/1000000L;
+	mc_obj->timeout.tv_nsec =
+		(cxip_env.coll_retry_usec%1000000L)*1000L;
 	for (red_id = 0; red_id < CXIP_COLL_MAX_CONCUR; red_id++) {
 		struct cxip_coll_reduction *reduction;
 
@@ -2891,6 +2893,7 @@ static void _start_curl(void *ptr)
 	TRACE_JOIN("token   = %s\n", cxip_env.coll_mcast_token);
 	TRACE_JOIN("maxadrs = %ld\n", cxip_env.hwcoll_addrs_per_job);
 	TRACE_JOIN("minnodes= %ld\n", cxip_env.hwcoll_min_nodes);
+	TRACE_JOIN("retry   = %ld\n", cxip_env.coll_retry_usec);
 	TRACE_JOIN("tmout   = %ld\n", cxip_env.coll_timeout_usec);
 
 	/* Generic error for any preliminary failures */

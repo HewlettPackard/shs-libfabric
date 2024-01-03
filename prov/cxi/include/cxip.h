@@ -182,6 +182,11 @@
 #define	CXIP_COLL_MIN_MULTI_RECV	64
 #define	CXIP_COLL_MAX_DATA_SIZE		32
 #define	CXIP_COLL_MAX_SEQNO		(1 << 10)
+// TODO adjust based on performance testing
+#define	CXIP_COLL_MIN_RETRY_USEC	1
+#define	CXIP_COLL_MAX_RETRY_USEC	32000
+#define	CXIP_COLL_MIN_TIMEOUT_USEC	1
+#define	CXIP_COLL_MAX_TIMEOUT_USEC	32000
 
 #define CXIP_REQ_BUF_HEADER_MAX_SIZE (sizeof(struct c_port_fab_hdr) + \
 	sizeof(struct c_port_unrestricted_hdr))
@@ -286,6 +291,7 @@ struct cxip_environment {
 
 	char *coll_job_id;
 	char *coll_job_step_id;
+	size_t coll_retry_usec;
 	size_t coll_timeout_usec;
 	char *coll_fabric_mgr_url;
 	char *coll_mcast_token;

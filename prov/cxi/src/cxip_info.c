@@ -664,7 +664,8 @@ struct cxip_environment cxip_env = {
 	.hwcoll_addrs_per_job = 0,
 	.hwcoll_min_nodes = -1,
 	.coll_fabric_mgr_url = NULL,
-	.coll_timeout_usec = 0,
+	.coll_retry_usec = CXIP_COLL_MAX_RETRY_USEC,
+	.coll_timeout_usec = CXIP_COLL_MAX_TIMEOUT_USEC,
 	.coll_use_dma_put = false,
 	.telemetry_rgid = -1,
 	.disable_hmem_dev_register = 0,
@@ -1206,11 +1207,27 @@ static void cxip_env_init(void)
 	fi_param_get_size_t(&cxip_prov, "hwcoll_min_nodes",
 			    &cxip_env.hwcoll_min_nodes);
 
+	fi_param_define(&cxip_prov, "coll_retry_usec", FI_PARAM_SIZE_T,
+		"Retry period (usec) (default %d, min %d, max %d).",
+		cxip_env.coll_retry_usec, CXIP_COLL_MIN_RETRY_USEC,
+		CXIP_COLL_MAX_RETRY_USEC);
+	fi_param_get_size_t(&cxip_prov, "coll_retry_usec",
+			    &cxip_env.coll_retry_usec);
+	if (cxip_env.coll_retry_usec < CXIP_COLL_MIN_RETRY_USEC)
+		cxip_env.coll_retry_usec = CXIP_COLL_MIN_RETRY_USEC;
+	if (cxip_env.coll_retry_usec > CXIP_COLL_MAX_RETRY_USEC)
+		cxip_env.coll_retry_usec = CXIP_COLL_MAX_RETRY_USEC;
+
 	fi_param_define(&cxip_prov, "coll_timeout_usec", FI_PARAM_SIZE_T,
-		"Nominal estimated compute cycle (usec) (default %d).",
-		cxip_env.coll_timeout_usec);
+		"Reduction tree timeout (usec) (default %d, min %d, max %d).",
+		cxip_env.coll_timeout_usec, CXIP_COLL_MIN_TIMEOUT_USEC,
+		CXIP_COLL_MAX_TIMEOUT_USEC);
 	fi_param_get_size_t(&cxip_prov, "coll_timeout_usec",
 			    &cxip_env.coll_timeout_usec);
+	if (cxip_env.coll_timeout_usec < CXIP_COLL_MIN_TIMEOUT_USEC)
+		cxip_env.coll_timeout_usec = CXIP_COLL_MIN_TIMEOUT_USEC;
+	if (cxip_env.coll_timeout_usec > CXIP_COLL_MAX_TIMEOUT_USEC)
+		cxip_env.coll_timeout_usec = CXIP_COLL_MAX_TIMEOUT_USEC;
 
 	fi_param_define(&cxip_prov, "default_tx_size", FI_PARAM_SIZE_T,
 			"Default provider tx_attr.size (default: %lu).",
