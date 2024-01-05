@@ -1538,3 +1538,68 @@ int cxip_domain_valid_vni(struct cxip_domain *dom, unsigned int vni)
 	*/
 	return cxip_if_valid_rgroup_vni(dom->iface, dom->auth_key.svc_id, vni);
 }
+
+#define SUPPORTED_DWQ_FLAGS (FI_MORE | FI_COMPLETION | FI_DELIVERY_COMPLETE | \
+	FI_MATCH_COMPLETE | FI_TRANSMIT_COMPLETE | FI_CXI_CNTR_WB)
+
+static int cxip_domain_dwq_emit_validate(struct cxip_domain *dom, uint16_t vni,
+					 enum cxi_traffic_class tc,
+					 enum cxi_traffic_class_type tc_type,
+					 uint64_t flags)
+{
+	uint64_t unsupported_flags = flags & ~SUPPORTED_DWQ_FLAGS;
+
+	if (unsupported_flags) {
+		CXIP_WARN("Unsupported flags: %lx\n", unsupported_flags);
+		return -FI_EINVAL;
+	}
+
+	if (tc != dom->trig_cmdq->cur_cp->tc) {
+		CXIP_WARN("Invalid tc: %d\n", tc);
+		return -FI_EINVAL;
+	}
+
+	if (tc_type != dom->trig_cmdq->cur_cp->tc_type) {
+		CXIP_WARN("Invalid tc_type: %d\n", tc_type);
+		return -FI_EINVAL;
+	}
+
+	if (vni != dom->trig_cmdq->cur_cp->vni) {
+		CXIP_WARN("Invalid vni: %d\n", vni);
+		return -FI_EINVAL;
+	}
+
+	return FI_SUCCESS;
+}
+
+int cxip_domain_dwq_emit_dma(struct cxip_domain *dom, uint16_t vni,
+			     enum cxi_traffic_class tc,
+			     enum cxi_traffic_class_type tc_type,
+			     struct cxip_cntr *trig_cntr, size_t trig_thresh,
+			     struct c_full_dma_cmd *dma, uint64_t flags)
+{
+	struct c_ct_cmd ct_cmd = {
+		.trig_ct = trig_cntr->ct->ctn,
+		.threshold = trig_thresh,
+	};
+	int ret;
+
+	ret = cxip_domain_dwq_emit_validate(dom, vni, tc, tc_type, flags);
+	if (ret)
+		return ret;
+
+	ofi_genlock_lock(&dom->trig_cmdq_lock);
+
+	ret = cxi_cq_emit_trig_full_dma(dom->trig_cmdq->dev_cmdq, &ct_cmd, dma);
+	if (ret) {
+		CXIP_WARN("Failed to emit trigger dma command: %d:%s\n", ret,
+			  fi_strerror(-ret));
+		ret = -FI_EAGAIN;
+	} else {
+		cxip_txq_ring(dom->trig_cmdq, false, 1);
+	}
+
+	ofi_genlock_unlock(&dom->trig_cmdq_lock);
+
+	return ret;
+}
