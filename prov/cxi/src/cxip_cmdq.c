@@ -277,3 +277,36 @@ int cxip_cmdq_emit_c_state(struct cxip_cmdq *cmdq,
 
 	return FI_SUCCESS;
 }
+
+int cxip_cmdq_emit_idc_put(struct cxip_cmdq *cmdq,
+			   const struct c_cstate_cmd *c_state,
+			   const struct c_idc_put_cmd *put, const void *buf,
+			   size_t len, uint64_t flags)
+{
+	int ret;
+
+	if (flags & (FI_FENCE | FI_CXI_WEAK_FENCE)) {
+		ret = cxi_cq_emit_cq_cmd(cmdq->dev_cmdq, C_CMD_CQ_FENCE);
+		if (ret) {
+			CXIP_WARN("Failed to issue fence command: %d:%s\n", ret,
+				  fi_strerror(-ret));
+			return -FI_EAGAIN;
+		}
+	}
+
+	ret = cxip_cmdq_emit_c_state(cmdq, c_state);
+	if (ret) {
+		CXIP_WARN("Failed to emit c_state command: %d:%s\n", ret,
+			  fi_strerror(-ret));
+		return ret;
+	}
+
+	ret = cxi_cq_emit_idc_put(cmdq->dev_cmdq, put, buf, len);
+	if (ret) {
+		CXIP_WARN("Failed to emit idc_put command: %d:%s\n", ret,
+			  fi_strerror(-ret));
+		return -FI_EAGAIN;
+	}
+
+	return FI_SUCCESS;
+}
