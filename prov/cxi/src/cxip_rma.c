@@ -429,7 +429,6 @@ static int cxip_rma_emit_idc(struct cxip_txc *txc, const void *buf, size_t len,
 	struct c_cstate_cmd cstate_cmd = {};
 	struct c_idc_put_cmd idc_put = {};
 	void *inject_req;
-	struct cxip_cmdq *cmdq = txc->tx_cmdq;
 
 	/* IDCs must be traffic if the user requests a completion event. */
 	if (flags & FI_COMPLETION) {
@@ -521,57 +520,14 @@ static int cxip_rma_emit_idc(struct cxip_txc *txc, const void *buf, size_t len,
 	}
 	idc_put.idc_header.remote_offset = addr;
 
-	/* Emit all commands. Note that if any of the operations do not take,
-	 * no cleaning up of the command queue is needed.
-	 */
-
-	/* Ensure correct traffic class is used. */
-	ret = cxip_txq_cp_set(cmdq, vni, cxip_ofi_to_cxi_tc(tclass), tc_type);
-	if (ret) {
-		TXC_WARN(txc, "Failed to set traffic class: %d:%s\n", ret,
-			 fi_strerror(-ret));
-		goto err_free_hmem_buf;
-	}
-
-	/* Honor fence if requested. */
-	if (flags & (FI_FENCE | FI_CXI_WEAK_FENCE)) {
-		ret = cxi_cq_emit_cq_cmd(cmdq->dev_cmdq, C_CMD_CQ_FENCE);
-		if (ret) {
-			TXC_WARN(txc, "Failed to issue fence command: %d:%s\n",
-				 ret, fi_strerror(-ret));
-
-			/* Always return -FI_EAGAIN for this failure. */
-			ret = -FI_EAGAIN;
-			goto err_free_hmem_buf;
-		}
-	}
-
-	/* Update the hardware command queue state to ensure correct fields are
-	 * associated with the IDC command.
-	 */
-	ret = cxip_cmdq_emit_c_state(cmdq, &cstate_cmd);
-	if (ret) {
-		TXC_WARN(txc, "Failed to emit c_state command: %d:%s\n", ret,
-			 fi_strerror(-ret));
-		goto err_free_hmem_buf;
-	}
-
-	/* Update the IDC put command and payload in the command queue. */
-	ret = cxi_cq_emit_idc_put(cmdq->dev_cmdq, &idc_put, idc_buf, len);
+	ret = cxip_txc_emit_idc_put(txc, vni, cxip_ofi_to_cxi_tc(tclass),
+				    tc_type, &cstate_cmd, &idc_put, idc_buf,
+				    len, flags);
 	if (ret) {
 		TXC_WARN(txc, "Failed to emit idc_put command: %d:%s\n", ret,
 			 fi_strerror(-ret));
-
-		/* Always return -FI_EAGAIN for this failure. */
-		ret = -FI_EAGAIN;
 		goto err_free_hmem_buf;
 	}
-
-	/* Kick the command queue. */
-	cxip_txq_ring(cmdq, !!(flags & FI_MORE),
-		      ofi_atomic_get32(&txc->otx_reqs));
-	if (req)
-		ofi_atomic_inc32(&txc->otx_reqs);
 
 	if (hmem_buf)
 		cxip_txc_ibuf_free(txc, hmem_buf);
