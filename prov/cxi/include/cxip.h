@@ -747,6 +747,9 @@ int cxip_cmdq_emit_idc_put(struct cxip_cmdq *cmdq,
 			   const struct c_cstate_cmd *c_state,
 			   const struct c_idc_put_cmd *put, const void *buf,
 			   size_t len, uint64_t flags);
+int cxip_cmdq_emit_dma(struct cxip_cmdq *cmdq, struct c_full_dma_cmd *dma,
+		       uint64_t flags);
+
 
 /* OFI Provider Structures */
 

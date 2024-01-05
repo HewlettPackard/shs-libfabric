@@ -310,3 +310,27 @@ int cxip_cmdq_emit_idc_put(struct cxip_cmdq *cmdq,
 
 	return FI_SUCCESS;
 }
+
+int cxip_cmdq_emit_dma(struct cxip_cmdq *cmdq, struct c_full_dma_cmd *dma,
+		       uint64_t flags)
+{
+	int ret;
+
+	if (flags & (FI_FENCE | FI_CXI_WEAK_FENCE)) {
+		ret = cxi_cq_emit_cq_cmd(cmdq->dev_cmdq, C_CMD_CQ_FENCE);
+		if (ret) {
+			CXIP_WARN("Failed to issue fence command: %d:%s\n", ret,
+				  fi_strerror(-ret));
+			return -FI_EAGAIN;
+		}
+	}
+
+	ret = cxi_cq_emit_dma(cmdq->dev_cmdq, dma);
+	if (ret) {
+		CXIP_WARN("Failed to emit dma command: %d:%s\n", ret,
+			  fi_strerror(-ret));
+		return -FI_EAGAIN;
+	}
+
+	return FI_SUCCESS;
+}
