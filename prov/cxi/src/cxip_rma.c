@@ -172,10 +172,8 @@ static int cxip_rma_emit_dma(struct cxip_txc *txc, const void *buf, size_t len,
 	struct cxip_md *dma_md = NULL;
 	void *dma_buf;
 	struct c_full_dma_cmd dma_cmd = {};
-	struct c_ct_cmd ct_cmd;
 	int ret;
 	struct cxip_domain *dom = txc->domain;
-	struct cxip_cmdq *cmdq = triggered ? dom->trig_cmdq : txc->tx_cmdq;
 	struct cxip_cntr *cntr;
 	void *inject_req;
 
@@ -325,83 +323,14 @@ static int cxip_rma_emit_dma(struct cxip_txc *txc, const void *buf, size_t len,
 		dma_cmd.request_len = len;
 	}
 
-	/* If taking a successful completion, limit outstanding operations */
-	if (req && (ofi_atomic_get32(&txc->otx_reqs) >= txc->attr.size)) {
-		ret = -FI_EAGAIN;
+	ret = cxip_txc_emit_dma(txc, vni, cxip_ofi_to_cxi_tc(tclass),
+				tc_type, trig_cntr, trig_thresh,
+				&dma_cmd, flags);
+	if (ret) {
+		TXC_WARN(txc, "Failed to emit dma command: %d:%s\n", ret,
+			 fi_strerror(-ret));
 		goto err_free_rma_buf;
 	}
-
-	/* Triggered operations do not support changing of traffic classes.
-	 * Thus, communication profile cannot be changed.
-	 */
-	if (triggered) {
-		memset(&ct_cmd, 0, sizeof(ct_cmd));
-		ct_cmd.trig_ct = trig_cntr->ct->ctn,
-		ct_cmd.threshold = trig_thresh,
-
-		/* Triggered command queue is domain resource, must lock */
-		ofi_genlock_lock(&txc->domain->trig_cmdq_lock);
-		ret = cxi_cq_emit_trig_full_dma(cmdq->dev_cmdq, &ct_cmd,
-						&dma_cmd);
-		if (ret) {
-			TXC_WARN(txc,
-				 "Failed to emit trigger dma command: %d:%s\n",
-				 ret, fi_strerror(-ret));
-
-			/* Always return -FI_EAGAIN for this failure. */
-			ret = -FI_EAGAIN;
-			ofi_genlock_unlock(&txc->domain->trig_cmdq_lock);
-
-			goto err_free_rma_buf;
-		}
-
-		/* Kick the command queue. */
-		cxip_txq_ring(cmdq, !!(flags & FI_MORE),
-			      ofi_atomic_get32(&txc->otx_reqs));
-		ofi_genlock_unlock(&txc->domain->trig_cmdq_lock);
-	} else {
-		/* Ensure correct traffic class is used. */
-		ret = cxip_txq_cp_set(cmdq, vni, cxip_ofi_to_cxi_tc(tclass),
-				      tc_type);
-		if (ret) {
-			TXC_WARN(txc, "Failed to set traffic class: %d:%s\n",
-				 ret, fi_strerror(-ret));
-			goto err_free_rma_buf;
-		}
-
-		/* Honor fence if requested. */
-		if (flags & (FI_FENCE | FI_CXI_WEAK_FENCE)) {
-			ret = cxi_cq_emit_cq_cmd(cmdq->dev_cmdq,
-						 C_CMD_CQ_FENCE);
-			if (ret) {
-				TXC_WARN(txc,
-					 "Failed to issue fence command: %d:%s\n",
-					 ret, fi_strerror(-ret));
-
-				/* Always return -FI_EAGAIN for this failure. */
-				ret = -FI_EAGAIN;
-				goto err_free_rma_buf;
-			}
-		}
-
-		/* Finally emit the RMA DMA command. */
-		ret = cxi_cq_emit_dma(cmdq->dev_cmdq, &dma_cmd);
-		if (ret) {
-			TXC_WARN(txc, "Failed to emit idc_put command: %d:%s\n",
-				 ret, fi_strerror(-ret));
-
-			/* Always return -FI_EAGAIN for this failure. */
-			ret = -FI_EAGAIN;
-			goto err_free_rma_buf;
-		}
-
-		/* Kick the command queue. */
-		cxip_txq_ring(cmdq, !!(flags & FI_MORE),
-			      ofi_atomic_get32(&txc->otx_reqs));
-	}
-
-	if (req)
-		ofi_atomic_inc32(&txc->otx_reqs);
 
 	return FI_SUCCESS;
 
