@@ -39,7 +39,8 @@ _cxi_files = \
 	prov/cxi/src/cxip_evtq.c \
 	prov/cxi/src/cxip_nic.c \
 	prov/cxi/src/cxip_portals_table.c \
-	prov/cxi/src/cxip_pte.c
+	prov/cxi/src/cxip_pte.c \
+	prov/cxi/src/cxip_cmdq.c
 
 _cxi_headers = \
 	prov/cxi/include/cxip.h \

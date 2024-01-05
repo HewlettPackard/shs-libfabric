@@ -1,0 +1,279 @@
+/*
+ * (C) Copyright 2023 Hewlett Packard Enterprise Development LP
+ *
+ * This software is available to you under a choice of one of two
+ * licenses.  You may choose to be licensed under the terms of the GNU
+ * General Public License (GPL) Version 2, available from the file
+ * COPYING in the main directory of this source tree, or the
+ * BSD license below:
+ *
+ *     Redistribution and use in source and binary forms, with or
+ *     without modification, are permitted provided that the following
+ *     conditions are met:
+ *
+ *      - Redistributions of source code must retain the above
+ *        copyright notice, this list of conditions and the following
+ *        disclaimer.
+ *
+ *      - Redistributions in binary form must reproduce the above
+ *        copyright notice, this list of conditions and the following
+ *        disclaimer in the documentation and/or other materials
+ *        provided with the distribution.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+#include "cxip.h"
+
+#define CXIP_DBG(...) _CXIP_DBG(FI_LOG_DOMAIN, __VA_ARGS__)
+#define CXIP_INFO(...) _CXIP_INFO(FI_LOG_DOMAIN, __VA_ARGS__)
+#define CXIP_WARN(...) _CXIP_WARN(FI_LOG_DOMAIN, __VA_ARGS__)
+
+enum cxi_traffic_class cxip_ofi_to_cxi_tc(uint32_t ofi_tclass)
+{
+	switch (ofi_tclass) {
+	case FI_TC_BULK_DATA:
+		return CXI_TC_BULK_DATA;
+	case FI_TC_DEDICATED_ACCESS:
+		return CXI_TC_DEDICATED_ACCESS;
+	case FI_TC_LOW_LATENCY:
+		return CXI_TC_LOW_LATENCY;
+	case FI_TC_BEST_EFFORT:
+	case FI_TC_NETWORK_CTRL:
+	case FI_TC_SCAVENGER:
+	default:
+		return CXI_TC_BEST_EFFORT;
+	}
+}
+
+static int cxip_cp_get(struct cxip_lni *lni, uint16_t vni,
+		       enum cxi_traffic_class tc,
+		       enum cxi_traffic_class_type tc_type,
+		       struct cxi_cp **cp)
+{
+	int ret;
+	int i;
+	struct cxip_remap_cp *sw_cp;
+	static const enum cxi_traffic_class remap_tc = CXI_TC_BEST_EFFORT;
+
+	ofi_spin_lock(&lni->lock);
+
+	/* Always prefer SW remapped CPs over allocating HW CP. */
+	dlist_foreach_container(&lni->remap_cps, struct cxip_remap_cp, sw_cp,
+				remap_entry) {
+		if (sw_cp->remap_cp.vni == vni && sw_cp->remap_cp.tc == tc &&
+		    sw_cp->remap_cp.tc_type == tc_type) {
+			CXIP_DBG("Reusing SW CP: %u VNI: %u TC: %s TYPE: %s\n",
+				 sw_cp->remap_cp.lcid, sw_cp->remap_cp.vni,
+				 cxi_tc_to_str(sw_cp->remap_cp.tc),
+				 cxi_tc_type_to_str(sw_cp->remap_cp.tc_type));
+			*cp = &sw_cp->remap_cp;
+			goto success_unlock;
+		}
+	}
+
+	/* Allocate a new SW remapped CP entry and attempt to allocate the
+	 * user requested HW CP.
+	 */
+	sw_cp = calloc(1, sizeof(*sw_cp));
+	if (!sw_cp) {
+		ret = -FI_ENOMEM;
+		goto err_unlock;
+	}
+
+	ret = cxil_alloc_cp(lni->lni, vni, tc, tc_type,
+			    &lni->hw_cps[lni->n_cps]);
+	if (ret) {
+		/* Attempt to fall back to remap traffic class with the same
+		 * traffic class type and allocate HW CP if necessary.
+		 */
+		CXIP_WARN("Failed to allocate CP, ret: %d VNI: %u TC: %s TYPE: %s\n",
+			  ret, vni, cxi_tc_to_str(tc),
+			  cxi_tc_type_to_str(tc_type));
+		CXIP_WARN("Remapping original TC from %s to %s\n",
+			  cxi_tc_to_str(tc), cxi_tc_to_str(remap_tc));
+
+		/* Check to see if a matching HW CP has already been allocated.
+		 * If so, reuse the entry.
+		 */
+		for (i = 0; i < lni->n_cps; i++) {
+			if (lni->hw_cps[i]->vni == vni &&
+			    lni->hw_cps[i]->tc == remap_tc &&
+			    lni->hw_cps[i]->tc_type == tc_type) {
+				sw_cp->hw_cp = lni->hw_cps[i];
+				goto found_hw_cp;
+			}
+		}
+
+		/* Attempt to allocated a remapped HW CP. */
+		ret = cxil_alloc_cp(lni->lni, vni, remap_tc, tc_type,
+				    &lni->hw_cps[lni->n_cps]);
+		if (ret) {
+			CXIP_WARN("Failed to allocate CP, ret: %d VNI: %u TC: %s TYPE: %s\n",
+				  ret, vni, cxi_tc_to_str(remap_tc),
+				  cxi_tc_type_to_str(tc_type));
+			ret = -FI_EINVAL;
+			goto err_free_sw_cp;
+		}
+	}
+
+	CXIP_DBG("Allocated CP: %u VNI: %u TC: %s TYPE: %s\n",
+		 lni->hw_cps[lni->n_cps]->lcid, vni,
+		 cxi_tc_to_str(lni->hw_cps[lni->n_cps]->tc),
+		 cxi_tc_type_to_str(lni->hw_cps[lni->n_cps]->tc_type));
+
+	sw_cp->hw_cp = lni->hw_cps[lni->n_cps++];
+
+found_hw_cp:
+	sw_cp->remap_cp.vni = vni;
+	sw_cp->remap_cp.tc = tc;
+	sw_cp->remap_cp.tc_type = tc_type;
+	sw_cp->remap_cp.lcid = sw_cp->hw_cp->lcid;
+	dlist_insert_tail(&sw_cp->remap_entry, &lni->remap_cps);
+
+	*cp = &sw_cp->remap_cp;
+
+success_unlock:
+	ofi_spin_unlock(&lni->lock);
+
+	return FI_SUCCESS;
+
+err_free_sw_cp:
+	free(sw_cp);
+err_unlock:
+	ofi_spin_unlock(&lni->lock);
+
+	return ret;
+}
+
+int cxip_txq_cp_set(struct cxip_cmdq *cmdq, uint16_t vni,
+		    enum cxi_traffic_class tc,
+		    enum cxi_traffic_class_type tc_type)
+{
+	struct cxi_cp *cp;
+	int ret;
+
+	if (cmdq->cur_cp->vni == vni && cmdq->cur_cp->tc == tc &&
+	    cmdq->cur_cp->tc_type == tc_type)
+		return FI_SUCCESS;
+
+	ret = cxip_cp_get(cmdq->lni, vni, tc, tc_type, &cp);
+	if (ret != FI_SUCCESS) {
+		CXIP_DBG("Failed to get CP: %d\n", ret);
+		return -FI_EOTHER;
+	}
+
+	ret = cxi_cq_emit_cq_lcid(cmdq->dev_cmdq, cp->lcid);
+	if (ret) {
+		CXIP_DBG("Failed to update CMDQ(%p) CP: %d\n", cmdq, ret);
+		ret = -FI_EAGAIN;
+	} else {
+		ret = FI_SUCCESS;
+		cmdq->cur_cp = cp;
+
+		CXIP_DBG("Updated CMDQ(%p) CP: %d VNI: %u TC: %s TYPE: %s\n",
+			 cmdq, cp->lcid, cp->vni, cxi_tc_to_str(cp->tc),
+			 cxi_tc_type_to_str(cp->tc_type));
+	}
+
+	return ret;
+}
+
+/*
+ * cxip_cmdq_alloc() - Allocate a command queue.
+ */
+int cxip_cmdq_alloc(struct cxip_lni *lni, struct cxi_eq *evtq,
+		    struct cxi_cq_alloc_opts *cq_opts, uint16_t vni,
+		    enum cxi_traffic_class tc,
+		    enum cxi_traffic_class_type tc_type,
+		    struct cxip_cmdq **cmdq)
+{
+	int ret;
+	struct cxi_cq *dev_cmdq;
+	struct cxip_cmdq *new_cmdq;
+	struct cxi_cp *cp = NULL;
+
+	new_cmdq = calloc(1, sizeof(*new_cmdq));
+	if (!new_cmdq) {
+		CXIP_WARN("Unable to allocate CMDQ structure\n");
+		return -FI_ENOMEM;
+	}
+
+	if (cq_opts->flags & CXI_CQ_IS_TX) {
+		ret = cxip_cp_get(lni, vni, tc, tc_type, &cp);
+		if (ret != FI_SUCCESS) {
+			CXIP_WARN("Failed to allocate CP: %d\n", ret);
+			return ret;
+		}
+		cq_opts->lcid = cp->lcid;
+
+		new_cmdq->cur_cp = cp;
+
+		/* Trig command queue can never use LL ring. */
+		if (cq_opts->flags & CXI_CQ_TX_WITH_TRIG_CMDS ||
+		    lni->iface->info->device_platform == CXI_PLATFORM_NETSIM)
+			new_cmdq->llring_mode = CXIP_LLRING_NEVER;
+		else
+			new_cmdq->llring_mode = cxip_env.llring_mode;
+	} else {
+		new_cmdq->llring_mode = CXIP_LLRING_NEVER;
+	}
+
+	ret = cxil_alloc_cmdq(lni->lni, evtq, cq_opts, &dev_cmdq);
+	if (ret) {
+		CXIP_WARN("Failed to allocate %s, ret: %d\n",
+			  cq_opts->flags & CXI_CQ_IS_TX ? "TXQ" : "TGQ", ret);
+		ret = -FI_ENOSPC;
+		goto free_cmdq;
+	}
+
+	new_cmdq->dev_cmdq = dev_cmdq;
+	new_cmdq->lni = lni;
+	*cmdq = new_cmdq;
+
+	return FI_SUCCESS;
+
+free_cmdq:
+	free(new_cmdq);
+
+	return ret;
+}
+
+/*
+ * cxip_cmdq_free() - Free a command queue.
+ */
+void cxip_cmdq_free(struct cxip_cmdq *cmdq)
+{
+	int ret;
+
+	ret = cxil_destroy_cmdq(cmdq->dev_cmdq);
+	if (ret)
+		CXIP_WARN("cxil_destroy_cmdq failed, ret: %d\n", ret);
+
+	free(cmdq);
+}
+
+/* Must hold cmdq->lock. */
+int cxip_cmdq_emit_c_state(struct cxip_cmdq *cmdq,
+			   const struct c_cstate_cmd *c_state)
+{
+	int ret;
+
+	if (memcmp(&cmdq->c_state, c_state, sizeof(*c_state))) {
+		ret = cxi_cq_emit_c_state(cmdq->dev_cmdq, c_state);
+		if (ret) {
+			CXIP_DBG("Failed to issue C_STATE command: %d\n", ret);
+			return -FI_EAGAIN;
+		}
+
+		cmdq->c_state = *c_state;
+	}
+
+	return FI_SUCCESS;
+}
