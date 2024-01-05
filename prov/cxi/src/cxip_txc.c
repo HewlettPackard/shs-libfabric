@@ -554,3 +554,53 @@ int cxip_txc_emit_idc_put(struct cxip_txc *txc, uint16_t vni,
 
 	return FI_SUCCESS;
 }
+
+int cxip_txc_emit_dma(struct cxip_txc *txc, uint16_t vni,
+		      enum cxi_traffic_class tc,
+		      enum cxi_traffic_class_type tc_type,
+		      struct cxip_cntr *trig_cntr, size_t trig_thresh,
+		      struct c_full_dma_cmd *dma, uint64_t flags)
+{
+	int ret;
+
+	if (!cxip_txc_can_emit_op(txc, dma->event_success_disable))
+		return -FI_EAGAIN;
+
+	if (trig_cntr) {
+		ret = cxip_domain_dwq_emit_dma(txc->domain, vni,
+					       tc, tc_type, trig_cntr,
+					       trig_thresh, dma, flags);
+		if (ret)
+			TXC_WARN(txc,
+				 "Failed to emit trigger dma command: %d:%s\n",
+				 ret, fi_strerror(-ret));
+		else if (!dma->event_success_disable)
+			ofi_atomic_inc32(&txc->otx_reqs);
+
+		return ret;
+	}
+
+	/* Ensure correct traffic class is used. */
+	ret = cxip_txq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
+	if (ret) {
+		TXC_WARN(txc, "Failed to set traffic class: %d:%s\n", ret,
+			 fi_strerror(-ret));
+		return ret;
+	}
+
+	ret = cxip_cmdq_emit_dma(txc->tx_cmdq, dma, flags);
+	if (ret) {
+		TXC_WARN(txc, "Failed to emit dma command: %d:%s\n", ret,
+			 fi_strerror(-ret));
+		return ret;
+	}
+
+	/* Kick the command queue. */
+	cxip_txq_ring(txc->tx_cmdq, !!(flags & FI_MORE),
+		      ofi_atomic_get32(&txc->otx_reqs));
+
+	if (!dma->event_success_disable)
+		ofi_atomic_inc32(&txc->otx_reqs);
+
+	return FI_SUCCESS;
+}

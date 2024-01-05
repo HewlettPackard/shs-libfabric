@@ -2076,6 +2076,11 @@ int cxip_txc_emit_idc_put(struct cxip_txc *txc, uint16_t vni,
 			  const struct c_cstate_cmd *c_state,
 			  const struct c_idc_put_cmd *put, const void *buf,
 			  size_t len, uint64_t flags);
+int cxip_txc_emit_dma(struct cxip_txc *txc, uint16_t vni,
+		      enum cxi_traffic_class tc,
+		      enum cxi_traffic_class_type tc_type,
+		      struct cxip_cntr *trig_cntr, size_t trig_thresh,
+		      struct c_full_dma_cmd *dma, uint64_t flags);
 
 void cxip_txc_flush_msg_trig_reqs(struct cxip_txc *txc);
 
