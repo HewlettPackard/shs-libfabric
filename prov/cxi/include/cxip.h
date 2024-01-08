@@ -2092,6 +2092,12 @@ int cxip_txc_emit_idc_amo(struct cxip_txc *txc, uint16_t vni,
 			  const struct c_cstate_cmd *c_state,
 			  const struct c_idc_amo_cmd *amo, uint64_t flags,
 			  bool fetching, bool flush);
+int cxip_txc_emit_dma_amo(struct cxip_txc *txc, uint16_t vni,
+			  enum cxi_traffic_class tc,
+			  enum cxi_traffic_class_type tc_type,
+			  struct cxip_cntr *trig_cntr, size_t trig_thresh,
+			  struct c_dma_amo_cmd *amo, uint64_t flags,
+			  bool fetching, bool flush);
 
 void cxip_txc_flush_msg_trig_reqs(struct cxip_txc *txc);
 

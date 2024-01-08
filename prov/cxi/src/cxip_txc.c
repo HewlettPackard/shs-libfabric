@@ -642,3 +642,55 @@ int cxip_txc_emit_idc_amo(struct cxip_txc *txc, uint16_t vni,
 
 	return FI_SUCCESS;
 }
+
+int cxip_txc_emit_dma_amo(struct cxip_txc *txc, uint16_t vni,
+			  enum cxi_traffic_class tc,
+			  enum cxi_traffic_class_type tc_type,
+			  struct cxip_cntr *trig_cntr, size_t trig_thresh,
+			  struct c_dma_amo_cmd *amo, uint64_t flags,
+			  bool fetching, bool flush)
+{
+	int ret;
+
+	if (!cxip_txc_can_emit_op(txc, amo->event_success_disable))
+		return -FI_EAGAIN;
+
+	if (trig_cntr) {
+		ret = cxip_domain_dwq_emit_amo(txc->domain, vni, tc,
+					       CXI_TC_TYPE_DEFAULT, trig_cntr,
+					       trig_thresh, amo, flags,
+					       fetching, flush);
+		if (ret)
+			TXC_WARN(txc,
+				 "Failed to emit trigger amo command: %d:%s\n",
+				 ret, fi_strerror(-ret));
+		else if (!amo->event_success_disable)
+			ofi_atomic_inc32(&txc->otx_reqs);
+
+		return ret;
+	}
+
+	/* Ensure correct traffic class is used. */
+	ret = cxip_txq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
+	if (ret) {
+		TXC_WARN(txc, "Failed to set traffic class: %d:%s\n", ret,
+			 fi_strerror(-ret));
+		return ret;
+	}
+
+	ret = cxip_cmdq_emit_dma_amo(txc->tx_cmdq, amo, flags, fetching, flush);
+	if (ret) {
+		TXC_WARN(txc, "Failed to emit DMA amo command: %d:%s\n", ret,
+			 fi_strerror(-ret));
+		return ret;
+	}
+
+	/* Kick the command queue. */
+	cxip_txq_ring(txc->tx_cmdq, !!(flags & FI_MORE),
+		      ofi_atomic_get32(&txc->otx_reqs));
+
+	if (!amo->event_success_disable)
+		ofi_atomic_inc32(&txc->otx_reqs);
+
+	return FI_SUCCESS;
+}
