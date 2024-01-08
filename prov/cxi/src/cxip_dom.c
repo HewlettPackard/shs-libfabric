@@ -1603,3 +1603,75 @@ int cxip_domain_dwq_emit_dma(struct cxip_domain *dom, uint16_t vni,
 
 	return ret;
 }
+
+int cxip_domain_dwq_emit_amo(struct cxip_domain *dom, uint16_t vni,
+			     enum cxi_traffic_class tc,
+			     enum cxi_traffic_class_type tc_type,
+			     struct cxip_cntr *trig_cntr, size_t trig_thresh,
+			     struct c_dma_amo_cmd *amo, uint64_t flags,
+			     bool fetching, bool flush)
+{
+	struct c_ct_cmd ct_cmd = {
+		.trig_ct = trig_cntr->ct->ctn,
+		.threshold = trig_thresh,
+	};
+	struct c_full_dma_cmd flush_cmd;
+	bool fetching_flush = fetching && flush;
+	int ret;
+
+	/* TODO: Need to ensure there are at least 2 TLEs free for the following
+	 * triggered commands.
+	 */
+
+	/* TODO: Support triggered operations with different VNIs. */
+
+	if (fetching_flush) {
+		memset(&flush_cmd, 0, sizeof(flush_cmd));
+		flush_cmd.command.opcode = C_CMD_PUT;
+		flush_cmd.index_ext = amo->index_ext;
+		flush_cmd.event_send_disable = 1;
+		flush_cmd.dfa = amo->dfa;
+		flush_cmd.remote_offset = amo->remote_offset;
+		flush_cmd.eq = amo->eq;
+		flush_cmd.user_ptr = amo->user_ptr;
+		flush_cmd.flush = 1;
+	}
+
+	ret = cxip_domain_dwq_emit_validate(dom, vni, tc, tc_type, flags);
+	if (ret)
+		return ret;
+
+	ofi_genlock_lock(&dom->trig_cmdq_lock);
+
+	if (fetching_flush &&
+	    __cxi_cq_free_slots(dom->trig_cmdq->dev_cmdq) >= 16) {
+		CXIP_WARN("No space for FAMO with FI_DELIVERY_COMPLETE\n");
+		ret = -FI_EAGAIN;
+		goto out_unlock;
+	}
+
+	ret = cxi_cq_emit_trig_dma_amo(dom->trig_cmdq->dev_cmdq, &ct_cmd,
+				       amo, fetching);
+	if (ret) {
+		CXIP_WARN("Failed to emit trigger amo command: %d:%s\n", ret,
+			  fi_strerror(-ret));
+		ret = -FI_EAGAIN;
+		goto out_unlock;
+	}
+
+	if (fetching_flush) {
+		/* CQ space check already occurred. Thus, return code can be
+		 * ignored.
+		 */
+		ret = cxi_cq_emit_trig_full_dma(dom->trig_cmdq->dev_cmdq,
+						&ct_cmd, &flush_cmd);
+		assert(ret == 0);
+	}
+
+	cxip_txq_ring(dom->trig_cmdq, false, 1);
+
+out_unlock:
+	ofi_genlock_unlock(&dom->trig_cmdq_lock);
+
+	return ret;
+}

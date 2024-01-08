@@ -3333,5 +3333,11 @@ int cxip_domain_dwq_emit_dma(struct cxip_domain *dom, uint16_t vni,
 			     enum cxi_traffic_class_type tc_type,
 			     struct cxip_cntr *trig_cntr, size_t trig_thresh,
 			     struct c_full_dma_cmd *dma, uint64_t flags);
+int cxip_domain_dwq_emit_amo(struct cxip_domain *dom, uint16_t vni,
+			     enum cxi_traffic_class tc,
+			     enum cxi_traffic_class_type tc_type,
+			     struct cxip_cntr *trig_cntr, size_t trig_thresh,
+			     struct c_dma_amo_cmd *amo, uint64_t flags,
+			     bool fetching, bool flush);
 
 #endif
