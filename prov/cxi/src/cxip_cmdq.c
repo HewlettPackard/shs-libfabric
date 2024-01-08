@@ -396,3 +396,57 @@ int cxip_cmdq_emic_idc_amo(struct cxip_cmdq *cmdq,
 
 	return FI_SUCCESS;
 }
+
+int cxip_cmdq_emit_dma_amo(struct cxip_cmdq *cmdq, struct c_dma_amo_cmd *amo,
+			   uint64_t flags, bool fetching, bool flush)
+{
+	struct c_full_dma_cmd flush_cmd;
+	bool fetching_flush = fetching && flush;
+	int ret;
+
+	if (fetching_flush) {
+		memset(&flush_cmd, 0, sizeof(flush_cmd));
+		flush_cmd.command.opcode = C_CMD_PUT;
+		flush_cmd.index_ext = amo->index_ext;
+		flush_cmd.event_send_disable = 1;
+		flush_cmd.dfa = amo->dfa;
+		flush_cmd.remote_offset = amo->remote_offset;
+		flush_cmd.eq = amo->eq;
+		flush_cmd.user_ptr = amo->user_ptr;
+		flush_cmd.flush = 1;
+		flush_cmd.match_bits = amo->match_bits;
+	}
+
+	if (flags & (FI_FENCE | FI_CXI_WEAK_FENCE)) {
+		ret = cxi_cq_emit_cq_cmd(cmdq->dev_cmdq, C_CMD_CQ_FENCE);
+		if (ret) {
+			CXIP_WARN("Failed to issue fence command: %d:%s\n", ret,
+				  fi_strerror(-ret));
+			return -FI_EAGAIN;
+		}
+	}
+
+	/* Fetching AMO with flush requires two commands. Ensure there is enough
+	 * space. At worse at least 16x 32-byte slots are needed.
+	 */
+	if (fetching_flush && __cxi_cq_free_slots(cmdq->dev_cmdq) < 16) {
+		CXIP_WARN("No space for FAMO with FI_DELIVERY_COMPLETE\n");
+		return -FI_EAGAIN;
+	}
+
+	ret = cxi_cq_emit_dma_amo(cmdq->dev_cmdq, amo, fetching);
+	if (ret) {
+		CXIP_WARN("Failed to emit DMA amo\n");
+		return -FI_EAGAIN;
+	}
+
+	if (fetching_flush) {
+		/* CQ space check already occurred. Thus, return code can be
+		 * ignored.
+		 */
+		ret = cxi_cq_emit_dma(cmdq->dev_cmdq, &flush_cmd);
+		assert(ret == 0);
+	}
+
+	return FI_SUCCESS;
+}
