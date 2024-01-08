@@ -529,11 +529,9 @@ static int cxip_amo_emit_idc(struct cxip_txc *txc,
 			     uint32_t tclass)
 {
 	struct cxip_domain *dom = txc->domain;
-	struct cxip_cmdq *cmdq = txc->tx_cmdq;
 	struct cxip_md *result_md = NULL;
 	struct c_cstate_cmd cstate_cmd = {};
 	struct c_idc_amo_cmd idc_amo_cmd = {};
-	struct c_full_dma_cmd flush_cmd;
 	struct cxip_req *req = NULL;
 	bool flush = !!(flags & (FI_DELIVERY_COMPLETE | FI_MATCH_COMPLETE));
 	bool fetching = result != NULL;
@@ -774,87 +772,20 @@ static int cxip_amo_emit_idc(struct cxip_txc *txc,
 	/* Optionally configure the flushing command used for fetching AMOs. */
 	if (fetching_amo_flush) {
 		assert(req != NULL);
-
-		memset(&flush_cmd, 0, sizeof(flush_cmd));
-
 		if (req_type == CXIP_RQ_AMO)
 			req->amo.fetching_amo_flush_cntr = txc->write_cntr;
 		else
 			req->amo.fetching_amo_flush_cntr = txc->read_cntr;
-
-		flush_cmd.command.opcode = C_CMD_PUT;
-		flush_cmd.index_ext = *idx_ext;
-		flush_cmd.event_send_disable = 1;
-		flush_cmd.dfa = *dfa;
-		flush_cmd.remote_offset = remote_offset;
-		flush_cmd.eq = cxip_evtq_eqn(&txc->tx_evtq);
-		flush_cmd.user_ptr = (uint64_t)req;
-		flush_cmd.flush = 1;
 	}
 
-	if (cxip_evtq_saturated(&txc->tx_evtq)) {
-		TXC_WARN(txc, "TX HW EQ saturated\n");
-		ret = -FI_EAGAIN;
-		goto err_unmap_result_buf;
-	}
-
-	/* Ensure correct traffic class is used. */
-	ret = cxip_txq_cp_set(cmdq, vni, cxip_ofi_to_cxi_tc(tclass), tc_type);
-	if (ret) {
-		TXC_WARN_RET(txc, ret, "Failed to set traffic class\n");
-		goto err_unmap_result_buf;
-	}
-
-	/* Honor fence if requested. */
-	if (flags & (FI_FENCE | FI_CXI_WEAK_FENCE)) {
-		ret = cxi_cq_emit_cq_cmd(cmdq->dev_cmdq, C_CMD_CQ_FENCE);
-		if (ret) {
-			TXC_WARN_RET(txc, ret,
-				     "Failed to issue fence command\n");
-			ret = -FI_EAGAIN;
-			goto err_unmap_result_buf;
-		}
-	}
-
-	/* Update the hardware command queue state to ensure correct fields are
-	 * associated with the IDC command.
-	 */
-	ret = cxip_cmdq_emit_c_state(cmdq, &cstate_cmd);
-	if (ret) {
-		TXC_WARN_RET(txc, ret, "Failed to emit c_state command\n");
-		goto err_unmap_result_buf;
-	}
-
-	/* Fetching AMO with FI_DELIVERY_COMPLETE requires two commands. Ensure
-	 * there is enough space. At worse at least 16x 32-byte slots are
-	 * needed.
-	 */
-	if (fetching_amo_flush && __cxi_cq_free_slots(cmdq->dev_cmdq) < 16) {
-		TXC_WARN(txc, "No space for FAMO with FI_DELIVERY_COMPLETE\n");
-		ret = -FI_EAGAIN;
-		goto err_unmap_result_buf;
-	}
-
-	/* Issue IDC AMO command */
-	ret = cxi_cq_emit_idc_amo(cmdq->dev_cmdq, &idc_amo_cmd, fetching);
+	ret = cxip_txc_emit_idc_amo(txc, vni, cxip_ofi_to_cxi_tc(tclass),
+				    tc_type, &cstate_cmd, &idc_amo_cmd, flags,
+				    fetching, flush);
 	if (ret) {
 		TXC_WARN_RET(txc, ret, "Failed to emit IDC amo\n");
-		ret = -FI_EAGAIN;
 		goto err_unmap_result_buf;
 	}
 
-	if (fetching_amo_flush) {
-		/* CQ space check already occurred. Thus, return code can be
-		 * ignored.
-		 */
-		ret = cxi_cq_emit_dma(cmdq->dev_cmdq, &flush_cmd);
-		assert(ret == 0);
-	}
-
-	cxip_txq_ring(cmdq, flags & FI_MORE, ofi_atomic_get32(&txc->otx_reqs));
-
-	if (req)
-		ofi_atomic_inc32(&txc->otx_reqs);
 	ofi_genlock_unlock(&txc->ep_obj->lock);
 
 	return FI_SUCCESS;
