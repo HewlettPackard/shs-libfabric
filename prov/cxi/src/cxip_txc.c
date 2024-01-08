@@ -498,3 +498,21 @@ void cxip_txc_flush_msg_trig_reqs(struct cxip_txc *txc)
 		}
 	}
 }
+
+static bool cxip_txc_can_emit_op(struct cxip_txc *txc,
+				 bool event_success_disabled)
+{
+	if (cxip_evtq_saturated(&txc->tx_evtq)) {
+		TXC_WARN(txc, "TX HW EQ saturated\n");
+		return false;
+	}
+
+	/* If taking a successful completion, limit outstanding operations */
+	if (!event_success_disabled &&
+	    (ofi_atomic_get32(&txc->otx_reqs) >= txc->attr.size)) {
+		TXC_WARN(txc, "TXC attr size saturated\n");
+		return false;
+	}
+
+	return true;
+}
