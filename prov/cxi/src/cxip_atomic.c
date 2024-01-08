@@ -810,130 +810,6 @@ err:
 	return ret;
 }
 
-static int cxip_amo_emit_trig_dma(struct cxip_txc *txc, struct cxip_cmdq *cmdq,
-				  struct cxip_cntr *trig_cntr,
-				  uint64_t trig_thresh,
-				  struct c_dma_amo_cmd *dma_amo_cmd,
-				  struct c_full_dma_cmd *flush_cmd,
-				  bool fetching, bool fetching_amo_flush,
-				  uint64_t flags)
-{
-	const struct c_ct_cmd ct_cmd = {
-		.trig_ct = trig_cntr->ct->ctn,
-		.threshold = trig_thresh,
-	};
-	int ret;
-
-	/* TODO: Need to ensure there are at least 2 TLEs free for the following
-	 * triggered commands.
-	 */
-
-	/* TODO: Support triggered operations with different VNIs. */
-
-	/* TODO: Support triggered fence. */
-	if (flags & FI_FENCE) {
-		TXC_WARN(txc, "Triggered AMO and FI_FENCE not supported\n");
-		return -FI_ENOSYS;
-	}
-
-	/* The triggered command queue is a domain object and must be locked. */
-	ofi_genlock_lock(&txc->domain->trig_cmdq_lock);
-
-	/* Fetching AMO with FI_DELIVERY_COMPLETE requires two commands. Ensure
-	 * there is enough space. At worse at least 16x 32-byte slots are
-	 * needed.
-	 */
-	if (fetching_amo_flush && __cxi_cq_free_slots(cmdq->dev_cmdq) < 16) {
-		TXC_WARN(txc, "No space for FAMO with FI_DELIVERY_COMPLETE\n");
-		ret = -FI_EAGAIN;
-		goto err_unlock;
-	}
-
-	ret = cxi_cq_emit_trig_dma_amo(cmdq->dev_cmdq, &ct_cmd, dma_amo_cmd,
-				       fetching);
-	if (ret) {
-		TXC_WARN_RET(txc, ret, "Failed to emit trigger DMA amo\n");
-		ret = -FI_EAGAIN;
-		goto err_unlock;
-	}
-
-	if (fetching_amo_flush) {
-		/* CQ space check already occurred. Thus, return code can be
-		 * ignored.
-		 */
-		ret = cxi_cq_emit_trig_full_dma(cmdq->dev_cmdq, &ct_cmd,
-						flush_cmd);
-		assert(ret == 0);
-	}
-
-	cxip_txq_ring(cmdq, flags & FI_MORE, ofi_atomic_get32(&txc->otx_reqs));
-
-	ofi_genlock_unlock(&txc->domain->trig_cmdq_lock);
-
-	return FI_SUCCESS;
-
-err_unlock:
-	ofi_genlock_unlock(&txc->domain->trig_cmdq_lock);
-
-	return ret;
-}
-
-static int cxip_amo_emit_non_trig_dma(struct cxip_txc *txc,
-				      struct cxip_cmdq *cmdq,
-				      struct c_dma_amo_cmd *dma_amo_cmd,
-				      struct c_full_dma_cmd *flush_cmd,
-				      bool fetching, bool fetching_amo_flush,
-				      uint64_t flags, uint16_t vni,
-				      uint32_t tclass)
-{
-	int ret;
-
-	/* Only CXI_TC_TYPE_DEFAULT is supported with DMA AMO commands. */
-	ret = cxip_txq_cp_set(cmdq, vni, cxip_ofi_to_cxi_tc(tclass),
-			      CXI_TC_TYPE_DEFAULT);
-	if (ret) {
-		TXC_WARN_RET(txc, ret,
-			     "Failed to change communication profile\n");
-		return ret;
-	}
-
-	if (flags & (FI_FENCE | FI_CXI_WEAK_FENCE)) {
-		ret = cxi_cq_emit_cq_cmd(cmdq->dev_cmdq, C_CMD_CQ_FENCE);
-		if (ret) {
-			TXC_WARN_RET(txc, ret,
-				     "Failed to emit fence command\n");
-			return -FI_EAGAIN;
-		}
-	}
-
-	/* Fetching AMO with FI_DELIVERY_COMPLETE requires two commands. Ensure
-	 * there is enough space. At worse at least 16x 32-byte slots are
-	 * needed.
-	 */
-	if (fetching_amo_flush && __cxi_cq_free_slots(cmdq->dev_cmdq) < 16) {
-		TXC_WARN(txc, "No space for FAMO with FI_DELIVERY_COMPLETE\n");
-		return -FI_EAGAIN;
-	}
-
-	ret = cxi_cq_emit_dma_amo(cmdq->dev_cmdq, dma_amo_cmd, fetching);
-	if (ret) {
-		TXC_WARN_RET(txc, ret, "Failed to emit DMA AMO command\n");
-		return -FI_EAGAIN;
-	}
-
-	if (fetching_amo_flush) {
-		/* CQ space check already occurred. Thus, return code can be
-		 * ignored.
-		 */
-		ret = cxi_cq_emit_dma(cmdq->dev_cmdq, flush_cmd);
-		assert(ret == 0);
-	}
-
-	cxip_txq_ring(cmdq, flags & FI_MORE, ofi_atomic_get32(&txc->otx_reqs));
-
-	return FI_SUCCESS;
-}
-
 static bool cxip_amo_emit_dma_req_needed(const struct fi_msg_atomic *msg,
 					 uint64_t flags, void *result,
 					 struct cxip_mr *buf_mr,
@@ -995,9 +871,7 @@ static int cxip_amo_emit_dma(struct cxip_txc *txc,
 			     struct cxip_cntr *comp_cntr)
 {
 	struct cxip_domain *dom = txc->domain;
-	struct cxip_cmdq *cmdq = txc->tx_cmdq;
 	struct c_dma_amo_cmd dma_amo_cmd = {};
-	struct c_full_dma_cmd flush_cmd;
 	bool flush = !!(flags & (FI_DELIVERY_COMPLETE | FI_MATCH_COMPLETE));
 	bool fetching = result != NULL;
 	bool fetching_amo_flush = fetching && flush;
@@ -1258,60 +1132,19 @@ static int cxip_amo_emit_dma(struct cxip_txc *txc,
 	if (fetching_amo_flush) {
 		assert(req != NULL);
 
-		memset(&flush_cmd, 0, sizeof(flush_cmd));
-
 		if (req_type == CXIP_RQ_AMO)
 			req->amo.fetching_amo_flush_cntr = txc->write_cntr;
 		else
 			req->amo.fetching_amo_flush_cntr = txc->read_cntr;
-
-		flush_cmd.command.opcode = C_CMD_PUT;
-		flush_cmd.index_ext = *idx_ext;
-		flush_cmd.event_send_disable = 1;
-		flush_cmd.dfa = *dfa;
-		flush_cmd.remote_offset = remote_offset;
-		flush_cmd.eq = cxip_evtq_eqn(&txc->tx_evtq);
-		flush_cmd.user_ptr = (uint64_t)req;
-		flush_cmd.match_bits = CXIP_KEY_MATCH_BITS(key);
-		flush_cmd.flush = 1;
 	}
 
-	if (cxip_evtq_saturated(&txc->tx_evtq)) {
-		TXC_WARN(txc, "TX HW EQ saturated\n");
-		ret = -FI_EAGAIN;
+	ret = cxip_txc_emit_dma_amo(txc, vni, cxip_ofi_to_cxi_tc(tclass),
+				    CXI_TC_TYPE_DEFAULT, trig_cntr, trig_thresh,
+				    &dma_amo_cmd, flags, fetching, flush);
+	if (ret) {
+		TXC_WARN_RET(txc, ret, "Failed to emit AMO\n");
 		goto err_unmap_operand_buf;
 	}
-
-	/* If taking a successful completion, limit outstanding operations */
-	if (req && (ofi_atomic_get32(&txc->otx_reqs) >= txc->attr.size)) {
-		ret = -FI_EAGAIN;
-		goto err_unmap_operand_buf;
-	}
-
-	if (triggered) {
-		ret = cxip_amo_emit_trig_dma(txc, dom->trig_cmdq, trig_cntr,
-					     trig_thresh, &dma_amo_cmd,
-					     &flush_cmd, fetching,
-					     fetching_amo_flush, flags);
-		if (ret) {
-			TXC_WARN_RET(txc, ret,
-				     "Failed to emit triggered AMO\n");
-			goto err_unmap_operand_buf;
-		}
-	} else {
-		ret = cxip_amo_emit_non_trig_dma(txc, cmdq, &dma_amo_cmd,
-						 &flush_cmd, fetching,
-						 fetching_amo_flush, flags,
-						 vni, tclass);
-		if (ret) {
-			TXC_WARN_RET(txc, ret,
-				     "Failed to emit non-triggered AMO\n");
-			goto err_unmap_operand_buf;
-		}
-	}
-
-	if (req)
-		ofi_atomic_inc32(&txc->otx_reqs);
 
 	ofi_genlock_unlock(&txc->ep_obj->lock);
 
