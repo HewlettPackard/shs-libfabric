@@ -1311,10 +1311,6 @@ static int cxip_query_collective(struct fid_domain *domain,
 	case FI_REDUCE:
 	case FI_ALLREDUCE:
 		switch (ext_op) {
-		case FI_CXI_BARRIER:
-			attr->datatype_attr.count = 0;
-			attr->datatype_attr.size = 0;
-			break;
 		case FI_BOR:
 		case FI_BAND:
 		case FI_BXOR:

@@ -338,33 +338,28 @@ void cxip_coll_populate_opcodes(void)
 	_int8_16_32_op_to_opcode[FI_BOR] = COLL_OPCODE_BIT_OR;
 	_int8_16_32_op_to_opcode[FI_BAND] = COLL_OPCODE_BIT_AND;
 	_int8_16_32_op_to_opcode[FI_BXOR] = COLL_OPCODE_BIT_XOR;
-	_int8_16_32_op_to_opcode[FI_CXI_BARRIER] = COLL_OPCODE_BARRIER;
 
 	/* operations supported by 32, 16, and 8 bit unsigned int operands */
 	_uint8_16_32_op_to_opcode[FI_BOR] = COLL_OPCODE_BIT_OR;
 	_uint8_16_32_op_to_opcode[FI_BAND] = COLL_OPCODE_BIT_AND;
 	_uint8_16_32_op_to_opcode[FI_BXOR] = COLL_OPCODE_BIT_XOR;
-	_uint8_16_32_op_to_opcode[FI_CXI_BARRIER] = COLL_OPCODE_BARRIER;
 
 	/* operations supported by 64 bit signed int operands */
 	_int64_op_to_opcode[FI_MIN] = COLL_OPCODE_INT_MIN;
 	_int64_op_to_opcode[FI_MAX] = COLL_OPCODE_INT_MAX;
 	_int64_op_to_opcode[FI_SUM] = COLL_OPCODE_INT_SUM;
 	_int64_op_to_opcode[FI_CXI_MINMAXLOC] = COLL_OPCODE_INT_MINMAXLOC;
-	_int64_op_to_opcode[FI_CXI_BARRIER] = COLL_OPCODE_BARRIER;
 
 	/* operations supported by 64 bit unsigned int operands */
 	_uint64_op_to_opcode[FI_BOR] = COLL_OPCODE_BIT_OR;
 	_uint64_op_to_opcode[FI_BAND] = COLL_OPCODE_BIT_AND;
 	_uint64_op_to_opcode[FI_BXOR] = COLL_OPCODE_BIT_XOR;
-	_uint64_op_to_opcode[FI_CXI_BARRIER] = COLL_OPCODE_BARRIER;
 
 	/* operations supported by 64 bit double operands */
 	_flt_op_to_opcode[FI_MIN] = COLL_OPCODE_FLT_MINNUM;
 	_flt_op_to_opcode[FI_MAX] = COLL_OPCODE_FLT_MAXNUM;
 	_flt_op_to_opcode[FI_CXI_MINMAXLOC] = COLL_OPCODE_FLT_MINMAXNUMLOC;
 	_flt_op_to_opcode[FI_CXI_REPSUM] = COLL_OPCODE_FLT_REPSUM;
-	_flt_op_to_opcode[FI_CXI_BARRIER] = COLL_OPCODE_BARRIER;
 	/* NOTE: FI_SUM handled in flt_op_to_opcode() function */
 
 	/* cxi_opcode to redtype translation */
