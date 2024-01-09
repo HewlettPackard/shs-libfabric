@@ -63,8 +63,8 @@ const char *efa_rdm_ep_raw_addr_str(struct efa_rdm_ep *ep, char *buf, size_t *bu
 
 /**
  * @brief return peer's raw address in #efa_ep_addr
- * 
- * @param[in] ep		end point 
+ *
+ * @param[in] ep		end point
  * @param[in] addr 		libfabric address
  * @returns
  * If peer exists, return peer's raw addrress as pointer to #efa_ep_addr;
@@ -102,8 +102,8 @@ int32_t efa_rdm_ep_get_peer_ahn(struct efa_rdm_ep *ep, fi_addr_t addr)
 
 /**
  * @brief return peer's raw address in a reable string
- * 
- * @param[in] ep		end point 
+ *
+ * @param[in] ep		end point
  * @param[in] addr 		libfabric address
  * @param[out] buf		a buffer tat to be used to store string
  * @param[in,out] buflen	length of `buf` as input. length of the string as output.
@@ -117,8 +117,8 @@ const char *efa_rdm_ep_get_peer_raw_addr_str(struct efa_rdm_ep *ep, fi_addr_t ad
 
 /**
  * @brief get pointer to efa_rdm_peer structure for a given libfabric address
- * 
- * @param[in]		ep		endpoint 
+ *
+ * @param[in]		ep		endpoint
  * @param[in]		addr 		libfabric address
  * @returns if peer exists, return pointer to #efa_rdm_peer;
  *          otherwise, return NULL.
@@ -275,10 +275,11 @@ int efa_rdm_ep_post_user_recv_buf(struct efa_rdm_ep *ep, struct efa_rdm_ope *rxe
 
 /* create a new txe */
 struct efa_rdm_ope *efa_rdm_ep_alloc_txe(struct efa_rdm_ep *efa_rdm_ep,
-					   const struct fi_msg *msg,
-					   uint32_t op,
-					   uint64_t tag,
-					   uint64_t flags)
+					 struct efa_rdm_peer *peer,
+					 const struct fi_msg *msg,
+					 uint32_t op,
+					 uint64_t tag,
+					 uint64_t flags)
 {
 	struct efa_rdm_ope *txe;
 
@@ -288,7 +289,7 @@ struct efa_rdm_ope *efa_rdm_ep_alloc_txe(struct efa_rdm_ep *efa_rdm_ep,
 		return NULL;
 	}
 
-	efa_rdm_txe_construct(txe, efa_rdm_ep, msg, op, flags);
+	efa_rdm_txe_construct(txe, efa_rdm_ep, peer, msg, op, flags);
 	if (op == ofi_op_tagged) {
 		txe->cq_entry.tag = tag;
 		txe->tag = tag;
@@ -328,11 +329,13 @@ void efa_rdm_ep_record_tx_op_submitted(struct efa_rdm_ep *ep, struct efa_rdm_pke
 	struct efa_rdm_ope *ope;
 
 	ope = pkt_entry->ope;
+	assert(ope);
+
 	/*
 	 * peer can be NULL when the pkt_entry is a RMA_CONTEXT_PKT,
 	 * and the RMA is a local read toward the endpoint itself
 	 */
-	peer = efa_rdm_ep_get_peer(ep, pkt_entry->addr);
+	peer = ope->peer;
 	if (peer)
 		dlist_insert_tail(&pkt_entry->entry,
 				  &peer->outstanding_tx_pkts);
@@ -543,51 +546,31 @@ void efa_rdm_ep_queue_rnr_pkt(struct efa_rdm_ep *ep,
  * return negative libfabric error code for error. Possible errors include:
  * -FI_EAGAIN	temporarily out of resource to send packet
  */
-ssize_t efa_rdm_ep_trigger_handshake(struct efa_rdm_ep *ep,
-				     fi_addr_t addr)
+ssize_t efa_rdm_ep_trigger_handshake(struct efa_rdm_ep *ep, struct efa_rdm_peer *peer)
 {
-	struct efa_rdm_peer *peer;
 	struct efa_rdm_ope *txe;
+	struct fi_msg msg = {0};
 	ssize_t err;
 
-	peer = efa_rdm_ep_get_peer(ep, addr);
 	assert(peer);
-
 	if ((peer->flags & EFA_RDM_PEER_HANDSHAKE_RECEIVED) ||
 	    (peer->flags & EFA_RDM_PEER_REQ_SENT))
 		return 0;
 
-	/* TODO: use efa_rdm_ep_alloc_txe to allocate txe */
-	txe = ofi_buf_alloc(ep->ope_pool);
+	msg.addr = peer->efa_fiaddr;
+
+	txe = efa_rdm_ep_alloc_txe(ep, peer, &msg, ofi_op_write, 0, 0);
+
 	if (OFI_UNLIKELY(!txe)) {
 		EFA_WARN(FI_LOG_EP_CTRL, "TX entries exhausted.\n");
 		return -FI_EAGAIN;
 	}
 
-	txe->ep = ep;
-	txe->total_len = 0;
-	txe->addr = addr;
-	txe->peer = efa_rdm_ep_get_peer(ep, txe->addr);
-	assert(txe->peer);
-	dlist_insert_tail(&txe->peer_entry, &txe->peer->txe_list);
-	txe->msg_id = -1;
-	txe->cq_entry.flags = FI_RMA | FI_WRITE;
-	txe->cq_entry.buf = NULL;
-	dlist_init(&txe->queued_pkts);
-
-	txe->type = EFA_RDM_TXE;
-	txe->op = ofi_op_write;
-	txe->state = EFA_RDM_TXE_REQ;
-
-	txe->bytes_acked = 0;
-	txe->bytes_sent = 0;
-	txe->window = 0;
-	txe->rma_iov_count = 0;
-	txe->iov_count = 0;
+	/* efa_rdm_ep_alloc_txe() joins ep->base_ep.util_ep.tx_op_flags and passed in flags,
+	 * reset to desired flags (remove things like FI_DELIVERY_COMPLETE, and FI_COMPLETION)
+	 */
 	txe->fi_flags = EFA_RDM_TXE_NO_COMPLETION | EFA_RDM_TXE_NO_COUNTER;
-	txe->internal_flags = 0;
-
-	dlist_insert_tail(&txe->ep_entry, &ep->txe_list);
+	txe->msg_id = -1;
 
 	err = efa_rdm_ope_post_send(txe, EFA_RDM_EAGER_RTW_PKT);
 
@@ -605,14 +588,35 @@ ssize_t efa_rdm_ep_trigger_handshake(struct efa_rdm_ep *ep,
  */
 ssize_t efa_rdm_ep_post_handshake(struct efa_rdm_ep *ep, struct efa_rdm_peer *peer)
 {
+	struct efa_rdm_ope *txe;
+	struct fi_msg msg = {0};
 	struct efa_rdm_pke *pkt_entry;
 	fi_addr_t addr;
 	ssize_t ret;
 
 	addr = peer->efa_fiaddr;
-	pkt_entry = efa_rdm_pke_alloc(ep, ep->efa_tx_pkt_pool, EFA_RDM_PKE_FROM_EFA_TX_POOL);
-	if (OFI_UNLIKELY(!pkt_entry))
+	msg.addr = addr;
+
+	/* ofi_op_write is ignored in handshake path */
+	txe = efa_rdm_ep_alloc_txe(ep, peer, &msg, ofi_op_write, 0, 0);
+
+	if (OFI_UNLIKELY(!txe)) {
+		EFA_WARN(FI_LOG_EP_CTRL, "TX entries exhausted.\n");
 		return -FI_EAGAIN;
+	}
+
+	/* efa_rdm_ep_alloc_txe() joins ep->base_ep.util_ep.tx_op_flags and passed in flags,
+	 * reset to desired flags (remove things like FI_DELIVERY_COMPLETE, and FI_COMPLETION)
+	 */
+	txe->fi_flags = EFA_RDM_TXE_NO_COMPLETION | EFA_RDM_TXE_NO_COUNTER;
+
+	pkt_entry = efa_rdm_pke_alloc(ep, ep->efa_tx_pkt_pool, EFA_RDM_PKE_FROM_EFA_TX_POOL);
+	if (OFI_UNLIKELY(!pkt_entry)) {
+		EFA_WARN(FI_LOG_EP_CTRL, "PKE entries exhausted.\n");
+		return -FI_EAGAIN;
+	}
+
+	pkt_entry->ope = txe;
 
 	efa_rdm_pke_init_handshake(pkt_entry, addr);
 

@@ -189,8 +189,6 @@ struct efa_rdm_ep {
 
 	size_t efa_total_posted_tx_ops;
 	size_t send_comps;
-	size_t failed_send_comps;
-	size_t failed_write_comps;
 	size_t recv_comps;
 #endif
 	/* track allocated rx_entries and tx_entries for endpoint cleanup */
@@ -253,10 +251,11 @@ struct efa_rdm_peer *efa_rdm_ep_get_peer(struct efa_rdm_ep *ep, fi_addr_t addr);
 int32_t efa_rdm_ep_get_peer_ahn(struct efa_rdm_ep *ep, fi_addr_t addr);
 
 struct efa_rdm_ope *efa_rdm_ep_alloc_txe(struct efa_rdm_ep *efa_rdm_ep,
-					   const struct fi_msg *msg,
-					   uint32_t op,
-					   uint64_t tag,
-					   uint64_t flags);
+					 struct efa_rdm_peer *peer,
+					 const struct fi_msg *msg,
+					 uint32_t op,
+					 uint64_t tag,
+					 uint64_t flags);
 
 struct efa_rdm_ope *efa_rdm_ep_alloc_rxe(struct efa_rdm_ep *ep,
 					   fi_addr_t addr, uint32_t op);
@@ -437,8 +436,7 @@ static inline struct util_srx_ctx *efa_rdm_ep_get_peer_srx_ctx(struct efa_rdm_ep
 	return (struct util_srx_ctx *) ep->peer_srx_ep->fid.context;
 }
 
-ssize_t efa_rdm_ep_trigger_handshake(struct efa_rdm_ep *ep,
-				     fi_addr_t addr);
+ssize_t efa_rdm_ep_trigger_handshake(struct efa_rdm_ep *ep, struct efa_rdm_peer *peer);
 
 ssize_t efa_rdm_ep_post_handshake(struct efa_rdm_ep *ep, struct efa_rdm_peer *peer);
 
