@@ -585,14 +585,6 @@ ssize_t cxip_rma_common(enum fi_op_type op, struct cxip_txc *txc,
 	unr = cxip_rma_is_unrestricted(txc, key, msg_order, write);
 	idc = cxip_rma_is_idc(txc, key, len, write, triggered, unr);
 
-	/* To prevent HW EQ overrun, perform a sanity check to ensure there is
-	 * enough space for a potential event.
-	 */
-	if (cxip_evtq_saturated(&txc->tx_evtq)) {
-		TXC_DBG(txc, "TX HW EQ saturated\n");
-		return -FI_EAGAIN;
-	}
-
 	/* Build target network address. */
 	ret = cxip_av_lookup_addr(txc->ep_obj->av, tgt_addr, &caddr);
 	if (ret) {
