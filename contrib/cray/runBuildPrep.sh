@@ -60,7 +60,7 @@ with_cuda=0
 with_ze=0
 
 RPMS="cray-libcxi-devel kdreg2-devel"
-if [ -z "${VERBS_BUILD}" ]
+if [ -n "${VERBS_BUILD}" ]
 then
     RPMS+=" rdma-core rdma-core-devel "
 fi
