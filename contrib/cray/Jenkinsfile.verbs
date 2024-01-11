@@ -55,7 +55,7 @@ pipeline {
             }
             steps {
                 sh './autogen.sh'
-                sh """./configure $CONFIGURE_OPTIONS --prefix=$LIBFABRIC_INSTALL --disable-memhooks-monitor \
+                sh """./configure $CONFIGURE_OPTIONS --prefix=$LIBFABRIC_INSTALL \
                    --with-cuda=$CUDA_INSTALL_PATH --with-rocr=$ROCR_INSTALL_PATH"""
                 sh "make -j 12"
                 sh "make install"
@@ -91,7 +91,7 @@ pipeline {
             }
             steps {
                 sh './autogen.sh'
-                sh """./configure $CONFIGURE_OPTIONS --prefix=$LIBFABRIC_INSTALL --disable-memhooks-monitor \
+                sh """./configure $CONFIGURE_OPTIONS --prefix=$LIBFABRIC_INSTALL \
                    --with-cuda=$CUDA_INSTALL_PATH --enable-cuda-dlopen \
                    --with-rocr=$ROCR_INSTALL_PATH --enable-rocr-dlopen"""
                 sh "make -j 12"
@@ -306,7 +306,7 @@ pipeline {
                     echo "*** Install Libfabric Build: BUILD_LIBFABRIC: $BUILD_LIBFABRIC ***"
                     if ( BUILD_LIBFABRIC == 'true' ) {
                         sh "./autogen.sh"
-                        sh "./configure $CONFIGURE_OPTIONS --prefix=$LIBFABRIC_INSTALL_PATH --disable-memhooks-monitor"
+                        sh "./configure $CONFIGURE_OPTIONS --prefix=$LIBFABRIC_INSTALL_PATH"
                         sh "make -j 12"
                         sh "make install"
                     }
