@@ -530,7 +530,7 @@ int cxip_txc_emit_idc_put(struct cxip_txc *txc, uint16_t vni,
 		return -FI_EAGAIN;
 
 	/* Ensure correct traffic class is used. */
-	ret = cxip_txq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
+	ret = cxip_cmdq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
 	if (ret) {
 		TXC_WARN(txc, "Failed to set traffic class: %d:%s\n", ret,
 			 fi_strerror(-ret));
@@ -581,7 +581,7 @@ int cxip_txc_emit_dma(struct cxip_txc *txc, uint16_t vni,
 	}
 
 	/* Ensure correct traffic class is used. */
-	ret = cxip_txq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
+	ret = cxip_cmdq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
 	if (ret) {
 		TXC_WARN(txc, "Failed to set traffic class: %d:%s\n", ret,
 			 fi_strerror(-ret));
@@ -618,7 +618,7 @@ int cxip_txc_emit_idc_amo(struct cxip_txc *txc, uint16_t vni,
 		return -FI_EAGAIN;
 
 	/* Ensure correct traffic class is used. */
-	ret = cxip_txq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
+	ret = cxip_cmdq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
 	if (ret) {
 		TXC_WARN(txc, "Failed to set traffic class: %d:%s\n", ret,
 			 fi_strerror(-ret));
@@ -671,7 +671,7 @@ int cxip_txc_emit_dma_amo(struct cxip_txc *txc, uint16_t vni,
 	}
 
 	/* Ensure correct traffic class is used. */
-	ret = cxip_txq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
+	ret = cxip_cmdq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
 	if (ret) {
 		TXC_WARN(txc, "Failed to set traffic class: %d:%s\n", ret,
 			 fi_strerror(-ret));
@@ -708,7 +708,7 @@ int cxip_txc_emit_idc_msg(struct cxip_txc *txc, uint16_t vni,
 		return -FI_EAGAIN;
 
 	/* Ensure correct traffic class is used. */
-	ret = cxip_txq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
+	ret = cxip_cmdq_cp_set(txc->tx_cmdq, vni, tc, tc_type);
 	if (ret) {
 		TXC_WARN(txc, "Failed to set traffic class: %d:%s\n", ret,
 			 fi_strerror(-ret));
