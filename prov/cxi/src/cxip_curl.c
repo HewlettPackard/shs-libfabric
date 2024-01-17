@@ -295,7 +295,7 @@ int cxip_curl_perform(const char *endpoint, const char *request,
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, handle->recv);
 	curl_easy_setopt(curl, CURLOPT_PRIVATE, (void *)handle);
-	curl_easy_setopt(curl, CURLOPT_VERBOSE, verbose);
+	curl_easy_setopt(curl, CURLOPT_VERBOSE, (long)verbose);
 	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, cxip_curl_opname(op));
 
 	curl_multi_add_handle(cxip_curlm, curl);
