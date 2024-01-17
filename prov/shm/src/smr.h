@@ -196,7 +196,7 @@ enum smr_cmap_state {
 
 struct smr_cmap_entry {
 	enum smr_cmap_state	state;
-	int			device_fds[ZE_MAX_DEVICES];
+	int			*device_fds;
 };
 
 struct smr_sock_info {
