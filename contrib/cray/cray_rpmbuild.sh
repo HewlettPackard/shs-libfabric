@@ -55,7 +55,7 @@ configure_options="LDFLAGS=-Wl,--build-id --enable-only --enable-restricted-dl"
 
 rpmbuilddir=$PWD/rpmbuild
 
-if [[ "${TARGET_OS}" == sle*  || "${TARGET_OS}" == rhel_8_6* ]]; then
+if [[ "${TARGET_OS}" == sle*  || "${TARGET_OS}" == rhel_8_* ]]; then
 
     if [[ "${TARGET_ARCH}" == x86_64 ]]; then
         ROCM_CONFIG="--with-rocr=/opt/rocm --enable-rocr-dlopen"

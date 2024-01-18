@@ -5,7 +5,7 @@ ARTI_URL=https://${ARTIFACT_REPO_HOST}/artifactory
 OS_TYPE=`cat /etc/os-release | grep "^ID=" | sed "s/\"//g" | cut -d "=" -f 2`
 OS_VERSION=`cat /etc/os-release | grep "^VERSION_ID=" | sed "s/\"//g" | cut -d "=" -f 2`
 
-RHEL_GPU_SUPPORTED_VERSIONS="8.6 8.7 8.8"
+RHEL_GPU_SUPPORTED_VERSIONS="8.8 8.9"
 
 # Override product since we are only using the internal product stream to avoid
 # clashing with slingshot10 libfabric
@@ -33,16 +33,9 @@ fi
 CNE_BRANCH=""
 
 case "${OBS_TARGET_OS}" in
-    cos_2_2_*)      COS_BRANCH='release/cos-2.2' ;;
-    csm_1_0_11_*)   COS_BRANCH='release/cos-2.2' ;;
-    cos_2_3_*)      COS_BRANCH='release/cos-2.3' ;;
-    csm_1_2_0_*)    COS_BRANCH='release/cos-2.3' ;;
-    cos_2_4_*)      COS_BRANCH='release/cos-2.4' ;;
-    csm_1_3_*)      COS_BRANCH='release/cos-2.4' ;;
     sle15_sp4_*)    COS_BRANCH='release/cos-2.5' ;;
     cos_2_5_*)      COS_BRANCH='release/cos-2.5' ;;
     csm_1_4_*)      COS_BRANCH='release/cos-2.5' ;;
-    cos_2_6_*)      COS_BRANCH='release/cos-2.6' ;;
     cos_3_0_*)      COS_BRANCH='release/cos-3.0' ;;
     csm_1_5_0_*)    COS_BRANCH='release/cos-3.0' ;;
     sle15_sp5_*)    COS_BRANCH='release/cos-3.0' ;;
@@ -69,13 +62,8 @@ if [[ ${TARGET_OS} == "centos_8" ]]; then
     TARGET_OS="centos_8_ncn"
 fi
 
-# ROCM RPM names changed with 4.5.0
-# SP2 and release branches still use 4.4
-if [[ ${TARGET_OS} == "sle15_sp2_cn" || ${TARGET_OS} == "sle15_sp2_ncn" ]]; then
-    ROCR_RPMS="hsa-rocr-dev"
-else
-    ROCR_RPMS="hsa-rocr-devel"
-fi
+ROCR_RPMS="hsa-rocr-devel"
+
 
 if [[ ( ${TARGET_OS} == sle15_sp4* || ${TARGET_OS} == sle15_sp5* ) \
         && ${TARGET_ARCH} == x86_64 ]]; then
@@ -101,27 +89,28 @@ if command -v yum > /dev/null; then
         with_cuda=1
 
         case $OS_VERSION in
-        8.6)
-            ROCM_VERSION="5.2.3"
-            NVIDIA_VERSION="22.7"
-            ;;
-        8.7)
-            ROCM_VERSION="5.5.1"
-            NVIDIA_VERSION="23.3"
-            ;;
         8.8)
             ROCM_VERSION="5.7"
             NVIDIA_VERSION="23.9"
+            ;;
+        8.9)
+            ROCM_VERSION="6.0"
+            NVIDIA_VERSION="23.11"
             ;;
         *)
             echo "GPU software versions not defined for OS version \"${OS_VERSION}\""
             exit 1
         esac
 
-        if [ $OS_VERSION = '8.6' ]; then
-            yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/centos8/${ROCM_VERSION}/main
-        else
+        if [[ $OS_VERSION =~ ^8\.[0-9]+ ]]; then
+            echo "Using radeon-rocm-remote/rhel8"
             yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel8/${ROCM_VERSION}/main
+        elif [[ $OS_VERSION =~ ^9\.[0-9]+ ]]; then
+            echo "Using radeon-rocm-remote/rhel9"
+            yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel9/${ROCM_VERSION}/main
+        else
+            echo "Variable: $OS_VERSION does not start with 8 or 9"
+            exit 1
         fi
 
         yum-config-manager --add-repo=${ARTI_URL}/mirror-nvhpc/rhel/${TARGET_ARCH}
@@ -138,22 +127,6 @@ elif command -v zypper > /dev/null; then
     fi
 
     case "${OBS_TARGET_OS}" in
-        cos_2_2_*)      CUDA_RPMS="nvhpc-2021"
-                    ;;
-        csm_1_0_11_*)   CUDA_RPMS="nvhpc-2021"
-                    ;;
-        sle15_sp2_*)    CUDA_RPMS="nvhpc-2021"
-                    ;;
-        cos_2_3_*)      CUDA_RPMS="nvhpc-2022"
-                    ;;
-        csm_1_2_0_*)    CUDA_RPMS="nvhpc-2022"
-                    ;;
-        sle15_sp3_*)    CUDA_RPMS="nvhpc-2022"
-                    ;;
-        cos_2_4_*)      CUDA_RPMS="nvhpc-2022"
-                    ;;
-        csm_1_3_*)      CUDA_RPMS="nvhpc-2022"
-                    ;;
         sle15_sp4_*)    CUDA_RPMS="nvhpc-2023"
                     ;;
         cos_2_5_*)      CUDA_RPMS="nvhpc-2023"
@@ -161,8 +134,6 @@ elif command -v zypper > /dev/null; then
         csm_1_4_*)      CUDA_RPMS="nvhpc-2023"
                     ;;
         csm_1_5_*)      CUDA_RPMS="nvhpc"
-                    ;;
-        cos_2_6_*)      CUDA_RPMS="nvhpc"
                     ;;
         cos_3_0_*)      CUDA_RPMS="nvhpc"
                     ;;
@@ -280,15 +251,12 @@ if [[ $with_cuda -eq 1 ]]; then
 fi
 
 if [[ $with_rocm -eq 1 ]]; then
+    update-alternatives --display rocm 
     rocm_version=$(ls /opt | grep rocm | tr -d "\n")
     if [[ $rocm_version == "" ]]; then
         echo "ROCM required but not found."
         exit 1
     else
         echo "Using ROCM $rocm_version"
-
-        # Convenient symlink which allows the libfabric build process to not
-        # have to call out a specific versioned ROCR directory.
-        ln -s /opt/$rocm_version /opt/rocm
     fi
 fi
