@@ -3,6 +3,8 @@
 set -e
 set -x
 
+INSTALL_PREFIX=/opt/cray
+
 function move_rpms() {
 	if [[ ! -d RPMS ]]
 	then
@@ -40,8 +42,8 @@ function build_dl_provider() {
 		--define "release ${RELEASE}" \
 		--define "install_modulefile 1" \
 		--define "install_default_module_version 1" \
-		--define "modulefile_path /opt/cray/modulefiles" \
-		--define "_prefix /opt/cray" \
+		--define "modulefile_path ${INSTALL_PREFIX}/modulefiles" \
+		--define "_prefix ${INSTALL_PREFIX}" \
 		--define "_topdir $rpmbuilddir" \
 		--define "_sourcedir $rpmbuilddir/SOURCES" \
 		--define "_rpmdir $rpmbuilddir/RPMS" \
@@ -170,8 +172,8 @@ RPMBUILD_OPTS=$(echo """
 --define 'release ${RELEASE}'
 --define 'install_modulefile 1'
 --define 'install_default_module_version 1'
---define 'modulefile_path /opt/cray/modulefiles'
---define 'prefix /opt/cray'
+--define 'modulefile_path ${INSTALL_PREFIX}/modulefiles'
+--define '_prefix ${INSTALL_PREFIX}'
 --define '_topdir $rpmbuilddir'
 --define '_sourcedir $rpmbuilddir/SOURCES'
 --define '_rpmdir $rpmbuilddir/RPMS'
