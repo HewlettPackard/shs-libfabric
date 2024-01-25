@@ -46,11 +46,11 @@ AC_DEFUN([FI_CXI_CONFIGURE],[
 		[
 			AC_CHECK_HEADER(cxi_prov_hw.h,
 				[],
-				[AC_MSG_ERROR("cxi_prov_hw.h not found")])
+				[cxi_happy=0])
 
 			AC_CHECK_HEADER(uapi/misc/cxi.h,
 				[],
-				[AC_MSG_ERROR("cxi.h not found")])
+				[cxi_happy=0])
 
 			FI_CHECK_PACKAGE([libcxi],
 				[libcxi/libcxi.h],
