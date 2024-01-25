@@ -2870,8 +2870,8 @@ Test(atomic, std_mr_inject)
 	_cxit_destroy_mr(&mr);
 }
 
-/* Test NETCASSINI-2794 32bit non-fetch AMO with HRP work-around */
-Test(amo_opt, netcassini_2794)
+/* Test ERRATA-2794 32bit non-fetch AMO with HRP work-around */
+Test(amo_opt, errata_2794)
 {
 	struct mem_region mr;
 	struct fi_cq_tagged_entry cqe;
@@ -2933,10 +2933,7 @@ Test(amo_opt, netcassini_2794)
 		     "Result = %" PRId64 ", expected = %" PRId64,
 		     rma->_64bit, exp_remote._64bit);
 
-	/* Validate work around to keep from silently dropping 32-bit
-	 * unsigned non-fetching atomic operations. The work around
-	 * forces switching out on HRP communications profile.
-	 */
+	/* ERRATA-2794 */ 
 	rma->_32bit = 0;
 	exp_remote._32bit = 0;
 	msg.datatype = FI_UINT32;
