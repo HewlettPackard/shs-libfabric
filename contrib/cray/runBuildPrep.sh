@@ -5,7 +5,7 @@ ARTI_URL=https://${ARTIFACT_REPO_HOST}/artifactory
 OS_TYPE=`cat /etc/os-release | grep "^ID=" | sed "s/\"//g" | cut -d "=" -f 2`
 OS_VERSION=`cat /etc/os-release | grep "^VERSION_ID=" | sed "s/\"//g" | cut -d "=" -f 2`
 
-RHEL_GPU_SUPPORTED_VERSIONS="8.8 8.9"
+RHEL_GPU_SUPPORTED_VERSIONS="8.8 8.9 9.3"
 
 # Override product since we are only using the internal product stream to avoid
 # clashing with slingshot10 libfabric
@@ -85,7 +85,11 @@ if command -v yum > /dev/null; then
 
     if [ $OS_TYPE = "rhel"  ] && \
             [[ $RHEL_GPU_SUPPORTED_VERSIONS = *$OS_VERSION* ]]; then
-        with_rocm=1
+
+	if [[ ${TARGET_ARCH} == x86_64 ]]; then
+            with_rocm=1
+	fi
+
         with_cuda=1
 
         case $OS_VERSION in
@@ -97,25 +101,35 @@ if command -v yum > /dev/null; then
             ROCM_VERSION="6.0"
             NVIDIA_VERSION="23.11"
             ;;
+        9.3)
+            ROCM_VERSION="6.0"
+            NVIDIA_VERSION="23.11"
+            ;;
         *)
             echo "GPU software versions not defined for OS version \"${OS_VERSION}\""
             exit 1
         esac
 
-        if [[ $OS_VERSION =~ ^8\.[0-9]+ ]]; then
-            echo "Using radeon-rocm-remote/rhel8"
-            yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel8/${ROCM_VERSION}/main
-        elif [[ $OS_VERSION =~ ^9\.[0-9]+ ]]; then
-            echo "Using radeon-rocm-remote/rhel9"
-            yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel9/${ROCM_VERSION}/main
-        else
-            echo "Variable: $OS_VERSION does not start with 8 or 9"
-            exit 1
-        fi
+	rocm_rpms=""
+
+	if [[ ${TARGET_ARCH} == x86_64 ]]; then
+            if [[ $OS_VERSION =~ ^8\.[0-9]+ ]]; then
+		echo "Using radeon-rocm-remote/rhel8"
+		yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel8/${ROCM_VERSION}/main
+            elif [[ $OS_VERSION =~ ^9\.[0-9]+ ]]; then
+		echo "Using radeon-rocm-remote/rhel9"
+		yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel9/${ROCM_VERSION}/main
+            else
+		echo "Variable: $OS_VERSION does not start with 8 or 9"
+		exit 1
+            fi
+
+	    rocm_rpms="rocm-dev hip-devel"
+	fi
 
         yum-config-manager --add-repo=${ARTI_URL}/mirror-nvhpc/rhel/${TARGET_ARCH}
 
-        RPMS+=" rocm-dev hip-devel nvhpc-${NVIDIA_VERSION} "
+        RPMS+="  ${rocm_rpms} nvhpc-${NVIDIA_VERSION} "
     fi
 
     yum install -y $RPMS
@@ -171,7 +185,7 @@ elif command -v zypper > /dev/null; then
             --priority 20 --name=cos \
             ${ARTI_URL}/${COS_ARTI_LOCATION}/${COS_BRANCH}/${TARGET_OS} \
             cos
-        fi 
+        fi
     fi
 
     zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
@@ -251,7 +265,7 @@ if [[ $with_cuda -eq 1 ]]; then
 fi
 
 if [[ $with_rocm -eq 1 ]]; then
-    update-alternatives --display rocm 
+    update-alternatives --display rocm
     rocm_version=$(ls /opt | grep rocm | tr -d "\n")
     if [[ $rocm_version == "" ]]; then
         echo "ROCM required but not found."

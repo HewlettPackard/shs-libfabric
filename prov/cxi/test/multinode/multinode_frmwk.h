@@ -4,6 +4,9 @@
  * (c) Copyright 2021-2023 Hewlett Packard Enterprise Development LP
  */
 
+#ifndef FRMWK_HEADER
+#define FRMWK_HEADER
+
 union nicaddr {
 	uint64_t value;
 	struct {
@@ -16,53 +19,53 @@ union nicaddr {
 #define	NICSIZE	(sizeof(union nicaddr))
 
 /* These are initialized by frmwk_init() */
-int frmwk_nics_per_rank;
-int frmwk_numranks;
-int frmwk_numnics;
-int frmwk_rank;
+extern int frmwk_nics_per_rank;
+extern int frmwk_numranks;
+extern int frmwk_numnics;
+extern int frmwk_rank;
 
 /* This is initialized by frmwk_populate_av() */
-union nicaddr *frmwk_nics;
+extern union nicaddr *frmwk_nics;
 
-char *cxit_node;
-char *cxit_service;
-uint64_t cxit_flags;
-struct fi_info *cxit_fi_hints;
-struct fi_info *cxit_fi;
+extern char *cxit_node;
+extern char *cxit_service;
+extern uint64_t cxit_flags;
+extern struct fi_info *cxit_fi_hints;
+extern struct fi_info *cxit_fi;
 
-struct fid_fabric *cxit_fabric;
-struct fid_domain *cxit_domain;
-struct fi_cxi_dom_ops *dom_ops;
+extern struct fid_fabric *cxit_fabric;
+extern struct fid_domain *cxit_domain;
+extern struct fi_cxi_dom_ops *dom_ops;
 
-struct fid_ep *cxit_ep;
-struct fi_eq_attr cxit_eq_attr;
-uint64_t cxit_eq_bind_flags;
-struct fid_eq *cxit_eq;
+extern struct fid_ep *cxit_ep;
+extern struct fi_eq_attr cxit_eq_attr;
+extern uint64_t cxit_eq_bind_flags;
+extern struct fid_eq *cxit_eq;
 
-struct fi_cq_attr cxit_rx_cq_attr;
-uint64_t cxit_rx_cq_bind_flags;
-struct fid_cq *cxit_rx_cq;
+extern struct fi_cq_attr cxit_rx_cq_attr;
+extern uint64_t cxit_rx_cq_bind_flags;
+extern struct fid_cq *cxit_rx_cq;
 
-struct fi_cq_attr cxit_tx_cq_attr;
-uint64_t cxit_tx_cq_bind_flags;
-struct fid_cq *cxit_tx_cq;
+extern struct fi_cq_attr cxit_tx_cq_attr;
+extern uint64_t cxit_tx_cq_bind_flags;
+extern struct fid_cq *cxit_tx_cq;
 
-fi_addr_t cxit_ep_fi_addr;
+extern fi_addr_t cxit_ep_fi_addr;
 
-struct fi_cntr_attr cxit_cntr_attr;
-struct fid_cntr *cxit_send_cntr;
-struct fid_cntr *cxit_recv_cntr;
-struct fid_cntr *cxit_read_cntr;
-struct fid_cntr *cxit_write_cntr;
-struct fid_cntr *cxit_rem_cntr;
+extern struct fi_cntr_attr cxit_cntr_attr;
+extern struct fid_cntr *cxit_send_cntr;
+extern struct fid_cntr *cxit_recv_cntr;
+extern struct fid_cntr *cxit_read_cntr;
+extern struct fid_cntr *cxit_write_cntr;
+extern struct fid_cntr *cxit_rem_cntr;
 
-struct fi_av_attr cxit_av_attr;
-struct fid_av *cxit_av;
+extern struct fi_av_attr cxit_av_attr;
+extern struct fid_av *cxit_av;
 
-int cxit_n_ifs;
-struct fid_av_set *cxit_av_set;
-struct fid_mc *cxit_mc;
-fi_addr_t cxit_mc_addr;
+extern int cxit_n_ifs;
+extern struct fid_av_set *cxit_av_set;
+extern struct fid_mc *cxit_mc;
+extern fi_addr_t cxit_mc_addr;
 
 int frmwk_allgather(size_t size, void *data, void *rslt);
 int frmwk_barrier(void);
@@ -81,3 +84,5 @@ int frmwk_log0(const char *fmt, ...)
 	__attribute__((format(__printf__, 1, 2)));
 int frmwk_log(const char *fmt, ...)
 	__attribute__((format(__printf__, 1, 2)));
+
+#endif /* FRMWK_HEADER */

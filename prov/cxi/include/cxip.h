@@ -3166,20 +3166,20 @@ typedef int (*cxip_trace_t)(const char *fmt, ...);
 extern cxip_trace_t cxip_trace_attr cxip_trace_fn;
 
 typedef void (*cxip_trace_flush_t)(void);
-cxip_trace_flush_t cxip_trace_flush_fn;
+extern cxip_trace_flush_t cxip_trace_flush_fn;
 
 typedef void (*cxip_trace_close_t)(void);
-cxip_trace_close_t cxip_trace_close_fn;
+extern cxip_trace_close_t cxip_trace_close_fn;
 
 typedef bool (*cxip_trace_enable_t)(bool enable);
-cxip_trace_enable_t cxip_trace_enable_fn;
+extern cxip_trace_enable_t cxip_trace_enable_fn;
 
-bool cxip_trace_enabled;	// true if tracing is enabled
-bool cxip_trace_append;		// append open for trace file
-bool cxip_trace_linebuf;	// set line buffering for trace
-int cxip_trace_rank;		// tracing rank
-int cxip_trace_numranks;	// tracing number of ranks
-FILE *cxip_trace_fid;		// trace output file descriptor
+extern bool cxip_trace_enabled;	// true if tracing is enabled
+extern bool cxip_trace_append;		// append open for trace file
+extern bool cxip_trace_linebuf;	// set line buffering for trace
+extern int cxip_trace_rank;		// tracing rank
+extern int cxip_trace_numranks;	// tracing number of ranks
+extern FILE *cxip_trace_fid;		// trace output file descriptor
 
 int cxip_trace_attr cxip_trace(const char *fmt, ...);
 void cxip_trace_flush(void);
@@ -3197,7 +3197,7 @@ enum cxip_trace_module {
 	CXIP_TRC_TEST_CODE,
 	CXIP_TRC_MAX
 };
-uint64_t cxip_trace_mask;
+extern uint64_t cxip_trace_mask;
 
 static inline void cxip_trace_set(int mod)
 {

@@ -96,6 +96,7 @@
 bool cxip_trace_initialized;
 bool cxip_trace_enabled;
 bool cxip_trace_append;
+bool cxip_trace_linebuf;	// set line buffering for trace
 int cxip_trace_rank;
 int cxip_trace_numranks;
 char *cxip_trace_filename;

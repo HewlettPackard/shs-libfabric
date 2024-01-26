@@ -168,6 +168,8 @@ libfabric_core_configure_options="${configure_options} ${base_providers} ${extra
 verbs_dl_configure_options="${configure_options} --enable-verbs=dl ${extra_configure_options}"
 cxi_dl_configure_options="${configure_options} --enable-cxi=dl ${extra_configure_options}"
 
+# set _lto_cflags to nil to opt-out of RHEL 9.3 LTO optimization options.
+# These options are standard on RHEL 9.3, but not earlier versions
 RPMBUILD_OPTS=$(echo """
 --define 'release ${RELEASE}'
 --define 'install_modulefile 1'
@@ -179,6 +181,7 @@ RPMBUILD_OPTS=$(echo """
 --define '_rpmdir $rpmbuilddir/RPMS'
 --define '_specdir $rpmbuilddir/SPECS'
 --define '_tmppath $rpmbuilddir/tmp'
+--define '_lto_cflags %{nil}'
 """ | tr '\n' ' ')
 
 sed -i -e 's/Release: .*/Release: %{release}/g' libfabric.spec.in

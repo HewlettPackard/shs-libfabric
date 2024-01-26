@@ -81,6 +81,7 @@
 int frmwk_numranks;		/* PMI_SIZE */
 int frmwk_rank;			/* PMI_RANK */
 int frmwk_nics_per_rank;	/* PMI_NUM_HSNS (defaults to 1) */
+int frmwk_numnics;
 const char *frmwk_unique;	/* PMI_SHARED_SECRET */
 const char *frmwk_nodename;	/* SLURMD_NODENAME */
 const char frmwk_node0[32];	/* SLURMD_NODELIST (first name) */
