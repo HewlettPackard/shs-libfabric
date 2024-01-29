@@ -1,4 +1,4 @@
-dnl SPDX-License-Identifier: GPL-2.0
+dnl SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 dnl
 dnl Copyright 2018 Cray Inc. All rights reserved.
 

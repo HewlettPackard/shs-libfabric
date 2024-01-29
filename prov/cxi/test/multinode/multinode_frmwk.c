@@ -1,8 +1,10 @@
 /*
- * SPDX-License-Identifier: GPL-2.0
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
  *
- * (c) Copyright 2021-2023 Hewlett Packard Enterprise Development LP
- *
+ * Copyright (c) 2021-2023 Hewlett Packard Enterprise Development LP
+ */
+
+/*
  * libfabric C test framework for multinode testing.
  *
  * This must be compiled with:

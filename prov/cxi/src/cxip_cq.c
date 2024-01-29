@@ -1,11 +1,9 @@
-
 /*
- * SPDX-License-Identifier: GPL-2.0
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
  *
  * Copyright (c) 2014 Intel Corporation, Inc. All rights reserved.
  * Copyright (c) 2016 Cisco Systems, Inc. All rights reserved.
- * Copyright (c) 2018-2020 Cray Inc. All rights reserved.
- * Copyright (c) 2021-2023 Hewlett Packard Enterprise Development LP
+ * Copyright (c) 2018-2023 Hewlett Packard Enterprise Development LP
  */
 
 #include "config.h"

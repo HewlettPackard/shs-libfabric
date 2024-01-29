@@ -1,4 +1,5 @@
-*SPDX-License-Identifier: GPL-2.0 (c) Copyright 2020-2023 Hewlett Packard Enterprise Development LP*
+*SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only 
+Copyright (c) 2020-2023 Hewlett Packard Enterprise Development LP*
 
 # Libfabric CXI Provider Tests
 

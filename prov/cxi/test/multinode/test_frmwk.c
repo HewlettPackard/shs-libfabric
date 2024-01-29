@@ -1,8 +1,10 @@
 /*
- * SPDX-License-Identifier: GPL-2.0
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
  *
- * (c) Copyright 2022-2023 Hewlett Packard Enterprise Development LP
- *
+ * Copyright (c) 2022-2023 Hewlett Packard Enterprise Development LP
+ */
+
+/*
  * Validation test for the pmi_frmwk implementation.
  *
  * Launch using: srun -N4 ./test_frmwk

@@ -1,7 +1,7 @@
 /*
- * SPDX-License-Identifier: GPL-2.0
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
  *
- * Copyright (c) 2019, 2022 Cray Inc. All rights reserved.
+ * Copyright (c) 2019,2022 Hewlett Packard Enterprise Development LP
  */
 
 /* CXI fabric discovery implementation. */

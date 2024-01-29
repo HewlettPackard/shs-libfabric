@@ -1,7 +1,7 @@
 /*
- * SPDX-License-Identifier: GPL-2.0
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
  *
- * (C) Copyright 2021 Hewlett Packard Enterprise Development LP
+ * Copyright (c) 2021 Hewlett Packard Enterprise Development LP
  */
 
 #include "hip/hip_runtime.h"

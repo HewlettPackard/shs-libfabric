@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2018-2021 Hewlett Packard Enterprise Development LP
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
