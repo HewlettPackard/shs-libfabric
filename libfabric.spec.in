@@ -27,6 +27,8 @@ Provides: libfabric1 = %{version}-%{release}
 %description
 libfabric provides a user-space API to access high-performance fabric
 services, such as RDMA.
+Built using GPU's
+%{expand:%(cat /var/tmp/gpu-versions)}
 
 %package devel
 Summary: Development files for the libfabric library

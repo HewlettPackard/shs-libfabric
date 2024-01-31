@@ -241,15 +241,35 @@ fi
 set -x
 
 if [[ $with_cuda -eq 1 ]]; then
-    nvhpc_sdk_versions=($(ls -1 /opt/nvidia/hpc_sdk/Linux_${TARGET_ARCH}/ | sort -rn))
-    nvhpc_sdk_version=${nvhpc_sdk_versions[0]}
-    nvhpc_cuda_path=/opt/nvidia/hpc_sdk/Linux_${TARGET_ARCH}/$nvhpc_sdk_version/cuda
-    if [[ $nvhpc_sdk_version == "" ]]; then
-        echo "CUDA required but not found."
-        exit 1
-    else
-        echo "Using $nvhpc_sdk_version at $nvhpc_cuda_path"
 
+    # Specify the directory where you want to search for folders
+    search_dir="/opt/nvidia/hpc_sdk/Linux_${TARGET_ARCH}"
+
+    # Define a pattern to match folders in the "x.y" format
+    pattern='^[0-9]+\.[0-9]+$'
+
+    # Initialize variables to keep track of the latest folder and its version
+    latest_version=""
+    latest_folder=""
+
+    # Iterate through the directories in the search directory
+    for dir in "$search_dir"/*; do
+        if [[ -d "$dir" && $(basename "$dir") =~ $pattern ]]; then
+            version="$(basename "$dir")"
+            if [[ -z "$latest_version" || "$version" > "$latest_version" ]]; then
+                latest_version="$version"
+                latest_folder="$dir"
+            fi
+        fi
+    done
+
+    # Check if any matching folders were found
+    if [ -n "$latest_folder" ]; then
+        nvhpc_sdk_version="$latest_version"
+        echo "Using $nvhpc_sdk_version at $latest_folder"
+        nvhpc_cuda_path=$latest_folder/cuda
+        echo "Using $nvhpc_sdk_version at $nvhpc_cuda_path"
+        
         # Convenient symlink which allows the libfabric build process to not
         # have to call out a specific versioned CUDA directory.
         ln -s $nvhpc_cuda_path /usr/local/cuda
@@ -261,16 +281,39 @@ if [[ $with_cuda -eq 1 ]]; then
         # into a non-lib path. A symlink is created to fix this.
         ln -s /usr/local/cuda/lib64/stubs/libcuda.so \
               /usr/local/cuda/lib64/libcuda.so
+
+    else
+        echo "No matching CUDA folders found."
+        exit 1
     fi
 fi
 
 if [[ $with_rocm -eq 1 ]]; then
     update-alternatives --display rocm
-    rocm_version=$(ls /opt | grep rocm | tr -d "\n")
-    if [[ $rocm_version == "" ]]; then
-        echo "ROCM required but not found."
-        exit 1
+
+    # Find the ROCm version directory in /opt/
+    rocm_version_dir=$(ls -d /opt/rocm-* 2>/dev/null)
+
+    # Check if a ROCm version directory was found
+    if [ -n "$rocm_version_dir" ]; then
+        # Extract the version from the directory path
+        rocm_version=$(basename "$rocm_version_dir")
+        
+        # Check if the version follows the expected format
+        if [[ $rocm_version =~ ^rocm-[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ROCm version: $rocm_version"
+            ln -s /opt/"$rocm_version" /opt/rocm
+        else
+            echo "Unexpected directory structure found: $rocm_version"
+            exit 1
+        fi
     else
-        echo "Using ROCM $rocm_version"
+        echo "The installation of ROCm is not found in the /opt/ directory."
+        exit 1
     fi
 fi
+
+echo "ROCm Version: ${rocm_version}" > /var/tmp/gpu-versions
+echo "Nvidia Version: ${nvhpc_sdk_version}" >> /var/tmp/gpu-versions
+echo "GPU Versions File:"
+echo "$(</var/tmp/gpu-versions)"
