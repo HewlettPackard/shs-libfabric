@@ -37,7 +37,7 @@ case "${OBS_TARGET_OS}" in
     cos_2_5_*)      COS_BRANCH='release/cos-2.5' ;;
     csm_1_4_*)      COS_BRANCH='release/cos-2.5' ;;
     cos_3_0_*)      COS_BRANCH='release/cos-3.0' ;;
-    csm_1_5_0_*)    COS_BRANCH='release/cos-3.0' ;;
+    csm_1_5_*)      COS_BRANCH='release/cos-3.0' ;;
     sle15_sp5_*)    COS_BRANCH='release/cos-3.0' ;;
     *)              COS_BRANCH='dev/master' ;;
 esac
