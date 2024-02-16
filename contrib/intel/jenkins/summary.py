@@ -396,17 +396,34 @@ class OnecclSummarizer(Summarizer):
         self.exists = os.path.exists(self.file_path)
         self.name = 'no_test'
 
+    def read_file(self):
+        with open(self.file_path, 'r') as log_file:
+            self.fast_forward(log_file)
+            for line in log_file:
+                self.check_line(line)
+
     def check_name(self, line):
-        #lines look like path/run_oneccl.sh ..... -test examples ..... test_name
-        if " -test" in line:
-            tokens = line.split()
-            self.name = f"{tokens[tokens.index('-test') + 1]} " \
-                   f"{tokens[len(tokens) - 1]}"
+        #OneCCL GPU tests:
+        if "bash -c" in line and "./run.sh" not in line:
+            tokens = line.split('./')[1]
+            self.name = tokens.split()[0]
+        #OneCCL CPU tests:
+        if "Running" in line and "CCL_LOG_LEVEL=debug" not in line:
+            if './' in line:
+                tokens = line.split('./')[1]
+                self.name = tokens.split()[0]
 
     def check_pass(self, line):
-        if 'passed' in line or "all done" in line:
+        if '[0] PASSED' in line or "All done" in line:
             self.passes += 1
-            self.passed_tests.append(self.name)
+            self.passed_tests.append(f"{self.name}: 1")
+        if ("[0] [  PASSED  ]" in line and "tests." in line) or \
+            ("tests." in line and "[1] [  PASSED  ]" not in line and \
+            "[0] [  PASSED  ]" not in line):
+            token = line.split()
+            no_of_tests = f"{token[token.index('tests.') - 1]} "
+            self.passes += int(no_of_tests)
+            self.passed_tests.append(f"{self.name}: {no_of_tests}")
 
     def check_fail(self, line):
         if 'failed' in line or "exiting with" in line:
@@ -436,6 +453,7 @@ class ShmemSummarizer(Summarizer):
         self.test_type = 'prk'
         self.keyphrase = self.shmem_type[self.test_type]['keyphrase']
         self.name = 'no_test'
+        self.previous = ''
 
     def check_uh(self, line, log_file):
         # (test_002) Running test_shmem_atomics.x: Test all atomics... OK
@@ -443,8 +461,10 @@ class ShmemSummarizer(Summarizer):
         if "running test_" in line:
             tokens = line.split()
             for token in tokens:
-                if 'test_' in token:
-                    self.name = token
+                if 'test_shmem' in token:
+                    name = '_'.join(token.split('_')[2:]).strip('.x:')
+                    self.name = f"UH {name}"
+                    break
             if tokens[len(tokens) - 1] == 'ok':
                 self.shmem_type[self.test_type]['passes'] += 1
                 self.passed_tests.append(self.name)
@@ -471,13 +491,18 @@ class ShmemSummarizer(Summarizer):
                 )
 
     def check_prk(self, line, log_file=None):
+        if "parallel research kernels" in self.previous:
+            tokens = line.split(' ')
+            name = tokens[tokens.index('shmem') + 1]
+            self.name = f"PRK {name}"
         if self.keyphrase in line:
             self.shmem_type[self.test_type]['passes'] += 1
+            self.passed_tests.append(self.name)
         if 'error:' in line or "exiting with" in line:
             self.shmem_type[self.test_type]['fails'] += 1
             p = self.shmem_type[self.test_type]['passes']
             f = self.shmem_type[self.test_type]['fails']
-            self.failed_tests.append(f"{self.prov} {p + f}")
+            self.failed_tests.append(f"{self.prov} {p + f} {self.name}")
         if 'test(s)' in line:
             token = line.split()[0]
             if self.fails != int(token):
@@ -486,15 +511,21 @@ class ShmemSummarizer(Summarizer):
                     f"{token}"
                 )
 
+        self.previous = line
+
     def check_isx(self, line, log_file=None):
         if self.keyphrase in line:
             self.shmem_type[self.test_type]['passes'] += 1
+            tokens = line.split(' ')
+            name = tokens[tokens.index(f"{self.keyphrase}!\n") - 1]
+            self.name = f"ISx {name}"
+            self.passed_tests.append(self.name)
         if ('failed' in line and 'test(s)' not in line) or \
             "exiting with" in line:
             self.shmem_type[self.test_type]['fails'] += 1
             p = self.shmem_type[self.test_type]['passes']
             f = self.shmem_type[self.test_type]['fails']
-            self.failed_tests.append(f"{self.prov} {p + f}")
+            self.failed_tests.append(f"{self.prov} {p + f} {self.name}")
         if 'test(s)' in line:
             token = line.split()[0]
             if int(token) != self.shmem_type[self.test_type]['fails']:
