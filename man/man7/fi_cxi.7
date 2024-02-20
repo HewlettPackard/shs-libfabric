@@ -528,6 +528,16 @@ Using Pinned mode avoids any overhead due to network page faults but
 requires all buffers to be backed by physical memory.
 Copy-on-write semantics are broken when using pinned memory.
 See the Fork section for more information.
+.PP
+The CXI provider supports DMABUF for device memory registration. If
+the ROCR and CUDA libraries support it, the CXI provider will default
+to use DMA-buf.
+There may be situations with CUDA that may double the BAR consumption.
+Until this is fixed in the CUDA stack, the environment variable
+*FI_CXI_DISABLE_DMABUF_CUDA* can be used to fall back to the nivida
+peer-to-peer interface.
+Also, *FI_CXI_DISABLE_DMABUF_ROCR* can be used to fall back to the
+amdgpu peer-to-peer interface.
 .SS Translation Cache
 .PP
 Mapping a buffer for use by the NIC is an expensive operation.
