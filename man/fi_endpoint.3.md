@@ -753,9 +753,10 @@ protocol value set to one.
 : Reliable-datagram protocol optimized for HPC applications
   used by cxi provider.
 
-*FI_PROTO_CXI_CS*
-: A version of the FI_PROTO_CXI protocol that targets use in client/server
-  environments.
+*FI_PROTO_CXI_RNR*
+: A version of the FI_PROTO_CXI protocol that implements a RNR
+  protocol which can be used when messaging is primarily expected
+  and FI_ORDER_SAS ordering is not required.
 
 *FI_PROTO_UNSPEC*
 : The protocol is not specified.  This is usually provided as input,
