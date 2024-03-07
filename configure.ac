@@ -566,42 +566,61 @@ AC_DEFINE_UNQUOTED([HAVE_RESTRICTED_DL], [$restricted_dl],
   [Define to 1 to only look for dl providers under default location if FI_PROVIDER_PATH is not set])
 
 dnl Check kdreg2 support
-kdreg2_enabled=1
-have_kdreg2=0
+dnl
+dnl kdreg_enabled: enable or disable kdreg2, independent of availability 
+dnl
+dnl kdreg2_wanted:
+dnl     auto: enable if found, not an error if not found (default if no --with-kdreg2 present)
+dnl     no: disable
+dnl     yes: enable if found, error if not found
+dnl
+
+kdreg2_enabled=yes
+kdreg2_wanted=auto
+kdreg2_include_path=""
 have_kdreg2_include_path=0
+have_kdreg2=0
 
-AC_ARG_ENABLE([kdreg2],
-              [AC_HELP_STRING([--disable-kdreg2],
-                              [Determine whether kdreg2 memory monitor is disabled.])],
-              [kdreg2_enabled=0],
-              [])
+AC_ARG_ENABLE([kdreg2-monitor],
+	      [AS_HELP_STRING([--enable-kdreg2-monitor],[Enable kdreg2 memory monitor])],
+	      [AS_CASE(["$enable_kdreg2_monitor"],
+	               ["no"],  [kdreg2_enabled=no],
+		       ["yes"], [kdreg2_wanted=yes],
+		       [""],    [kdreg2_wanted=yes],
+		       [AC_MSG_ERROR([Unsupported option: --enable-kdreg2-monitor=$enable_kdreg2.])])])
 
-AS_IF([test $kdreg2_enabled -ne 0 ],
-      [AC_CHECK_HEADER([linux/kdreg2.h], [have_kdreg2=1], [], [])
+AC_ARG_WITH([kdreg2],
+	    [AS_HELP_STRING([--with-kdreg2=DIR],
+	    		    [Enable kdreg2 memory monitor.  Optional DIR=<Directory for kdreg2.h header file>])],
+	    [AS_CASE(["$with_kdreg2"],
+		     ["no"], [kdreg2_wanted=no],
+		     [""],   [kdreg2_wanted=yes],
+		     [kdreg2_include_path="$with_kdreg2"
+		      kdreg_wanted=yes
+		      have_kdreg2_include_path=1])])
 
-       AC_ARG_WITH([kdreg2],
-		   [AS_HELP_STRING([--with-kdreg2=DIR],
-				   [Enable KDREG2 memory monitor.
-				    Optional=<Path to kdreg2.h header file>.])],
-		   [AS_CASE(["$with_kdreg2"],
-			    ["no"], [kdreg2_enabled=0],
-			    ["yes"], [],
-			    [""], [],
-			    [CPPFLAGS="$CPPFLAGS -I$with_kdreg2"
-			     AC_CHECK_HEADER([kdreg2.h],
-					     [have_kdreg2=1
-					      have_kdreg2_include_path=1],
-					     [have_kdreg2=0],
-					     [])])
-		    	     AS_IF([test $have_kdreg2 -eq 0 ],
-			           [AC_MSG_ERROR([KDREG2 header not found in $with_kdreg2.  Cannot enable KDREG2 memory monitor.])])
-		   ])
-       ])
+dnl if kdreg2 wanted, see if we can find header
 
-AS_IF([test $kdreg2_enabled -eq 0],
-      [AC_MSG_NOTICE([kdreg2 monitor disabled])],
-      [AS_IF([test $have_kdreg2 -ne 0],
-             [AC_MSG_NOTICE([kdreg2 present and enabled])])])
+AS_IF([test "$kdreg2_wanted" != "no" && test "$kdreg2_enabled" = "yes"],
+      [AS_IF([test $have_kdreg2_include_path -ne 0],
+             [CPPFLAGS="$CPPFLAGS -I$kdreg2_include_path"])
+       AC_CHECK_HEADER([kdreg2.h], [have_kdreg2=1])])
+
+dnl See if found status matches wanted
+
+AS_IF([test "$kdreg2_enabled" = "yes"],
+      [AS_CASE(["$kdreg2_wanted"],
+   	       ["auto"], [AS_IF([test $have_kdreg2 -ne 0],
+	      		        [AC_MSG_NOTICE([Kdreg2 monitor enabled.])],
+			        [AC_MSG_NOTICE([Header file kdreg2.h not found, monitor disabled.])])],
+	       ["no"], [],
+	       [AS_IF([test $have_kdreg2 -eq 0],
+	       	      [AS_IF([test $have_kdreg2_include_path -ne 0],
+	     	      	     [AC_MSG_ERROR([Header file kdreg2.h not found in $kdreg2_include_path. Cannot enable Kdreg2 memory monitor.])],
+			     [AC_MSG_ERROR([Header file kdreg2.h not found.  Cannot enable Kdreg2 memory monitor.])])],
+	       	      [AC_MSG_NOTICE([Kdreg2 monitor enabled.])])])])
+
+AS_IF([test $have_kdreg2 -eq 0], [have_kdreg2_include_path=0])
 
 AC_DEFINE_UNQUOTED(HAVE_KDREG2, [$have_kdreg2],
 	[Define to 1 if kdreg2.h is available.])
@@ -922,7 +941,7 @@ AS_CASE([$default_monitor],
 	[])
 
 AS_IF([test "$bad_default" != "0"],
-	    [AC_MSG_ERROR(["Default memory monitor is not available: $default_monitor."])])
+	    [AC_MSG_ERROR([Default memory monitor is not available: $default_monitor.])])
 
 AC_DEFINE_UNQUOTED([MR_CACHE_MONITOR_DEFAULT], ["$default_monitor"], [Default memory monitor])
 
@@ -1128,9 +1147,16 @@ for i in $PROVIDERS_TO_BUILD; do
 		builtin="$i ${builtin}"
 	fi
 done
+mem_monitors=""
+if test $enable_memhooks -ne 0; then mem_monitors="memhooks $mem_monitors"; fi
+if test $enable_uffd -ne 0; then mem_monitors="uffd $mem_monitors"; fi
+if test $have_kdreg2 -ne 0; then mem_monitors="kdreg2 $mem_monitors"; fi
+
 cat <<EOF
 ***
 *** Built-in providers:	${builtin}
 *** DSO providers:	${dso}
+*** Memory monitors:    ${mem_monitors}
+***         default:    ${default_monitor}
 ***
 EOF

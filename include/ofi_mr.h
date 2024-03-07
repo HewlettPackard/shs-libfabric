@@ -56,7 +56,7 @@ struct ofi_mr;
 #if HAVE_KDREG2_INCLUDE_PATH
 #include "kdreg2.h"
 #else
-#include "linux/kdreg2.h"
+#include <linux/kdreg2.h>
 #endif
 #endif
 
