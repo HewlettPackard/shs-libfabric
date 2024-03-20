@@ -52,10 +52,12 @@ with_rocm=0
 with_cuda=0
 with_ze=0
 
-RPMS="cray-libcxi-devel kdreg2-devel"
+RPMS="kdreg2-devel "
 if [ -n "${VERBS_BUILD}" ]
 then
-    RPMS+=" rdma-core rdma-core-devel "
+    RPMS+="rdma-core rdma-core-devel "
+else
+    RPMS+="cray-libcxi-devel "
 fi
 
 if [[ ${TARGET_OS} == "centos_8" ]]; then

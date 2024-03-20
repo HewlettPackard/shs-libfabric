@@ -83,7 +83,7 @@ else
 	exit 1
 fi
 
-signed_off=$(git log -1 | grep "Signed-off-by: ")
+signed_off=$(git log -1 | grep -i "Signed-off-by: ")
 if [ -z "${signed_off}" ]; then
 	echo "Commit not signed off"
 	exit 1
