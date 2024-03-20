@@ -68,6 +68,15 @@ enum {
 #define FI_CXI_CNTR_EVENTS_BYTES	1	/* FI_CNTR_EVENTS_BYTES */
 
 /*
+ * CXI provider specific counter flag to return current/cached counter value
+ * in host memory. A request to update the count is requested, but the routine
+ * does not wait for the update to complete. Subsequent reads will pick up
+ * the updated counter value. The normal behavior is to wait for a memory update
+ * to complete (or to use the domain ops counter routines).
+ */
+#define FI_CXI_CNTR_CACHED	(1ULL << 32)
+
+/*
  * TODO: Set this to the upstream value prior to releasing software.
  * This flag returned in a completion and indicates that the message was
  * truncated and that the length indicates the truncated message length.
