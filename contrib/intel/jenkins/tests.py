@@ -106,6 +106,7 @@ class Fabtest(Test):
                          util_prov, way)
         self.fabtestpath = f'{self.libfab_installpath}/bin'
         self.fabtestconfigpath = f'{self.libfab_installpath}/share/fabtests'
+        self.device = cloudbees_config.fabric_map[self.hw]
 
     def get_exclude_file(self):
         path = self.libfab_installpath
@@ -113,6 +114,8 @@ class Fabtest(Test):
 
         if self.hw == 'ivysaur':
             efile = f'{efile_path}/{self.core_prov}/io_uring.exclude'
+        elif self.hw == 'cyndaquil' or self.hw == 'quilava':
+            efile = f'{efile_path}/{self.core_prov}/cuda.exclude'
         else:
             prov = self.util_prov if self.util_prov else self.core_prov
             efile_old = f'{efile_path}/{prov}/{prov}.exclude'
@@ -155,11 +158,11 @@ class Fabtest(Test):
             opts += "-t all "
 
         if (self.way == 'h2d'):
-            opts += "-C \"-H\" -L \"-D ze\" "
+            opts += f"-C \"-H\" -L \"-D {self.device}\" "
         elif (self.way == 'd2d'):
-            opts += "-C \"-D ze\" -L \"-D ze\" "
+            opts += f"-C \"-D {self.device}\" -L \"-D {self.device}\" "
         elif (self.way == 'xd2d'):
-            opts += "-C \"-D ze\" -L \"-D ze -i 1\" "
+            opts += f"-C \"-D {self.device}\" -L \"-D {self.device} -i 1\" "
 
         if (self.core_prov == 'sockets' and self.ofi_build_mode == 'reg'):
             complex_test_file = f'{self.libfab_installpath}/share/fabtests/'\
@@ -208,15 +211,18 @@ class Fabtest(Test):
 class ShmemTest(Test):
 
     def __init__(self, jobname, buildno, testname, hw, core_prov, fabric,
-                    hosts, ofi_build_mode, user_env, log_file, util_prov=None):
+                    hosts, ofi_build_mode, user_env, log_file, util_prov=None,
+                    weekly=False):
 
         super().__init__(jobname, buildno, testname, hw, core_prov, fabric,
                          hosts, ofi_build_mode, user_env, log_file, None,
                          util_prov)
 
-        self.n = 4
-        self.ppn = 2
-        self.shmem_dir = f'{self.middlewares_path}/shmem'
+        self.n = 2
+        self.ppn = 1
+        self.weekly = weekly
+        self.shmem_dir = f'{self.middlewares_path}/shmem_{self.hw}'
+        self.oshrun = f'{self.shmem_dir}/bin/oshrun'
         self.hydra = f'{cloudbees_config.hydra}'
         self.shmem_testname = ''
         self.threshold = '1'
@@ -226,22 +232,14 @@ class ShmemTest(Test):
         self.prk_first_arr_dim = 1000
         self.prk_second_arr_dim = 1000
         if self.util_prov:
-            self.prov = f'{self.core_prov};{self.util_prov}'
+            self.prov = f'{self.core_prov}\\;{self.util_prov}'
         else:
             self.prov = self.core_prov
 
         self.test_dir = {
-            'unit'  : 'SOS',
-            'uh'    : 'tests-uh',
+            'sos'  : 'SOS/test',
             'isx'   : 'ISx/SHMEM',
             'prk'   : 'PRK/SHMEM'
-        }
-
-        self.make = {
-            'unit'  : 'make VERBOSE=1',
-            'uh'    : 'make C_feature_tests-run',
-            'isx'   : '',
-            'prk'   : ''
         }
 
         self.shmem_environ = {
@@ -253,7 +251,39 @@ class ShmemTest(Test):
             'SHMEM_SYMMETRIC_SIZE'	: '4G',
             'LD_PRELOAD'			: f'{self.libfab_installpath}'\
                                        '/lib/libfabric.so',
-            'threshold'              : self.threshold
+            'threshold'             : self.threshold,
+            'SHMEM_DEBUG'           : '1'
+        }
+
+        self.exclude_extensions = ['.cpp', '.c', '.o', '.h', '.f90', '.log',
+                                   '.am', '.in', '.deps', '.libs']
+
+        self.SOS_tests = [
+            'unit',
+            'shmemx',
+            'apps',
+            'spec-example'
+        ]
+
+        if self.weekly:
+            self.SOS_tests.append('performance/shmem_perf_suite')
+            self.SOS_tests.append('performance/tests')
+
+        self.exclude = {
+            'sos'  : {
+                        'verbs'   : [
+                                        'makefile',
+                                        'readme'
+                                   ],
+                        'tcp'     : [
+                                        'makefile',
+                                        'readme'
+                                    ],
+                        'sockets' : [
+                                        'makefile',
+                                        'readme'
+                                    ]
+                     }
         }
 
     def export_env(self):
@@ -265,50 +295,67 @@ class ShmemTest(Test):
             environ += f"export {key}={val}; "
         return environ
 
-    def cmd(self):
-        cmd = ''
-        if self.shmem_testname == 'unit':
-            cmd += f"{self.make[self.shmem_testname]} "
-            cmd += "mpiexec.hydra "
-            cmd += f"-n {self.n} "
-            cmd += f"-np {self.ppn} "
-            cmd += 'check'
-        elif self.shmem_testname == 'uh':
-            cmd += f'{self.make[self.shmem_testname]}'
+    def check_ending(self, f_name):
+        """
+        Returns True if ending is okay, false if not
+        """
+        for ext in self.exclude_extensions:
+            if f_name.lower().endswith(ext):
+                return False
+
+        return True
+
+    def get_cmds(self):
+        cmd_list = []
+        if self.shmem_testname == 'sos':
+            for test_dir in self.SOS_tests:
+                test_dir_path = f'{self.shmem_dir}/' \
+                                f'{self.test_dir[self.shmem_testname]}/' \
+                                f'{test_dir}'
+                for f_name in os.listdir(test_dir_path):
+                    if not self.check_ending(f_name) or \
+                       f_name.lower() in \
+                       self.exclude[self.shmem_testname][self.core_prov]:
+                        continue
+
+                    cmd_list.append(f"{test_dir_path}/{f_name}")
+
         elif self.shmem_testname == 'isx':
-            cmd += f"oshrun -np 4 ./bin/isx.strong {self.isx_shmem_kernel_max}"\
-                    " output_strong; "
-            cmd += f"oshrun -np 4 ./bin/isx.weak {self.isx_shmem_total_size} "\
-                    "output_weak; "
-            cmd += f"oshrun -np 4 ./bin/isx.weak_iso "\
-                   f"{self.isx_shmem_total_size} output_weak_iso "
+            exec_path = f'{self.shmem_dir}/{self.test_dir[self.shmem_testname]}/bin'
+            cmd_list.append(f"{exec_path}/isx.strong {self.isx_shmem_kernel_max} " \
+                        "output_strong")
+            cmd_list.append(f"{exec_path}/isx.weak " \
+                       f"{self.isx_shmem_total_size} output_weak")
+            cmd_list.append(f"{exec_path}/isx.weak_iso " \
+                       f"{self.isx_shmem_total_size} output_weak_iso")
         elif self.shmem_testname == 'prk':
-            cmd += f"oshrun -np 4 ./Stencil/stencil {self.prk_iterations} "\
-                   f"{self.prk_first_arr_dim}; "
-            cmd += f"oshrun -np 4 ./Synch_p2p/p2p {self.prk_iterations} "\
-                   f"{self.prk_first_arr_dim} {self.prk_second_arr_dim}; "
-            cmd += f"oshrun -np 4 ./Transpose/transpose {self.prk_iterations} "\
-                   f"{self.prk_first_arr_dim} "
+            exec_path = f'{self.shmem_dir}/{self.test_dir[self.shmem_testname]}'
+            cmd_list.append(f"{exec_path}/Stencil/stencil " \
+                       f"{self.prk_iterations} {self.prk_first_arr_dim}")
+            cmd_list.append(f"{exec_path}/Synch_p2p/p2p " \
+                       f"{self.prk_iterations} {self.prk_first_arr_dim} "\
+                       f"{self.prk_second_arr_dim}")
+            cmd_list.append(f"{exec_path}/Transpose/transpose " \
+                       f"{self.prk_iterations} {self.prk_first_arr_dim}")
 
-        return cmd
-
+        return cmd_list
 
     @property
     def execute_condn(self):
-        #make always true when verbs and sockets are passing
-        return True if (self.core_prov == 'tcp') \
-                    else False
+        return True
 
     def execute_cmd(self, shmem_testname):
         self.shmem_testname = shmem_testname
-        cwd = os.getcwd()
-        os.chdir(f'{self.shmem_dir}/{self.test_dir[self.shmem_testname]}')
-        print("Changed directory to "\
-              f'{self.shmem_dir}/{self.test_dir[self.shmem_testname]}')
-        command = f"bash -c \'{self.export_env()} {self.cmd()}\'"
-        outputcmd = shlex.split(command)
-        common.run_command(outputcmd)
-        os.chdir(cwd)
+        base_cmd = f"{self.oshrun}"
+        base_cmd = f"{base_cmd} -n {self.n}"
+        base_cmd = f"{base_cmd} -ppn {self.ppn}"
+        cmds = self.get_cmds()
+        for cmd in self.get_cmds():
+            command = f"bash -c \'{self.export_env()} {base_cmd} {cmd}\'"
+            outputcmd = shlex.split(command)
+            print(f"Running {self.shmem_testname} {cmd.split('/')[-1]}")
+            common.run_command(outputcmd)
+            print(f"{self.shmem_testname} {cmd.split('/')[-1]} PASS!")
 
 class MultinodeTests(Test):
 
@@ -803,6 +850,10 @@ class OneCCLTests(Test):
             'CCL_ATL_TRANSPORT_LIST'    : 'ofi'
         }
 
+        if self.env:
+            for key in self.env:
+                self.oneccl_environ[key] = self.env[key]
+
         self.ld_library = [
                             f'{self.libfab_installpath}/lib',
                             f'{self.oneccl_path}/build/_install/lib'
@@ -810,9 +861,12 @@ class OneCCLTests(Test):
 
     def export_env(self):
         environ = f"source {cloudbees_config.oneapi_root}/setvars.sh; "
-        environ += f"source {self.oneccl_path}/build/_install/env/vars.sh; "
+        environ += f"source {self.oneccl_path}/build/_install/env/setvars.sh; "
         if self.core_prov == 'psm3':
             self.oneccl_environ['PSM3_MULTI_EP'] = '1'
+
+        if self.core_prov == 'shm':
+            self.oneccl_environ['CCL_ATL_SHM'] = '1'
 
         for key, val in self.oneccl_environ.items():
             environ += f"export {key}={val}; "
@@ -950,8 +1004,16 @@ class OneCCLTestsGPU(Test):
             else:
                 gpu_selector = 'default'
 
-            command = f"bash -c \'{self.export_env()} {self.cmd()} "\
-                      f"{self.options()} ./{test} "
+            if self.core_prov == 'psm3':
+                command = f"bash -c \'{self.export_env()} export PSM3_MULTI_EP=1; {self.cmd()} "\
+                          f"{self.options()} ./{test} "
+            elif self.core_prov == 'shm':
+                command = f"bash -c \'{self.export_env()} export CCL_ATL_SHM=1; {self.cmd()} "\
+                          f"{self.options()} ./{test} "
+            else:
+                command = f"bash -c \'{self.export_env()} {self.cmd()} "\
+                          f"{self.options()} ./{test} "
+
             if 'examples' in oneccl_test_gpu:
                 command += f"gpu {gpu_selector}"
             command += "\'"

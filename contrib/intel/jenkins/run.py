@@ -47,29 +47,26 @@ def fabtests(hw, core, hosts, mode, user_env, log_file, util, way):
         print(f"Skipping {core} {runfabtest.testname} as exec condn fails")
     print('-------------------------------------------------------------------')
 
-def shmemtest(hw, core, hosts, mode, user_env, log_file, util):
-
+def shmemtest(hw, core, hosts, mode, user_env, log_file, util, weekly):
     runshmemtest = tests.ShmemTest(jobname=jbname,buildno=bno,
                                    testname="shmem test", hw=hw, core_prov=core,
                                    fabric=fab, hosts=hosts,
                                    ofi_build_mode=mode, user_env=user_env,
-                                   log_file=log_file, util_prov=util)
+                                   log_file=log_file, util_prov=util,
+                                   weekly=weekly)
 
     print('-------------------------------------------------------------------')
     if (runshmemtest.execute_condn):
-#        skip unit because it is failing shmem_team_split_2d
-#        print(f"Running shmem unit test for {core}-{util}-{fab}")
-#        runshmemtest.execute_cmd("unit")
+        print(f"Running shmem SOS test for {core}-{util}-{fab}")
+        runshmemtest.execute_cmd("sos")
+
+        print('--------------------------------------------------------------')
         print(f"Running shmem PRK test for {core}-{util}-{fab}")
         runshmemtest.execute_cmd("prk")
 
         print('--------------------------------------------------------------')
         print(f"Running shmem ISx test for {core}-{util}-{fab}")
         runshmemtest.execute_cmd("isx")
-
-        print('---------------------------------------------------------------')
-        print(f"Running shmem uh test for {core}-{util}-{fab}")
-        runshmemtest.execute_cmd("uh")
     else:
         print(f"Skipping {core} {runshmemtest.testname} as exec condn fails")
     print('-------------------------------------------------------------------')

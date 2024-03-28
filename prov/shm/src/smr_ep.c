@@ -811,6 +811,21 @@ static void smr_cleanup_epoll(struct smr_sock_info *sock_info)
 	ofi_epoll_close(sock_info->epollfd);
 }
 
+static void smr_free_sock_info(struct smr_ep *ep)
+{
+	int i, j;
+
+	for (i = 0; i < SMR_MAX_PEERS; i++) {
+		if (!ep->sock_info->peers[i].device_fds)
+			continue;
+		for (j = 0; j < ep->sock_info->nfds; j++)
+			close(ep->sock_info->peers[i].device_fds[j]);
+		free(ep->sock_info->peers[i].device_fds);
+	}
+	free(ep->sock_info);
+	ep->sock_info = NULL;
+}
+
 static int smr_ep_close(struct fid *fid)
 {
 	struct smr_ep *ep;
@@ -826,7 +841,7 @@ static int smr_ep_close(struct fid *fid)
 		close(ep->sock_info->listen_sock);
 		unlink(ep->sock_info->name);
 		smr_cleanup_epoll(ep->sock_info);
-		free(ep->sock_info);
+		smr_free_sock_info(ep);
 	}
 
 	if (ep->srx && ep->util_ep.ep_fid.msg != &smr_no_recv_msg_ops)
@@ -1173,19 +1188,6 @@ out:
 		SMR_CMAP_FAILED : SMR_CMAP_SUCCESS;
 }
 
-static void smr_free_sock_info(struct smr_ep *ep)
-{
-	int i, j;
-
-	for (i = 0; i < SMR_MAX_PEERS; i++) {
-		for (j = 0; j < ep->sock_info->nfds; j++)
-			close(ep->sock_info->peers[i].device_fds[j]);
-		free(ep->sock_info->peers[i].device_fds);
-	}
-	free(ep->sock_info);
-	ep->sock_info = NULL;
-}
-
 static void smr_init_ipc_socket(struct smr_ep *ep)
 {
 	struct smr_sock_name *sock_name;
@@ -1263,6 +1265,15 @@ err_out:
 static int smr_discard(struct fi_peer_rx_entry *rx_entry)
 {
 	struct smr_cmd_ctx *cmd_ctx = rx_entry->peer_context;
+	struct smr_region *peer_smr;
+	struct smr_resp *resp;
+
+	if (cmd_ctx->cmd.msg.hdr.src_data >= smr_src_iov) {
+		peer_smr = smr_peer_region(cmd_ctx->ep->region,
+					   cmd_ctx->cmd.msg.hdr.id);
+		resp = smr_get_ptr(peer_smr, cmd_ctx->cmd.msg.hdr.src_data);
+		resp->status = SMR_STATUS_SUCCESS;
+	}
 
 	ofi_buf_free(cmd_ctx);
 

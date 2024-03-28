@@ -59,7 +59,7 @@ def run_fabtests(stage_name, hw, partition, node_num, prov, util=null,
 }
 
 def run_middleware(providers, stage_name, test, hw, partition, node_num,
-                   mpi=null, imb_grp=null) {
+                   mpi=null, imb_grp=null, user_env=null) {
   def base_cmd = "python3.9 ${RUN_LOCATION}/runtests.py --test=${test} --build_hw=${hw}"
   def opts = ""
   def prefix = "${env.LOG_DIR}/${stage_name}_"
@@ -74,7 +74,10 @@ def run_middleware(providers, stage_name, test, hw, partition, node_num,
 
   if (env.WEEKLY.toBoolean())
     base_cmd = "${base_cmd} --weekly=${env.WEEKLY}"
-    
+  
+  if (user_env)
+    base_cmd = "${base_cmd} --user_env ${user_env}"
+
   for (prov in providers) {
     if (prov[1]) {
       echo "Running ${prov[0]}-${prov[1]} ${stage_name}"
@@ -319,6 +322,7 @@ pipeline {
       WITH_ENV="'PATH+EXTRA=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin:$PYTHONPATH'"
       RUN_LOCATION="${env.WORKSPACE}/${SCRIPT_LOCATION}/"
       CUSTOM_WORKSPACE="${CB_HOME}/workspace/${JOB_NAME}/${env.BUILD_NUMBER}"
+      DELETE_LOCATION="${env.CUSTOM_WORKSPACE}/middlewares"
       LOG_DIR = "${env.CUSTOM_WORKSPACE}/log_dir"
   }
   stages {
@@ -338,6 +342,9 @@ pipeline {
             checkout scm
           }
           dir ("${CUSTOM_WORKSPACE}/ucx/libfabric") {
+            checkout scm
+          }
+          dir ("${CUSTOM_WORKSPACE}/cuda/libfabric") {
             checkout scm
           }
           dir ("${CUSTOM_WORKSPACE}/iouring/libfabric") {
@@ -397,6 +404,11 @@ pipeline {
                             """python$PYTHON_VERSION ${RUN_LOCATION}/build.py \
                               --build_item=mpich --build_hw=water"""
                           )
+              slurm_batch("water", "1",
+                          "${env.LOG_DIR}/build_shmem_water_log",
+                          """python$PYTHON_VERSION ${RUN_LOCATION}/build.py \
+                              --build_item=shmem --build_hw=water"""
+                         )
             }
           }
         }
@@ -409,6 +421,11 @@ pipeline {
                             """python$PYTHON_VERSION ${RUN_LOCATION}/build.py \
                               --build_item=mpich --build_hw=grass"""
                           )
+              slurm_batch("grass", "1",
+                          "${env.LOG_DIR}/build_shmem_grass_log",
+                          """python$PYTHON_VERSION ${RUN_LOCATION}/build.py \
+                              --build_item=shmem --build_hw=grass"""
+                         )
             }
           }
         }
@@ -423,6 +440,16 @@ pipeline {
           steps {
             script {
               slurm_build(BUILD_MODES, "totodile", "ucx", "ucx")
+            }
+          }
+        }
+        stage ('build-cuda') {
+          steps {
+            script {
+              slurm_build(BUILD_MODES, "cyndaquil", "cuda", "cyndaquil",
+                          "--cuda")
+              slurm_build(BUILD_MODES, "quilava", "cuda", "quilava",
+                          "--cuda")
             }
           }
         }
@@ -637,13 +664,22 @@ pipeline {
             }
           }
         }
-        stage('SHMEM') {
+        stage('SHMEM_grass') {
           steps {
             script {
               dir (RUN_LOCATION) {
-                run_middleware([["verbs", null], ["tcp", null],
-                                ["sockets", null]], "SHMEM", "shmem",
-                                "water", "squirtle,totodile", "2")
+                run_middleware([["tcp", null]], "SHMEM", "shmem",
+                                "grass", "grass", "2")
+              }
+            }
+          }
+        }
+        stage('SHMEM_water') {
+          steps {
+            script {
+              dir (RUN_LOCATION) {
+                run_middleware([["verbs", "rxm"], ["sockets", null]], "SHMEM",
+                                "shmem", "water", "squirtle,totodile", "2")
               }
             }
           }
@@ -658,12 +694,22 @@ pipeline {
             }
           }
         }
-        stage ('oneCCL') {
+	      stage ('oneCCL') {
           steps {
             script {
               dir (RUN_LOCATION) {
-                run_middleware([["tcp", "rxm"]/*, ["psm3", null]*/], "oneCCL",
-                               "oneccl", "grass", "bulbasaur", "2")
+		            run_middleware([["verbs", null]], "oneCCL",
+                               "oneccl", "water", "squirtle,totodile", "2")
+		            run_middleware([["shm", null]], "oneCCL",
+			                         "oneccl", "grass", "bulbasaur", "1")
+		            run_middleware([["psm3", null]], "oneCCL",
+			                         "oneccl", "water", "squirtle", "2")
+		            run_middleware([["tcp", null]], "oneCCL",
+			                         "oneccl", "grass", "bulbasaur", "2")
+                run_middleware([["shm", null]], "oneCCL_DSA",
+                               "oneccl", "electric", "pikachu", "1", null, null,
+                               """CCL_ATL_SHM=1 FI_SHM_DISABLE_CMA=1 \
+                               FI_SHM_USE_DSA_SAR=1 FI_LOG_LEVEL=warn""")
               }
             }
           }
@@ -674,9 +720,16 @@ pipeline {
           steps {
             script {
               dir (RUN_LOCATION) {
-                run_middleware([["verbs", "rxm"]], "oneCCL-GPU-v3", "onecclgpu",
-                               "gpu", "fabrics-ci", "2")
-              } 
+		            run_middleware([["tcp", null]], "oneCCL-GPU-v3", "onecclgpu",
+			                         "gpu", "fabrics-ci", "2", null, null,
+                               "FI_HMEM_DISABLE_P2P=1")
+		            run_middleware([["psm3", null]], "oneCCL-GPU-v3", "onecclgpu",
+			                         "gpu", "fabrics-ci", "2", null, null,
+                               "FI_HMEM_DISABLE_P2P=1")
+		            run_middleware([["verbs", null]], "oneCCL-GPU-v3", "onecclgpu",
+                               "gpu", "fabrics-ci", "2", null, null,
+                               "FI_HMEM_DISABLE_P2P=1")
+              }
             }
           }
         }
@@ -725,6 +778,34 @@ pipeline {
             }
           }
         }
+        stage ('cuda-shm-v1') {
+          steps {
+            script {
+              dir (RUN_LOCATION) {
+                run_fabtests("cuda_v1_shm", "cyndaquil", "cyndaquil", "1",
+                             "shm", null, null, "h2d")
+                run_fabtests("cuda_v1_shm", "cyndaquil", "cyndaquil", "1",
+                             "shm", null, null, "d2d")
+                // run_fabtests("cuda_v1_shm", "cyndaquil", "cyndaquil", "1",
+                //              "shm", null, null, "xd2d")
+              }
+            }
+          }
+        }
+        stage ('cuda-shm-v2') {
+          steps {
+            script {
+              dir (RUN_LOCATION) {
+                run_fabtests("cuda_v2_shm", "quilava", "quilava", "1", "shm",
+                             null, null, "h2d")
+                run_fabtests("cuda_v2_shm", "quilava", "quilava", "1", "shm",
+                             null, null, "d2d")
+                // run_fabtests("cuda_v2_shm", "quilava ", "quilava", "1", "shm",
+                //              null, null, "xd2d")
+              }
+            }
+          }
+        }
         stage ('ze-shm-v3') {
           agent { node { label 'ze' } }
           options { skipDefaultCheckout() }
@@ -732,11 +813,11 @@ pipeline {
             script {
               dir (RUN_LOCATION) {
                 run_fabtests("ze_v3_shm", "gpu", "fabrics-ci", "1", "shm", null,
-                             null, "h2d")
+                             "FI_HMEM_DISABLE_P2P=1", "h2d")
                 run_fabtests("ze_v3_shm", "gpu", "fabrics-ci", "1", "shm", null,
-                             null, "d2d")
+                             "FI_HMEM_DISABLE_P2P=1", "d2d")
                 run_fabtests("ze_v3_shm", "gpu", "fabrics-ci", "1", "shm", null,
-                             null, "xd2d")
+                             "FI_HMEM_DISABLE_P2P=1", "xd2d")
               }
             }
           }

@@ -12,7 +12,7 @@ import common
 import re
 import shutil
 
-def build_libfabric(libfab_install_path, mode, hw_type, gpu=False):
+def build_libfabric(libfab_install_path, mode, hw_type, gpu=False, cuda=False):
 
 	if (os.path.exists(libfab_install_path) != True):
 		os.makedirs(libfab_install_path)
@@ -36,6 +36,11 @@ def build_libfabric(libfab_install_path, mode, hw_type, gpu=False):
 
 	if (gpu):
 		config_cmd.append('--enable-ze-dlopen')
+	else:
+		config_cmd.append('--with-ze=no')
+
+	if (cuda):
+		config_cmd.append(f'--with-cuda={os.environ["CUDA_INSTALL"]}')
 
 	common.run_command(['./autogen.sh'])
 	common.run_command(shlex.split(" ".join(config_cmd)))
@@ -44,7 +49,7 @@ def build_libfabric(libfab_install_path, mode, hw_type, gpu=False):
 	common.run_command(['make','install'])
 
 
-def build_fabtests(libfab_install_path, mode):
+def build_fabtests(libfab_install_path, mode, cuda=False):
 	if (mode == 'dbg'):
 		config_cmd = ['./configure', '--enable-debug',
 					  f'--prefix={libfab_install_path}',
@@ -52,6 +57,9 @@ def build_fabtests(libfab_install_path, mode):
 	else:
 		config_cmd = ['./configure', f'--prefix={libfab_install_path}',
 					  f'--with-libfabric={libfab_install_path}']
+
+	if cuda:
+		config_cmd.append(f'--with-cuda={os.environ["CUDA_INSTALL"]}')
 
 	common.run_command(['./autogen.sh'])
 	common.run_command(config_cmd)
@@ -111,14 +119,46 @@ def build_mpich_osu(install_path, libfab_installpath, hw_type):
 		os.environ['PATH'] = path
 		os.environ['LD_LIBRARY_PATH'] = ld_library_path
 
+def build_shmem(install_path, libfab_installpath, hw_type):
+	shmem_build = f'{install_path}/middlewares/shmem_{hw_type}'
+	shmem_build_dir = f'{shmem_build}/SOS'
+	cwd = os.getcwd()
+	if (os.path.exists(shmem_build_dir)):
+		os.chdir(shmem_build_dir)
+
+		command = "bash -c \'"
+		command += "./autogen.sh; "
+		command += "./configure "
+		command += f"--prefix={shmem_build} "
+		command += "--disable-fortran "
+		command += "--enable-pmi-simple "
+		command += "--enable-hard-polling "
+		command += "--enable-manual-progress "
+		if hw_type == 'water':
+			command += "--enable-ofi-mr=basic "
+
+		command += f"--with-ofi={libfab_installpath}; "
+
+		command += "make clean; "
+		command += "make -j; "
+		command += "make check TESTS=; "
+		command += "make install"
+		command += "\'"
+
+		common.run_command(shlex.split(command))
+
+	os.chdir(cwd)
+
 
 def copy_build_dir(install_path):
 	middlewares_path = f'{install_path}/middlewares'
 	if (os.path.exists(middlewares_path) != True):
 		os.makedirs(f'{install_path}/middlewares')
 
-	shutil.copytree(f'{cloudbees_config.build_dir}/shmem',
-					f'{middlewares_path}/shmem')
+	shutil.copytree(f'{cloudbees_config.build_dir}/shmem_grass',
+					f'{middlewares_path}/shmem_grass')
+	shutil.copytree(f'{cloudbees_config.build_dir}/shmem_water',
+					f'{middlewares_path}/shmem_water')
 	shutil.copytree(f'{cloudbees_config.build_dir}/oneccl',
 					f'{middlewares_path}/oneccl')
 	shutil.copytree(f'{cloudbees_config.build_dir}/mpich_water',
@@ -160,10 +200,11 @@ if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--build_item', help="build libfabric or fabtests", \
 						choices=['libfabric', 'fabtests', 'builddir', 'logdir',\
-								 'mpich'])
+								 'mpich', 'shmem'])
 	parser.add_argument('--build_hw', help="HW type for build",
 						choices=['water', 'grass', 'fire', 'electric', 'ucx',
-								 'daos', 'gpu', 'ivysaur'])
+								 'daos', 'gpu', 'ivysaur', 'cyndaquil',
+								 'quilava'])
 	parser.add_argument('--ofi_build_mode', help="select buildmode libfabric "\
 						"build mode", choices=['reg', 'dbg', 'dl'])
 	parser.add_argument('--build_loc', help="build location for libfabric "\
@@ -172,6 +213,7 @@ if __name__ == "__main__":
 						"release and will be checked into a git tree.",
 						action='store_true')
 	parser.add_argument('--gpu', help="Enable ZE dlopen", action='store_true')
+	parser.add_argument('--cuda', help="Enable cuda", action='store_true')
 
 	args = parser.parse_args()
 	build_item = args.build_item
@@ -179,6 +221,7 @@ if __name__ == "__main__":
 	build_loc = args.build_loc
 	release = args.release
 	gpu = args.gpu
+	cuda = args.cuda
 
 	if (args.ofi_build_mode):
 		ofi_build_mode = args.ofi_build_mode
@@ -193,9 +236,10 @@ if __name__ == "__main__":
 	os.chdir(build_loc)
 
 	if (build_item == 'libfabric'):
-		build_libfabric(libfab_install_path, ofi_build_mode, build_hw, gpu)
+		build_libfabric(libfab_install_path, ofi_build_mode, build_hw, gpu,
+						cuda)
 	elif (build_item == 'fabtests'):
-		build_fabtests(libfab_install_path, ofi_build_mode)
+		build_fabtests(libfab_install_path, ofi_build_mode, cuda)
 	elif (build_item == 'builddir'):
 		copy_build_dir(custom_workspace)
 	elif (build_item == 'logdir'):
@@ -203,5 +247,7 @@ if __name__ == "__main__":
 	elif(build_item == 'mpich'):
 		build_mpich(custom_workspace, libfab_install_path, build_hw)
 		build_mpich_osu(custom_workspace, libfab_install_path, build_hw)
+	elif (build_item == 'shmem'):
+		build_shmem(custom_workspace, libfab_install_path, build_hw)
 
 	os.chdir(curr_dir)
