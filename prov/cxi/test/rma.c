@@ -1543,6 +1543,143 @@ Test(rma_sel, selective_completion_suppress,
 	free(send_buf);
 }
 
+Test(rma_sel, fi_more_write_stream_optimized,
+     .init = cxit_setup_rma_selective_completion_suppress,
+     .fini = cxit_teardown_rma)
+{
+	int ret;
+	struct mem_region mem_window;
+	uint64_t key_val = 0x0;
+	struct fi_msg_rma msg = {};
+	struct fi_rma_iov rma = {};
+	unsigned int write_count = 0;
+	struct fid_cntr *cntr = cxit_write_cntr;
+
+	mr_create(0, FI_REMOTE_WRITE, 0, &key_val, &mem_window);
+
+	rma.key = key_val;
+	msg.rma_iov = &rma;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+
+	do {
+		ret = fi_writemsg(cxit_ep, &msg, FI_MORE);
+		cr_assert((ret == FI_SUCCESS) || (ret == -FI_EAGAIN));
+		if (ret == FI_SUCCESS)
+			write_count++;
+	} while (ret != -FI_EAGAIN);
+
+	cr_assert(write_count >= cxit_fi_hints->tx_attr->size);
+
+	do {
+		ret = fi_writemsg(cxit_ep, &msg, FI_MORE);
+	} while (ret == -FI_EAGAIN);
+	cr_assert(ret == FI_SUCCESS);
+	write_count++;
+
+	ret = fi_writemsg(cxit_ep, &msg, 0);
+	cr_assert(ret == FI_SUCCESS);
+	write_count++;
+
+	ret = fi_cntr_wait(cntr, write_count, 10000);
+	cr_assert(ret == FI_SUCCESS, "ret=%d", ret);
+
+	mr_destroy(&mem_window);
+}
+
+Test(rma_sel, fi_more_write_stream_mix_optimzied_unoptimized,
+     .init = cxit_setup_rma_selective_completion_suppress,
+     .fini = cxit_teardown_rma)
+{
+	int ret;
+	struct mem_region opt_mem_window;
+	struct mem_region mem_window;
+	uint64_t opt_key_val = 0x0;
+	uint64_t key_val = 0x1234;
+	struct fi_msg_rma msg = {};
+	struct fi_rma_iov rma = {};
+	unsigned int write_count = 0;
+	struct fid_cntr *cntr = cxit_write_cntr;
+
+	mr_create(0, FI_REMOTE_WRITE, 0, &opt_key_val, &opt_mem_window);
+	mr_create(0, FI_REMOTE_WRITE, 0, &key_val, &mem_window);
+
+	rma.key = opt_key_val;
+	msg.rma_iov = &rma;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+
+	do {
+		ret = fi_writemsg(cxit_ep, &msg, FI_MORE);
+		cr_assert((ret == FI_SUCCESS) || (ret == -FI_EAGAIN));
+		if (ret == FI_SUCCESS)
+			write_count++;
+	} while (ret != -FI_EAGAIN);
+
+	cr_assert(write_count >= cxit_fi_hints->tx_attr->size);
+
+	rma.key = key_val;
+	do {
+		ret = fi_writemsg(cxit_ep, &msg, FI_MORE);
+	} while (ret == -FI_EAGAIN);
+	cr_assert(ret == FI_SUCCESS);
+	write_count++;
+
+	ret = fi_writemsg(cxit_ep, &msg, 0);
+	cr_assert(ret == FI_SUCCESS, "ret=%d", ret);
+	write_count++;
+
+	ret = fi_cntr_wait(cntr, write_count, 10000);
+	cr_assert(ret == FI_SUCCESS, "ret=%d", ret);
+
+	mr_destroy(&mem_window);
+	mr_destroy(&opt_mem_window);
+}
+
+Test(rma_sel, fi_more_read_stream,
+     .init = cxit_setup_rma_selective_completion_suppress,
+     .fini = cxit_teardown_rma)
+{
+	int ret;
+	struct mem_region mem_window;
+	uint64_t key_val = 0x0;
+	struct fi_msg_rma msg = {};
+	struct fi_rma_iov rma = {};
+	unsigned int count = 0;
+	struct fid_cntr *cntr = cxit_read_cntr;
+
+	mr_create(0, FI_REMOTE_READ, 0, &key_val, &mem_window);
+
+	rma.key = key_val;
+	msg.rma_iov = &rma;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+
+	do {
+		ret = fi_readmsg(cxit_ep, &msg, FI_MORE);
+		cr_assert((ret == FI_SUCCESS) || (ret == -FI_EAGAIN));
+		if (ret == FI_SUCCESS)
+			count++;
+	} while (ret != -FI_EAGAIN);
+
+	cr_assert(count >= cxit_fi_hints->tx_attr->size);
+
+	do {
+		ret = fi_readmsg(cxit_ep, &msg, FI_MORE);
+	} while (ret == -FI_EAGAIN);
+	cr_assert(ret == FI_SUCCESS);
+	count++;
+
+	ret = fi_readmsg(cxit_ep, &msg, 0);
+	cr_assert(ret == FI_SUCCESS);
+	count++;
+
+	ret = fi_cntr_wait(cntr, count, 10000);
+	cr_assert(ret == FI_SUCCESS, "ret=%d", ret);
+
+	mr_destroy(&mem_window);
+}
+
 /* Test remote counter events with RMA */
 Test(rma, rem_cntr)
 {
