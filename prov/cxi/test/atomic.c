@@ -1942,6 +1942,214 @@ void cxit_setup_amo_selective_completion_suppress(void)
 	cxit_setup_rma();
 }
 
+void cxit_setup_amo_selective_completion_suppress_hybrid_mr_desc(void)
+{
+	int ret;
+
+	cxit_tx_cq_bind_flags |= FI_SELECTIVE_COMPLETION;
+
+	cxit_setup_getinfo();
+	cxit_fi_hints->tx_attr->op_flags = 0;
+	cxit_setup_rma();
+
+	ret = fi_open_ops(&cxit_domain->fid, FI_CXI_DOM_OPS_3, 0,
+			  (void **)&dom_ops, NULL);
+	cr_assert(ret == FI_SUCCESS, "fi_open_ops v2");
+	cr_assert(dom_ops->cntr_read != NULL &&
+		  dom_ops->topology != NULL &&
+		  dom_ops->enable_hybrid_mr_desc != NULL,
+		  "V3 functions returned");
+
+	ret = dom_ops->enable_hybrid_mr_desc(&cxit_domain->fid, true);
+	cr_assert(ret == FI_SUCCESS, "enable_hybrid_mr_desc failed");
+}
+
+Test(atomic_sel, fi_more_amo_stream_optimzied,
+     .init = cxit_setup_amo_selective_completion_suppress,
+     .fini = cxit_teardown_rma)
+{
+	int ret;
+	struct mem_region mem_window;
+	uint64_t key_val = 0x0;
+	size_t rma_len = 1;
+	struct fi_msg_atomic msg = {};
+	struct fi_rma_ioc rma = {};
+	struct fi_ioc src_iov = {};
+	unsigned int count = 0;
+	struct fid_cntr *cntr = cxit_write_cntr;
+	char src_buf = 0;
+
+	mr_create(rma_len, FI_REMOTE_WRITE, 0, &key_val, &mem_window);
+
+	src_iov.addr = &src_buf;
+	src_iov.count = 1;
+
+	rma.count = 1;
+	rma.key = key_val;
+
+	msg.msg_iov = &src_iov;
+	msg.iov_count = 1;
+	msg.rma_iov = &rma;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+	msg.datatype = FI_INT8;
+	msg.op = FI_SUM;
+
+	do {
+		ret = fi_atomicmsg(cxit_ep, &msg, FI_MORE);
+		cr_assert((ret == FI_SUCCESS) || (ret == -FI_EAGAIN));
+		if (ret == FI_SUCCESS)
+			count++;
+	} while (ret != -FI_EAGAIN);
+
+	cr_assert(count >= cxit_fi_hints->tx_attr->size);
+
+	do {
+		ret = fi_atomicmsg(cxit_ep, &msg, FI_MORE);
+	} while (ret == -FI_EAGAIN);
+	cr_assert(ret == FI_SUCCESS);
+	count++;
+
+	ret = fi_atomicmsg(cxit_ep, &msg, 0);
+	cr_assert(ret == FI_SUCCESS);
+	count++;
+
+	ret = fi_cntr_wait(cntr, count, 10000);
+	cr_assert(ret == FI_SUCCESS, "ret=%d", ret);
+
+	mr_destroy(&mem_window);
+}
+
+Test(atomic_sel, fi_more_amo_stream_mix_optimzied_unoptimized,
+     .init = cxit_setup_amo_selective_completion_suppress,
+     .fini = cxit_teardown_rma)
+{
+	int ret;
+	struct mem_region opt_mem_window;
+	struct mem_region mem_window;
+	uint64_t opt_key_val = 0x0;
+	uint64_t key_val = 0x1234;
+	size_t rma_len = 1;
+	struct fi_msg_atomic msg = {};
+	struct fi_rma_ioc rma = {};
+	struct fi_ioc src_iov = {};
+	unsigned int count = 0;
+	struct fid_cntr *cntr = cxit_write_cntr;
+	char src_buf = 0;
+
+	mr_create(rma_len, FI_REMOTE_WRITE, 0, &opt_key_val, &opt_mem_window);
+	mr_create(rma_len, FI_REMOTE_WRITE, 0, &key_val, &mem_window);
+
+	src_iov.addr = &src_buf;
+	src_iov.count = 1;
+
+	rma.count = 1;
+	rma.key = opt_key_val;
+
+	msg.msg_iov = &src_iov;
+	msg.iov_count = 1;
+	msg.rma_iov = &rma;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+	msg.datatype = FI_INT8;
+	msg.op = FI_SUM;
+
+	do {
+		ret = fi_atomicmsg(cxit_ep, &msg, FI_MORE);
+		cr_assert((ret == FI_SUCCESS) || (ret == -FI_EAGAIN));
+		if (ret == FI_SUCCESS)
+			count++;
+	} while (ret != -FI_EAGAIN);
+
+	cr_assert(count >= cxit_fi_hints->tx_attr->size);
+
+	rma.key = key_val;
+	do {
+		ret = fi_atomicmsg(cxit_ep, &msg, FI_MORE);
+	} while (ret == -FI_EAGAIN);
+	cr_assert(ret == FI_SUCCESS);
+	count++;
+
+	ret = fi_atomicmsg(cxit_ep, &msg, 0);
+	cr_assert(ret == FI_SUCCESS);
+	count++;
+
+	ret = fi_cntr_wait(cntr, count, 10000);
+	cr_assert(ret == FI_SUCCESS, "ret=%d", ret);
+
+	mr_destroy(&mem_window);
+	mr_destroy(&opt_mem_window);
+}
+
+Test(atomic_sel, fi_more_fetch_amo_stream_optimzied,
+     .init = cxit_setup_amo_selective_completion_suppress_hybrid_mr_desc,
+     .fini = cxit_teardown_rma)
+{
+	int ret;
+	struct mem_region mem_window;
+	uint64_t key_val = 0x0;
+	size_t rma_len = 1;
+	struct fi_msg_atomic msg = {};
+	struct fi_rma_ioc rma = {};
+	struct fi_ioc src_iov = {};
+	unsigned int count = 0;
+	struct fid_cntr *cntr = cxit_read_cntr;
+	char src_buf = 0;
+	struct fi_ioc result_iov = {};
+	void *mr;
+
+	ret = fi_open_ops(&cxit_domain->fid, FI_CXI_DOM_OPS_3, 0,
+			  (void **)&dom_ops, NULL);
+
+	mr_create(rma_len,
+		  FI_REMOTE_WRITE | FI_REMOTE_READ | FI_WRITE | FI_READ, 0,
+		  &key_val, &mem_window);
+	mr = fi_mr_desc(mem_window.mr);
+
+	result_iov.addr = mem_window.mem;
+	result_iov.count = 1;
+
+	src_iov.addr = &src_buf;
+	src_iov.count = 1;
+
+	rma.count = 1;
+	rma.key = key_val;
+
+	msg.msg_iov = &src_iov;
+	msg.iov_count = 1;
+	msg.rma_iov = &rma;
+	msg.rma_iov_count = 1;
+	msg.addr = cxit_ep_fi_addr;
+	msg.datatype = FI_INT8;
+	msg.op = FI_SUM;
+
+	do {
+		ret = fi_fetch_atomicmsg(cxit_ep, &msg, &result_iov, &mr, 1,
+					 FI_MORE);
+		cr_assert((ret == FI_SUCCESS) || (ret == -FI_EAGAIN));
+		if (ret == FI_SUCCESS)
+			count++;
+	} while (ret != -FI_EAGAIN);
+
+	cr_assert(count >= cxit_fi_hints->tx_attr->size);
+
+	do {
+		ret = fi_fetch_atomicmsg(cxit_ep, &msg, &result_iov, &mr, 1,
+					 FI_MORE);
+	} while (ret == -FI_EAGAIN);
+	cr_assert(ret == FI_SUCCESS);
+	count++;
+
+	ret = fi_fetch_atomicmsg(cxit_ep, &msg, &result_iov, &mr, 1, 0);
+	cr_assert(ret == FI_SUCCESS);
+	count++;
+
+	ret = fi_cntr_wait(cntr, count, 10000);
+	cr_assert(ret == FI_SUCCESS, "ret=%d", ret);
+
+	mr_destroy(&mem_window);
+}
+
 /* Test selective completion behavior with RMA. */
 Test(atomic_sel, selective_completion_suppress,
      .init = cxit_setup_amo_selective_completion_suppress,
