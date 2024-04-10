@@ -1,9 +1,11 @@
 #!/bin/bash
+
 set -ex
 
 ARTI_URL=https://${ARTIFACT_REPO_HOST}/artifactory
 OS_TYPE=`cat /etc/os-release | grep "^ID=" | sed "s/\"//g" | cut -d "=" -f 2`
 OS_VERSION=`cat /etc/os-release | grep "^VERSION_ID=" | sed "s/\"//g" | cut -d "=" -f 2`
+OS_MAJOR_VERSION=$(echo $OS_VERSION | cut -d "." -f 1)
 
 RHEL_GPU_SUPPORTED_VERSIONS="8.8 8.9 9.3"
 
@@ -14,6 +16,7 @@ PRODUCT='slingshot-host-software'
 echo "$0: --> BRANCH_NAME: '${BRANCH_NAME}'"
 echo "$0: --> PRODUCT: '${PRODUCT}'"
 echo "$0: --> TARGET_ARCH: '${TARGET_ARCH}'"
+echo "$0: --> OBS_TARGET_OS: '${OBS_TARGET_OS}'"
 echo "$0: --> TARGET_OS: '${TARGET_OS}'"
 echo "$0: --> OS_TYPE: '${OS_TYPE}'"
 echo "$0: --> OS_VERSION: '${OS_VERSION}'"
@@ -81,6 +84,124 @@ else
     RPMS+=" libcurl-devel libjson-c-devel cray-libcxi-devel-static "
 fi
 
+function rpm_install_wrapper() {
+  rpm=$1
+
+  if command -v yum > /dev/null; then
+    # yum requires encoded urls
+    rpm="$(echo ${rpm} | sed -e 's/ /%20/g')"
+
+    yum install -y "$rpm"
+  else
+    zypper --no-gpg-checks --non-interactive install "$rpm"
+  fi
+}
+
+function install_gdrcopy_cne() {
+  release=$1
+  os=$2
+
+  GDR_VERSION=2.4.1-1.0_3.1__ge7e1f57.shasta
+
+  BASE_URL=${ARTI_URL}/cne-rpm-stable-local/release/${release}/${os}
+  rpm_install_wrapper "${BASE_URL}/$TARGET_ARCH/gdrcopy-${GDR_VERSION}.${TARGET_ARCH}.rpm"
+  rpm_install_wrapper "${BASE_URL}/$TARGET_ARCH/gdrcopy-devel-${GDR_VERSION}.${TARGET_ARCH}.rpm"
+}
+
+function install_gdrcopy_cos() {
+  release=$1
+  os=$2
+
+  case $release in
+    "cos-2.4")
+      GDR_VERSION=2.3-2.4_8.9__g3f1d0f8.shasta
+      ;;
+    "cos-2.5")
+      GDR_VERSION=2.3-2.5_9.5__ga81d33c.shasta
+      ;;
+    *)
+      echo "unrecognized target OS: $TARGET_OS"
+      exit 1
+  esac
+
+  BASE_URL=${ARTI_URL}/cos-rpm-stable-local/release/$release/$os
+  rpm_install_wrapper "${BASE_URL}/$TARGET_ARCH/gdrcopy-${GDR_VERSION}.${TARGET_ARCH}.rpm"
+  rpm_install_wrapper "${BASE_URL}/noarch/gdrcopy-devel-${GDR_VERSION}.noarch.rpm"
+}
+
+function install_gdrcopy_nvidia() {
+  GDR_VERSION=2.4-1
+
+  case $OBS_TARGET_OS in
+    sle15*)
+      GDR_VERSION=${GDR_VERSION}.sles-15.5
+      URL_DISTRO=sles15
+      ;;
+    rhel_8*)
+      GDR_VERSION=${GDR_VERSION}.el8
+      URL_DISTRO=rhel8
+      ;;
+    rhel_9*)
+      GDR_VERSION=${GDR_VERSION}.el9
+      URL_DISTRO=rhel9
+      ;;
+    *)
+      echo "unrecognized target OS: ${OBS_TARGET_OS}"
+      exit 1
+  esac
+
+  case $TARGET_ARCH in
+    x86_64)
+      URL_ARCH=x64
+      ;;
+    aarch64)
+      URL_ARCH=${TARGET_ARCH}
+      ;;
+    *)
+      echo "unrecognized target ARCH: ${TARGET_ARCH}"
+      exit 1
+  esac
+
+  BASE_URL="${ARTI_URL}/nvidia.com-gdrcopy-remote/CUDA 12.2/${URL_DISTRO}/${URL_ARCH}"
+  rpm_install_wrapper "${BASE_URL}/gdrcopy-${GDR_VERSION}.${TARGET_ARCH}.rpm"
+  rpm_install_wrapper "${BASE_URL}/gdrcopy-devel-${GDR_VERSION}.noarch.rpm"
+}
+
+function install_gdrcopy() {
+  case $OBS_TARGET_OS in
+    cos_2_4*)
+      install_gdrcopy_cos "cos-2.4" "sle15_sp4_cn"
+      ;;
+    cos_2_5*)
+      install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
+      ;;
+    cos_3*)
+      install_gdrcopy_cne "cne-1.0" "sle15_sp5_cn"
+      ;;
+    csm_1_3*)
+      install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
+      ;;
+    csm_1_4*)
+      install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
+      ;;
+    csm_1_5*)
+      install_gdrcopy_cne "cne-1.0" "sle15_sp5_cn"
+      ;;
+    sle15_sp5*)
+      if [[ "$TARGET_ARCH" == "aarch64" ]]; then
+        install_gdrcopy_cne "cne-1.0" "sle15_sp5_cn"
+      else
+        install_gdrcopy_nvidia
+      fi
+      ;;
+    *)
+      install_gdrcopy_nvidia
+      ;;
+  esac
+}
+
+install_gdrcopy
+
 if command -v yum > /dev/null; then
     yum-config-manager --add-repo=${ARTI_URL}/${PRODUCT}-${ARTI_LOCATION}/${ARTI_BRANCH}/${TARGET_OS}/
     yum-config-manager --setopt=gpgcheck=0 --save
@@ -135,6 +256,7 @@ if command -v yum > /dev/null; then
     fi
 
     yum install -y $RPMS
+    
 elif command -v zypper > /dev/null; then
     with_cuda=1
 
@@ -159,36 +281,6 @@ elif command -v zypper > /dev/null; then
                     ;;
     esac
 
-
-    if [[ ${OBS_TARGET_OS} == cos* ]]; then
-        GDRCOPY_RPMS="gdrcopy"
-        GDRCOPY_DEVEL="gdrcopy-devel"
-
-        case ${COS_BRANCH} in
-            release/cos-3.0)
-                COS_ARTI_LOCATION=cne-rpm-stable-local
-                CNE_BRANCH='release/cne-1.0'
-                ;;
-            release/*)
-                COS_ARTI_LOCATION=cos-rpm-stable-local
-                ;;
-            *)
-                COS_ARTI_LOCATION=cos-rpm-master-local
-                ;;
-        esac
-
-        if [ -n "$CNE_BRANCH" ]; then
-            zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
-            --priority 20 --name=cos \
-            ${ARTI_URL}/${COS_ARTI_LOCATION}/${CNE_BRANCH}/${TARGET_OS} \
-            cos
-        else
-            zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
-            --priority 20 --name=cos \
-            ${ARTI_URL}/${COS_ARTI_LOCATION}/${COS_BRANCH}/${TARGET_OS} \
-            cos
-        fi
-    fi
 
     zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
         --priority 20 --name=${PRODUCT}-${ARTI_LOCATION} \
@@ -225,16 +317,6 @@ elif command -v zypper > /dev/null; then
     zypper refresh
 
     zypper --non-interactive --no-gpg-checks install $RPMS
-
-    # Force installation of the gdrcopy-devel version that matches the gdrcopy
-    # that was installed. Workaround for DST-11466
-    if [ -n "${GDRCOPY_DEVEL}" ]; then
-        zypper --non-interactive --no-gpg-checks install \
-            ${GDRCOPY_RPMS}
-        GDRCOPY_VERSION=$(rpm -q gdrcopy --queryformat '%{VERSION}-%{RELEASE}')
-        zypper --non-interactive --no-gpg-checks install \
-            ${GDRCOPY_DEVEL}-${GDRCOPY_VERSION}
-    fi
 
 else
     "Unsupported package manager or package manager not found -- installing nothing"

@@ -1,7 +1,6 @@
 #!/bin/bash
 
-set -e
-set -x
+set -ex
 
 INSTALL_PREFIX=/opt/cray
 
@@ -65,11 +64,7 @@ if [[ "${TARGET_OS}" == sle*  || "${TARGET_OS}" == rhel_8_* ]]; then
         ROCM_CONFIG=""
     fi
     CUDA_CONFIG="--with-cuda=/usr/local/cuda --enable-cuda-dlopen"
-    if [[ "${OBS_TARGET_OS}" == cos* ]]; then
-        GDRCOPY_CONFIG="--enable-gdrcopy-dlopen"
-    else
-        GDRCOPY_CONFIG=""
-    fi
+    GDRCOPY_CONFIG="--enable-gdrcopy-dlopen"
 else
     ROCM_CONFIG=""
     CUDA_CONFIG=""
