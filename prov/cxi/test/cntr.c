@@ -875,8 +875,15 @@ Test(cntr, verify_no_sync)
 		.wait_obj = FI_WAIT_UNSPEC,
 		.flags = FI_CXI_CNTR_CACHED,
 	};
+	struct cxip_ep *ep = container_of(cxit_ep, struct cxip_ep, ep);
 	uint64_t success;
 	int ret;
+
+	/* Test is only deterministic with netsim */
+	if (!is_netsim(ep->ep_obj)) {
+		cr_assert(1);
+		return;
+	}
 
 	ret = fi_cntr_open(cxit_domain, &cntr_attr, &cntr, NULL);
 	cr_assert(ret == FI_SUCCESS);
