@@ -82,7 +82,7 @@ Test(atomic_invalid, invalid_amo)
 			FI_UINT64, -1, 0);
 	cr_assert_eq(ret, -FI_EINVAL);
 	ret = fi_atomic(cxit_ep, &operand1, 1, 0, cxit_ep_fi_addr, 0, 0,
-			FI_DATATYPE_LAST, FI_SUM, 0);
+			FI_VOID, FI_SUM, 0);
 	cr_assert_eq(ret, -FI_EINVAL);
 	ret = fi_atomic(cxit_ep, &operand1, 1, 0, cxit_ep_fi_addr, 0, 0,
 			-1, FI_SUM, 0);
@@ -138,7 +138,7 @@ Test(atomic_invalid, invalid_fetch)
 			      cxit_ep_fi_addr, 0, 0, FI_UINT64, -1, 0);
 	cr_assert_eq(ret, -FI_EINVAL);
 	ret = fi_fetch_atomic(cxit_ep, &operand1, 1, 0, &result, 0,
-			      cxit_ep_fi_addr, 0, 0, FI_DATATYPE_LAST, FI_SUM,
+			      cxit_ep_fi_addr, 0, 0, FI_VOID, FI_SUM,
 			      0);
 	cr_assert_eq(ret, -FI_EINVAL);
 	ret = fi_fetch_atomic(cxit_ep, &operand1, 1, 0, &result, 0,
@@ -234,7 +234,7 @@ Test(atomic_invalid, invalid_swap)
 				&compare, 0,
 				&result, 0,
 				cxit_ep_fi_addr, 0, 0,
-				FI_DATATYPE_LAST, FI_CSWAP_NE, NULL);
+				FI_VOID, FI_CSWAP_NE, NULL);
 	cr_assert_eq(ret, -FI_EINVAL);
 	ret = fi_compare_atomic(cxit_ep,
 				&operand1, 1, 0,
@@ -277,7 +277,7 @@ Test(atomic_invalid, invalid_swap)
 				&result, 0,
 				cxit_ep_fi_addr, 0, 0,
 				FI_UINT64, FI_CSWAP_NE, NULL);
-
+	cr_assert_eq(ret, -FI_EINVAL);
 	ret = fi_compare_atomicv(cxit_ep,
 				&iov, 0, 1,
 				&ciov, 0, 1,
@@ -1037,6 +1037,18 @@ struct test_int_parms {
 	uint64_t key;
 };
 
+static enum fi_datatype int_datatypes[] = {
+	FI_UINT8,
+	FI_INT16,
+	FI_UINT16,
+	FI_INT32,
+	FI_UINT32,
+	FI_INT64,
+	FI_UINT64,
+	FI_INT128,
+	FI_UINT128,
+};
+
 static struct test_int_parms int_parms[] = {
 	{ _AMO|_FAMO, 11, FI_MIN,  0, 0, 123, 120, 120 },
 	{ _AMO|_FAMO, 12, FI_MIN,  0, 0, 120, 123, 120 },
@@ -1128,42 +1140,73 @@ ParameterizedTestParameters(atomic, test_int)
 				   tests * 2);
 }
 
+
+/* Don't rely on compiler __int128 support. */
+typedef struct {
+	uint64_t u64[2];
+} __attribute__ ((aligned (16))) amo128_t;
+
+#define AMO128_INIT(_v64) { .u64 = { _v64, 0 } }
+
+static int test_int_expect_err(int err, enum fi_datatype dt, enum fi_op op)
+{
+	if (!err && op != FI_CSWAP && (dt == FI_INT128 || dt == FI_UINT128))
+		err = 1;
+
+	return err;
+}
+
 ParameterizedTest(struct test_int_parms *p, atomic, test_int)
 {
 	struct mem_region mr;
 	enum fi_datatype dt;
 	uint64_t *rma;
-	uint64_t *loc;
-	uint64_t lini = -1;
+	uint64_t *loc = NULL;
+	int err;
+	/* Need 128-bit data types for FI_INT128/FI_UINT128. */
+	amo128_t o1_128 = AMO128_INIT(p->o1);
+	void *o1 = &o1_128;
+	amo128_t comp_128 = AMO128_INIT(p->comp);
+	void *comp = &comp_128;
+	amo128_t lini_128 = AMO128_INIT(-1);
+	void *lini = &lini_128;
+	amo128_t rini_128 = AMO128_INIT(p->rini);
+	void *rini = &rini_128;
+	amo128_t rexp_128 = AMO128_INIT(p->rexp);
+	void *rexp = &rexp_128;
+	size_t i;
 
 	rma = _cxit_create_mr(&mr, &p->key);
 
-	loc = calloc(1, RMA_WIN_LEN);
-	cr_assert_not_null(loc);
+	err = posix_memalign((void **)&loc, ofi_datatype_size(FI_UINT128),
+			     RMA_WIN_LEN);
+	cr_assert(err == 0);
+	memset(loc, 0, RMA_WIN_LEN);
 
 	if (p->opmask & _AMO) {
-		for (dt = FI_INT8; dt <= FI_UINT64; dt++) {
-			_test_amo(p->index, dt, p->op, p->err, &p->o1,
-				  0, 0, 0,
-				  rma, &p->rini, &p->rexp,
-				  p->key);
+		for (i = 0; i < ARRAY_SIZE(int_datatypes); i++) {
+			dt = int_datatypes[i];
+			err = test_int_expect_err(p->err, dt, p->op);
+			_test_amo(p->index, dt, p->op, err, o1,
+				  0, 0, 0, rma, rini, rexp, p->key);
 		}
 	}
 
 	if (p->opmask & _FAMO) {
-		for (dt = FI_INT8; dt <= FI_UINT64; dt++) {
-			_test_amo(p->index, dt, p->op, p->err, &p->o1,
-				  0, loc, &lini, rma, &p->rini, &p->rexp,
-				  p->key);
+		for (i = 0; i < ARRAY_SIZE(int_datatypes); i++) {
+			dt = int_datatypes[i];
+			err = test_int_expect_err(p->err, dt, p->op);
+			_test_amo(p->index, dt, p->op, err, o1,
+				  0, loc, lini, rma, rini, rexp, p->key);
 		}
 	}
 
 	if (p->opmask & _CAMO) {
-		for (dt = FI_INT8; dt <= FI_UINT64; dt++) {
-			_test_amo(p->index, dt, p->op, p->err, &p->o1,
-				  &p->comp, loc, &lini, rma, &p->rini,
-				  &p->rexp,
-				  p->key);
+		for (i = 0; i < ARRAY_SIZE(int_datatypes); i++) {
+			dt = int_datatypes[i];
+			err = test_int_expect_err(p->err, dt, p->op);
+			_test_amo(p->index, dt, p->op, err, o1,
+				  comp, loc, lini, rma, rini, rexp, p->key);
 		}
 	}
 
@@ -3842,7 +3885,23 @@ ParameterizedTestParameters(atomic, query_atomic)
 			.valid_atomic_attr = true,
 			.flags = FI_FETCH_ATOMIC,
 			.expected_rc = FI_SUCCESS,
-		}
+		},
+		/* FI_UINT128 unsupported for FI_MIN. */
+		{
+			.datatype = FI_UINT128,
+			.op = FI_MIN,
+			.valid_atomic_attr = true,
+			.flags = 0,
+			.expected_rc = -FI_EOPNOTSUPP,
+		},
+		/* FI_UINT128 supported for FI_CSWAP. */
+		{
+			.datatype = FI_UINT128,
+			.op = FI_CSWAP,
+			.valid_atomic_attr = true,
+			.flags = FI_COMPARE_ATOMIC,
+			.expected_rc = FI_SUCCESS,
+		},
 	};
 	size_t param_sz = ARRAY_SIZE(params);
 
