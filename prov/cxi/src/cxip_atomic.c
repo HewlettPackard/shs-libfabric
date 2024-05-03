@@ -35,7 +35,7 @@ _Static_assert(CXIP_AMO_MAX_IOV == 1, "Unexpected max IOV #");
 /**
  * Data type codes for all of the supported fi_datatype values.
  */
-static enum c_atomic_type _cxip_amo_type_code[FI_DATATYPE_LAST] = {
+static enum c_atomic_type _cxip_amo_type_code[] = {
 	[FI_INT8]	  = C_AMO_TYPE_INT8_T,
 	[FI_UINT8]	  = C_AMO_TYPE_UINT8_T,
 	[FI_INT16]	  = C_AMO_TYPE_INT16_T,
@@ -48,8 +48,10 @@ static enum c_atomic_type _cxip_amo_type_code[FI_DATATYPE_LAST] = {
 	[FI_DOUBLE]	  = C_AMO_TYPE_DOUBLE_T,
 	[FI_FLOAT_COMPLEX]	  = C_AMO_TYPE_FLOAT_COMPLEX_T,
 	[FI_DOUBLE_COMPLEX]	  = C_AMO_TYPE_DOUBLE_COMPLEX_T,
+        /* Only 128-bit op suppported is FI_CSWAP, so FI_INT128 should work. */
+	[FI_INT128]	  = C_AMO_TYPE_UINT128_T,
+	[FI_UINT128]	  = C_AMO_TYPE_UINT128_T,
 };
-//TODO: C_AMO_TYPE_UINT128_T
 
 /**
  * AMO operation codes for all of the fi_op values.
@@ -126,7 +128,7 @@ static uint16_t _cxip_amo_valid[CXIP_RQ_AMO_LAST][FI_ATOMIC_OP_LAST] = {
 	},
 
 	[CXIP_RQ_AMO_SWAP] = {
-		[FI_CSWAP]	  = 0x0fff,
+		[FI_CSWAP]	  = 0xcfff,
 		[FI_CSWAP_NE]	  = 0x0fff,
 		[FI_CSWAP_LE]	  = 0x03ff,
 		[FI_CSWAP_LT]	  = 0x03ff,
@@ -175,7 +177,7 @@ int _cxip_atomic_opcode(enum cxip_amo_req_type req_type, enum fi_datatype dt,
 	int opcode;
 	int dtcode;
 
-	if (dt < 0 || dt >= FI_DATATYPE_LAST ||
+	if (dt < 0 || dt >= ARRAY_SIZE(_cxip_amo_type_code) ||
 	    op < 0 || op >= FI_ATOMIC_OP_LAST)
 		return -FI_EINVAL;
 
