@@ -42,7 +42,7 @@ function build_dl_provider() {
 		--define "install_modulefile 1" \
 		--define "install_default_module_version 1" \
 		--define "modulefile_path ${INSTALL_PREFIX}/modulefiles" \
-		--define "_prefix ${INSTALL_PREFIX}" \
+		--define "_prefix ${INSTALL_PREFIX}/libfabric/%{version}" \
 		--define "_topdir $rpmbuilddir" \
 		--define "_sourcedir $rpmbuilddir/SOURCES" \
 		--define "_rpmdir $rpmbuilddir/RPMS" \
@@ -177,7 +177,7 @@ RPMBUILD_OPTS=$(echo """
 --define 'install_modulefile 1'
 --define 'install_default_module_version 1'
 --define 'modulefile_path ${INSTALL_PREFIX}/modulefiles'
---define '_prefix ${INSTALL_PREFIX}'
+--define '_prefix ${INSTALL_PREFIX}/libfabric/%{version}'
 --define '_topdir $rpmbuilddir'
 --define '_sourcedir $rpmbuilddir/SOURCES'
 --define '_rpmdir $rpmbuilddir/RPMS'
