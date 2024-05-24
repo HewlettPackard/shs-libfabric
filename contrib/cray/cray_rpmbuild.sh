@@ -3,7 +3,6 @@
 set -ex
 
 INSTALL_PREFIX=/opt/cray
-
 function move_rpms() {
 	if [[ ! -d RPMS ]]
 	then

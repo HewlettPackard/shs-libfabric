@@ -2,6 +2,11 @@
 
 set -ex
 
+if [[ -v SHS_NEW_BUILD_SYSTEM ]]; then
+ . ${CE_INCLUDE_PATH}/load.sh
+fi
+
+
 ARTI_URL=https://${ARTIFACT_REPO_HOST}/artifactory
 OS_TYPE=`cat /etc/os-release | grep "^ID=" | sed "s/\"//g" | cut -d "=" -f 2`
 OS_VERSION=`cat /etc/os-release | grep "^VERSION_ID=" | sed "s/\"//g" | cut -d "=" -f 2`
@@ -24,7 +29,7 @@ echo "$0: --> OS_VERSION: '${OS_VERSION}'"
 if [[ "${BRANCH_NAME}" == release/* ]]; then
     ARTI_LOCATION='rpm-stable-local'
     ARTI_BRANCH=${BRANCH_NAME}
-elif [[ "${CHANGE_TARGET}" == release/* ]]; then
+elif [[ "${CHANGE_TARGET:-}" == release/* ]]; then
     # CHANGE_TARGET is only set for PR builds and points to the PR target branch
     ARTI_LOCATION='rpm-stable-local'
     ARTI_BRANCH=${CHANGE_TARGET}
@@ -62,7 +67,8 @@ with_cuda=0
 with_ze=0
 
 RPMS="kdreg2-devel "
-if [ -n "${VERBS_BUILD}" ]; then
+if [ -v VERBS_BUILD ]
+then
     RPMS+="rdma-core rdma-core-devel "
 else
     RPMS+="cray-libcxi-devel "
@@ -277,8 +283,12 @@ if command -v yum > /dev/null; then
       fi
 
       yum-config-manager --add-repo=${ARTI_URL}/mirror-nvhpc/rhel/${TARGET_ARCH}
-      RPMS+="  ${rocm_rpms} nvhpc-${NVIDIA_VERSION} "
 
+      if [[ -v SHS_NEW_BUILD_SYSTEM ]]; then
+        RPMS+="  ${rocm_rpms} "  # nvhpc-${NVIDIA_VERSION} "
+      else
+        RPMS+="  ${rocm_rpms} nvhpc-${NVIDIA_VERSION} "
+      fi
     fi
 
     yum install -y $RPMS
@@ -335,7 +345,10 @@ elif command -v zypper > /dev/null; then
             --priority 20 --name=cuda \
             ${ARTI_URL}/cos-internal-third-party-generic-local/nvidia_hpc_sdk/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ cuda
         fi
-        RPMS+=" ${CUDA_RPMS} "
+
+        if [[ ! -v SHS_NEW_BUILD_SYSTEM ]]; then
+          RPMS+=" ${CUDA_RPMS} "
+        fi
     fi
 
     if [ $with_rocm -eq 1 ]; then
@@ -447,6 +460,8 @@ if [[ $with_rocm -eq 1 ]]; then
         echo "The installation of ROCm is not found in the /opt/ directory."
         exit 1
     fi
+else
+  rocm_version="not-found"
 fi
 
 echo "ROCm Version: ${rocm_version}" > /var/tmp/gpu-versions

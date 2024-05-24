@@ -4,3 +4,5 @@ Jenkinsfile* @hpe/hpc-shs-cassini-enablement
 contrib/cray/Jenkinsfile* @hpe/hpc-shs-cassini-enablement
 contrib/cray/*rpmbuild* @hpe/hpc-shs-cassini-enablement
 contrib/cray/*runBuildPrep* @hpe/hpc-shs-cassini-enablement
+contrib/cray/run.*	@hpe/hpc-shs-cassini-enablement
+contrib/cray/build.sh	@hpe/hpc-shs-cassini-enablement
