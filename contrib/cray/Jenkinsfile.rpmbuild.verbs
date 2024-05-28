@@ -13,6 +13,6 @@ rpmBuild(
     rpmBuildCmd: "contrib/cray/verbs_rpmbuild.sh",
     specfile: "libfabric.spec.in",
     // The obs_target_os structure contains [ obsTargetOS, [fanout_params], target_node ]
-    obs_target_os: obsTargetOs(),
+    obs_target_os: obsTargetOs("hpc-shs-libfabric-netc"),
     manifestGen: "true"
 )

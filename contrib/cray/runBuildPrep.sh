@@ -7,7 +7,7 @@ OS_TYPE=`cat /etc/os-release | grep "^ID=" | sed "s/\"//g" | cut -d "=" -f 2`
 OS_VERSION=`cat /etc/os-release | grep "^VERSION_ID=" | sed "s/\"//g" | cut -d "=" -f 2`
 OS_MAJOR_VERSION=$(echo $OS_VERSION | cut -d "." -f 1)
 
-RHEL_GPU_SUPPORTED_VERSIONS="8.8 8.9 9.3"
+RHEL_GPU_SUPPORTED_VERSIONS="8.8 8.9 8.10 9.3 9.4"
 
 # Override product since we are only using the internal product stream to avoid
 # clashing with slingshot10 libfabric
@@ -224,10 +224,18 @@ if command -v yum > /dev/null; then
             ROCM_VERSION="6.0"
             NVIDIA_VERSION="23.11"
             ;;
+        8.10)
+            ROCM_VERSION="6.1"
+            NVIDIA_VERSION="24.3"
+            ;;
         9.3)
             ROCM_VERSION="6.0"
             NVIDIA_VERSION="23.11"
             ;;
+        9.4)
+            ROCM_VERSION="6.1"
+            NVIDIA_VERSION="24.3"
+			      ;;
         *)
             echo "GPU software versions not defined for OS version \"${OS_VERSION}\""
             exit 1

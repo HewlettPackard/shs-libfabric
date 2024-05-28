@@ -10,7 +10,7 @@ rpmBuild(
     rpmBuildCmd: "contrib/cray/verbs_rpmbuild.sh",
     specfile: "libfabric.spec.in",
     build_arch: "aarch64",
-    obs_target_os: obsTargetOs_arm(),
+    obs_target_os: obsTargetOs_arm("hpc-shs-libfabric-netc"),
     masterBranch: currentLibfabricSS11Development(),
     manifestGen: "true"
 )
