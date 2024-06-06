@@ -37,6 +37,52 @@
 
 #define	MIN(a,b) (((a)<(b))?(a):(b))
 
+#if !NETCASSINI_6560_DISABLE
+
+/**
+ * Sanity tests for proper integration with EP, enable/disable checks.
+ */
+
+TestSuite(coll_init, .disabled = false, .timeout = CXIT_DEFAULT_TIMEOUT);
+
+/* Test EP close without explicitly enabling collectives.
+ */
+Test(coll_init, noop)
+{
+	struct cxip_ep *ep;
+
+	cxit_setup_rma();
+	ep = container_of(cxit_ep, struct cxip_ep, ep);
+	cr_assert(ep->ep_obj->coll.enabled,
+		  "coll not enabled on startup\n");
+
+	cr_assert(sizeof(struct cxip_coll_accumulator) >=
+		  sizeof(struct cxip_coll_data),
+		  "sizeof(cxip_coll_accumulator=%ld <"
+		  "sizeof(cxip_coll_data=%ld",
+		  sizeof(struct cxip_coll_accumulator),
+		  sizeof(struct cxip_coll_data));
+
+	cxit_teardown_rma();
+}
+
+/* Test EP close after explicitly enabling collectives.
+ */
+Test(coll_init, enable)
+{
+	struct cxip_ep *ep;
+	int ret;
+
+	cxit_setup_rma();
+	ep = container_of(cxit_ep, struct cxip_ep, ep);
+
+	ret = cxip_coll_enable(ep);
+	cr_assert(ret == 0, "cxip_coll_enable failed: %d\n", ret);
+	cr_assert(ep->ep_obj->coll.enabled,
+		  "coll not enabled after enabling\n");
+	cxit_teardown_rma();
+}
+
 /***************************************/
 /**
  * Sanity tests for proper integration with EP, enable/disable checks.
@@ -2374,3 +2420,44 @@ Test(coll_reduce_ops, prereduce)
 	free(mc_obj);
 	STDCLEANUP
 }
+
+#else	/* NETCASSINI_6560_DISABLE */
+
+/**
+ * Sanity tests for proper integration with EP, enable/disable checks.
+ */
+
+TestSuite(coll_init, .disabled = false, .timeout = CXIT_DEFAULT_TIMEOUT);
+
+/* Test EP close without explicitly enabling collectives.
+ */
+Test(coll_init, noop)
+{
+	struct cxip_ep *ep;
+
+	cxit_setup_rma();
+	ep = container_of(cxit_ep, struct cxip_ep, ep);
+	cr_assert(!ep->ep_obj->coll.enabled,
+		  "coll enabled, should be disabled\n");
+
+	cxit_teardown_rma();
+}
+
+/* Test EP close after explicitly enabling collectives.
+ */
+Test(coll_init, enable)
+{
+	struct cxip_ep *ep;
+	int ret;
+
+	cxit_setup_rma();
+	ep = container_of(cxit_ep, struct cxip_ep, ep);
+
+	ret = cxip_coll_enable(ep);
+	cr_assert(!ret, "cxip_coll_enable failed: %d\n", ret);
+	cr_assert(!ep->ep_obj->coll.enabled,
+		  "coll enabled, should be disabled\n");
+	cxit_teardown_rma();
+}
+
+#endif	/* NETCASSINI_6560_DISABLE */
