@@ -1410,6 +1410,7 @@ static void cxip_alter_caps(struct fi_info *info, const struct fi_info *hints)
 	/* If FI_COLLECTIVE explicitly requested then must enable
 	 * FI_MSG for send and receive if not already enabled.
 	 */
+#if !NETCASSINI_6560_DISABLE
 	if (hints && hints->caps && (hints->caps & FI_COLLECTIVE)) {
 		if (!(info->caps & (FI_MSG | FI_TAGGED))) {
 			info->caps |= FI_MSG | FI_SEND | FI_RECV;
@@ -1417,6 +1418,7 @@ static void cxip_alter_caps(struct fi_info *info, const struct fi_info *hints)
 			info->rx_attr->caps |= FI_MSG | FI_RECV;
 		}
 	}
+#endif	/* NETCASSINI_6560_DISABLE */
 }
 
 static void cxip_alter_tx_attr(struct fi_tx_attr *attr,

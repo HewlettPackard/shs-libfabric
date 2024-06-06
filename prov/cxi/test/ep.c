@@ -1751,6 +1751,7 @@ Test(ep_caps, atomic_only)
 
 Test(ep_caps, coll_only)
 {
+#if !NETCASSINI_6560_DISABLE
 	struct fi_info *info;
 	int ret;
 
@@ -1762,9 +1763,10 @@ Test(ep_caps, coll_only)
 			 &info);
 	cr_assert(ret == FI_SUCCESS);
 	verify_caps_only(info, FI_COLLECTIVE | FI_MSG);
-
 	fi_freeinfo(info);
+
 	cxit_teardown_getinfo();
+#endif	/* NETCASSINI_6560_DISABLE */
 }
 
 Test(ep_caps, rma_initiator)

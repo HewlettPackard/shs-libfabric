@@ -3833,10 +3833,16 @@ int cxip_coll_enable(struct cxip_ep *ep)
 	if (ep_obj->coll.enabled)
 		return FI_SUCCESS;
 
+#if !NETCASSINI_6560_DISABLE
 	if (!(ep_obj->caps & FI_COLLECTIVE)) {
 		CXIP_INFO("FI_COLLECTIVE not requested\n");
 		return FI_SUCCESS;
 	}
+#else	/* NETCASSINI_6560_DISABLE */
+	/* ep_obj->coll.enabled remains false */
+	CXIP_WARN("FI_COLLECTIVE NOT ENABLED: NETCASSINI_6560_DISABLE\n");
+	return FI_SUCCESS;
+#endif	/* NETCASSINI_6560_DISABLE */
 
 	/* A read-only or write-only endpoint is legal */
 	if (!(ofi_recv_allowed(ep_obj->rxc->attr.caps) &&
