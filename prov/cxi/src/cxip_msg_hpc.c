@@ -1342,7 +1342,7 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 				return -FI_EAGAIN;
 			}
 
-			RXC_DBG(rxc, "Software issued Get, req: %p\n", req);
+			RXC_DBG(rxc, "Software issued RGet, req: %p\n", req);
 		}
 
 		/* Count the rendezvous event. */
@@ -1357,18 +1357,13 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 		}
 
 		/* If a rendezvous operation requires a done notification
-		 * send it. Must wait for the ACK from the notify to be returned
-		 * before completing the target operation.
+		 * it was initiated by software. Re-use the existing
+		 * rendezvous get TX credit. Need to wait for the ACK from
+		 * the done notify to be returned before releasing the
+		 * TX credit and completing the target operation.
 		 */
-		if (req->recv.done_notify) {
-			if (ofi_atomic_inc32(&rxc->orx_tx_reqs) >
-			    rxc->base.max_tx || cxip_rdzv_done_notify(req)) {
-
-				/* Could not issue notify, will be retried */
-				ofi_atomic_dec32(&rxc->orx_tx_reqs);
-				return -FI_EAGAIN;
-			}
-		}
+		if (req->recv.done_notify && cxip_rdzv_done_notify(req))
+			return -FI_EAGAIN;
 
 		/* Rendezvous Get completed, update event counts and
 		 * complete if using unrestricted get protocol.
@@ -1376,8 +1371,11 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 		req->recv.rc = cxi_init_event_rc(event);
 		rdzv_recv_req_event(req, event->hdr.event_type);
 
-		/* If RGet initiated by software return the TX credit */
-		if (!event->init_short.rendezvous) {
+		/* If RGet initiated by software return the TX credit unless
+		 * it will be used for sending an alt_read done_notify message.
+		 */
+		if (!event->init_short.rendezvous &&
+		    !req->recv.done_notify) {
 			ofi_atomic_dec32(&req->recv.rxc_hpc->orx_tx_reqs);
 			assert(ofi_atomic_get32(&req->recv.rxc_hpc->orx_tx_reqs)
 			       >= 0);
@@ -1394,7 +1392,7 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 
 		/* Special case of the ZBP destination EQ being full and ZBP
 		 * could not complete. This must be retried, we use the TX
-		 * credit already allocated.
+		 * credit already allocated for the done notify.
 		 */
 		if (event_rc == C_RC_ENTRY_NOT_FOUND) {
 			usleep(CXIP_DONE_NOTIFY_RETRY_DELAY_US);
@@ -3180,6 +3178,8 @@ static int cxip_recv_sw_matched(struct cxip_req *req,
 		 * and TX event queue progress will free up credits.
 		 */
 		if (ofi_atomic_inc32(&rxc->orx_tx_reqs) > rxc->base.max_tx) {
+			RXC_DBG(rxc, "Exceeded max s/w RGet requests\n");
+			req->recv.start_offset -= mrecv_len;
 			ofi_atomic_dec32(&rxc->orx_tx_reqs);
 			return -FI_EAGAIN;
 		}
