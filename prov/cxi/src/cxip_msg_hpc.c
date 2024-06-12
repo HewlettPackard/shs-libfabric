@@ -3177,21 +3177,23 @@ static int cxip_recv_sw_matched(struct cxip_req *req,
 		/* Make sure we can issue the RGet; if not we stall
 		 * and TX event queue progress will free up credits.
 		 */
-		if (ofi_atomic_inc32(&rxc->orx_tx_reqs) > rxc->base.max_tx) {
-			RXC_DBG(rxc, "Exceeded max s/w RGet requests\n");
-			req->recv.start_offset -= mrecv_len;
-			ofi_atomic_dec32(&rxc->orx_tx_reqs);
-			return -FI_EAGAIN;
-		}
+		do {
+			if (ofi_atomic_inc32(&rxc->orx_tx_reqs) <=
+			    rxc->base.max_tx)
+				break;
 
-		ret = cxip_ux_send(req, ux_send->req, &ux_send->put_ev,
-				   mrecv_start, mrecv_len, req_done);
-		if (ret != FI_SUCCESS) {
-			req->recv.start_offset -= mrecv_len;
 			ofi_atomic_dec32(&rxc->orx_tx_reqs);
+			cxip_evtq_progress(&rxc->base.ep_obj->txc->tx_evtq);
+		} while (true);
 
-			return ret;
-		}
+		do {
+			ret = cxip_ux_send(req, ux_send->req, &ux_send->put_ev,
+					   mrecv_start, mrecv_len, req_done);
+			if (ret == FI_SUCCESS)
+				break;
+
+			cxip_evtq_progress(&rxc->base.ep_obj->txc->tx_evtq);
+		} while (true);
 
 		/* If multi-recv, a child request was created from
 		 * cxip_ux_send(). Need to lookup this request.
@@ -3243,7 +3245,7 @@ static int cxip_recv_sw_matched(struct cxip_req *req,
 
 		if (ret != FI_SUCCESS) {
 			/* undo mrecv_req_put_bytes() */
-			req->recv.start_offset -= mrecv_len;
+			req->recv.start_offset = mrecv_start;
 			return ret;
 		}
 	}
