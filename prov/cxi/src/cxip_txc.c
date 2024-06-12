@@ -295,6 +295,9 @@ static size_t cxip_txc_get_num_events(struct cxip_txc *txc)
 	/* Account for internal operations. */
 	num_events += CXIP_INTERNAL_TX_REQS;
 
+	/* ACK batching */
+	num_events += cxip_env.eq_ack_batch_size;
+
 	return num_events;
 }
 
