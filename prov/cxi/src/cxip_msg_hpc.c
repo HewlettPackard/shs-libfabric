@@ -1365,12 +1365,6 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 		if (req->recv.done_notify && cxip_rdzv_done_notify(req))
 			return -FI_EAGAIN;
 
-		/* Rendezvous Get completed, update event counts and
-		 * complete if using unrestricted get protocol.
-		 */
-		req->recv.rc = cxi_init_event_rc(event);
-		rdzv_recv_req_event(req, event->hdr.event_type);
-
 		/* If RGet initiated by software return the TX credit unless
 		 * it will be used for sending an alt_read done_notify message.
 		 */
@@ -1380,6 +1374,12 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 			assert(ofi_atomic_get32(&req->recv.rxc_hpc->orx_tx_reqs)
 			       >= 0);
 		}
+
+		/* Rendezvous Get completed, update event counts and
+		 * complete if using unrestricted get protocol.
+		 */
+		req->recv.rc = cxi_init_event_rc(event);
+		rdzv_recv_req_event(req, event->hdr.event_type);
 
 		return FI_SUCCESS;
 
