@@ -1337,6 +1337,7 @@ static int cxip_recv_rdzv_cb(struct cxip_req *req, const union c_event *event)
 				if (req->recv.multi_recv &&
 				    !req->recv.rdzv_events) {
 					dlist_remove(&req->recv.children);
+					req->recv.parent->recv.multirecv_inflight--;
 					cxip_evtq_req_free(req);
 				}
 				return -FI_EAGAIN;

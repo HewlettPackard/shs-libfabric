@@ -217,7 +217,12 @@ void cxip_recv_req_report(struct cxip_req *req)
 			    parent->recv.mrecv_bytes == parent->recv.mrecv_unlink_bytes)
 				unlinked = true;
 		} else {
-			if ((parent->recv.ulen - parent->recv.mrecv_bytes) < rxc->min_multi_recv)
+			parent->recv.multirecv_inflight--;
+			assert(parent->recv.multirecv_inflight >= 0);
+
+			if (!parent->recv.multirecv_inflight &&
+			    ((parent->recv.ulen - parent->recv.mrecv_bytes) <
+			    rxc->min_multi_recv))
 				unlinked = true;
 		}
 
@@ -313,6 +318,9 @@ struct cxip_req *cxip_mrecv_req_dup(struct cxip_req *mrecv_req)
 
 	/* Update fields specific to this Send */
 	req->recv.parent = mrecv_req;
+
+	/* Parent keeps track of operations in flight */
+	mrecv_req->recv.multirecv_inflight++;
 
 	/* Start pointer and data_len must be set elsewhere! */
 
