@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022 Hewlett Packard Enterprise Development LP
+ * Copyright (c) 2022,2024 Hewlett Packard Enterprise Development LP
  * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
  */
 #include "config.h"
@@ -112,8 +112,10 @@ static bool
 cxip_telemetry_entry_validate_token(struct cxip_telemetry *telemetry,
 				    const char *telemetry_token)
 {
-	/* The telemetry directory has an ALL-in-binary entry. This file is
-	 * considered invalid for this telemetry implementation.
+	/*
+	 * Cassini NextGen-Telemetry no longer provides 'ALL-in-binary'.
+	 * Keeping this simple logic in place temporarily allows this
+	 * logic to run with older versions of the driver.
 	 */
 	if (strcmp(telemetry_token, "ALL-in-binary") == 0)
 		return false;

@@ -1373,10 +1373,9 @@ struct fi_cxi_dom_ops {
 };
 ```
 
-*cntr_read* extension is used to read hardware counter values. Valid values
-of the cntr argument are found in the Cassini-specific header file
-cassini_cntr_defs.h. Note that Counter accesses by applications may be
-rate-limited to 1HZ.
+*cntr_read* extension is used to read Cassini Telemetry items that consists of
+counters and gauges.  The items available and their content are dependent upon
+the Cassini ASIC version and Cassini Driver version.
 
 *topology* extension is used to return CXI NIC address topology information
 for the domain. Currently only a dragonfly fabric topology is reported.
