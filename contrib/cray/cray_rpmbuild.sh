@@ -86,6 +86,7 @@ rxd
 hook_debug
 hook_hmem
 dmabuf_peer_mem
+shm
 """
 
 if [[ -z "$BUILD_METADATA" ]] ; then

@@ -417,6 +417,6 @@ pipeline {
         LTU_GIT_REPO = 'git@github.hpe.com:hpe/hpc-shs-libfabric-test-utils.git'
         SFT_GIT_REPO = 'git@github.hpe.com:hpe/hpc-shs-libfabric-sft.git'
         SRC_GIT_BRANCH = 'master'
-        CONFIGURE_OPTIONS="--enable-tcp --enable-udp --enable-rxm --enable-rxd --enable-hook_debug --enable-hook_hmem --enable-dmabuf_peer_mem --enable-only --enable-restricted-dl --enable-verbs --enable-option-checking=fatal"
+        CONFIGURE_OPTIONS="--enable-tcp --enable-udp --enable-rxm --enable-rxd --enable-hook_debug --enable-hook_hmem --enable-dmabuf_peer_mem --enable-only --enable-restricted-dl --enable-verbs --enable-option-checking=fatal --enable-shm=yes"
     }
 }
