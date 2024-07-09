@@ -50,7 +50,7 @@ common_srcs =				\
 	src/hmem_ze.c			\
 	src/hmem_neuron.c		\
 	src/hmem_synapseai.c		\
-	src/hmem_ipc_cache.c	        \
+	src/hmem_ipc_cache.c		\
 	src/xpmem.c			\
 	src/xpmem_cache.c		\
 	src/common.c			\
@@ -202,7 +202,7 @@ src_libfabric_la_SOURCES =			\
 	include/rbtree.h			\
 	include/uthash.h			\
 	include/ofi_prov.h			\
-	include/ofi_profile.h       \
+	include/ofi_profile.h	    \
 	include/rdma/providers/fi_log.h		\
 	include/rdma/providers/fi_prov.h	\
 	src/fabric.c				\
@@ -262,168 +262,168 @@ endif
 endif HAVE_DIRECT
 
 real_man_pages = \
-        man/man1/fi_info.1 \
-        man/man1/fi_pingpong.1 \
-        man/man1/fi_strerror.1 \
-        man/man3/fi_atomic.3 \
-        man/man3/fi_av.3 \
-        man/man3/fi_av_set.3 \
-        man/man3/fi_cm.3 \
-        man/man3/fi_cntr.3 \
-        man/man3/fi_collective.3 \
-        man/man3/fi_control.3 \
-        man/man3/fi_cq.3 \
-        man/man3/fi_domain.3 \
-        man/man3/fi_endpoint.3 \
-        man/man3/fi_errno.3 \
-        man/man3/fi_eq.3 \
-        man/man3/fi_fabric.3 \
-        man/man3/fi_peer.3 \
-        man/man3/fi_provider.3 \
-        man/man3/fi_getinfo.3 \
-        man/man3/fi_mr.3 \
-        man/man3/fi_msg.3 \
+	man/man1/fi_info.1 \
+	man/man1/fi_pingpong.1 \
+	man/man1/fi_strerror.1 \
+	man/man3/fi_atomic.3 \
+	man/man3/fi_av.3 \
+	man/man3/fi_av_set.3 \
+	man/man3/fi_cm.3 \
+	man/man3/fi_cntr.3 \
+	man/man3/fi_collective.3 \
+	man/man3/fi_control.3 \
+	man/man3/fi_cq.3 \
+	man/man3/fi_domain.3 \
+	man/man3/fi_endpoint.3 \
+	man/man3/fi_errno.3 \
+	man/man3/fi_eq.3 \
+	man/man3/fi_fabric.3 \
+	man/man3/fi_peer.3 \
+	man/man3/fi_provider.3 \
+	man/man3/fi_getinfo.3 \
+	man/man3/fi_mr.3 \
+	man/man3/fi_msg.3 \
 	man/man3/fi_nic.3 \
-        man/man3/fi_poll.3 \
-        man/man3/fi_rma.3 \
-        man/man3/fi_tagged.3 \
-        man/man3/fi_trigger.3 \
-        man/man3/fi_version.3 \
-        man/man3/fi_profile.3 \
-        man/man7/fabric.7 \
-        man/man7/fi_arch.7 \
-        man/man7/fi_direct.7 \
-        man/man7/fi_guide.7 \
+	man/man3/fi_poll.3 \
+	man/man3/fi_rma.3 \
+	man/man3/fi_tagged.3 \
+	man/man3/fi_trigger.3 \
+	man/man3/fi_version.3 \
+	man/man3/fi_profile.3 \
+	man/man7/fabric.7 \
+	man/man7/fi_arch.7 \
+	man/man7/fi_direct.7 \
+	man/man7/fi_guide.7 \
 	man/man7/fi_hook.7 \
-        man/man7/fi_intro.7 \
-        man/man7/fi_provider.7 \
-        man/man7/fi_setup.7
+	man/man7/fi_intro.7 \
+	man/man7/fi_provider.7 \
+	man/man7/fi_setup.7
 
 
 dummy_man_pages = \
-        man/man3/fi_accept.3 \
-        man/man3/fi_alias.3 \
-        man/man3/fi_allgather.3 \
-        man/man3/fi_allreduce.3 \
-        man/man3/fi_alltoall.3 \
-        man/man3/fi_atomic_valid.3 \
-        man/man3/fi_atomicmsg.3 \
-        man/man3/fi_atomicv.3 \
-        man/man3/fi_av_bind.3 \
-        man/man3/fi_av_insert.3 \
-        man/man3/fi_av_insertsvc.3 \
-        man/man3/fi_av_lookup.3 \
-        man/man3/fi_av_open.3 \
-        man/man3/fi_av_remove.3 \
-        man/man3/fi_av_set_diff.3 \
-        man/man3/fi_av_set_insert.3 \
-        man/man3/fi_av_set_intersect.3 \
-        man/man3/fi_av_set_remove.3 \
-        man/man3/fi_av_set_union.3 \
-        man/man3/fi_av_straddr.3 \
-        man/man3/fi_barrier.3 \
-        man/man3/fi_broadcast.3 \
-        man/man3/fi_cancel.3 \
-        man/man3/fi_close.3 \
-        man/man3/fi_cntr_add.3 \
-        man/man3/fi_cntr_open.3 \
-        man/man3/fi_cntr_read.3 \
-        man/man3/fi_cntr_set.3 \
-        man/man3/fi_cntr_wait.3 \
-        man/man3/fi_compare_atomic.3 \
-        man/man3/fi_compare_atomic_valid.3 \
-        man/man3/fi_compare_atomicmsg.3 \
-        man/man3/fi_compare_atomicv.3 \
-        man/man3/fi_connect.3 \
-        man/man3/fi_cq_open.3 \
-        man/man3/fi_cq_read.3 \
-        man/man3/fi_cq_readerr.3 \
-        man/man3/fi_cq_readfrom.3 \
-        man/man3/fi_cq_sread.3 \
-        man/man3/fi_cq_sreadfrom.3 \
-        man/man3/fi_cq_strerror.3 \
-        man/man3/fi_cq_signal.3 \
-        man/man3/fi_domain_bind.3 \
-        man/man3/fi_domain_query.3 \
-        man/man3/fi_dupinfo.3 \
-        man/man3/fi_enable.3 \
-        man/man3/fi_ep.3 \
-        man/man3/fi_ep_bind.3 \
-        man/man3/fi_eq_open.3 \
-        man/man3/fi_eq_read.3 \
-        man/man3/fi_eq_readerr.3 \
-        man/man3/fi_eq_sread.3 \
-        man/man3/fi_eq_strerror.3 \
-        man/man3/fi_eq_write.3 \
-        man/man3/fi_fetch_atomic.3 \
-        man/man3/fi_fetch_atomic_valid.3 \
-        man/man3/fi_fetch_atomicmsg.3 \
-        man/man3/fi_fetch_atomicv.3 \
-        man/man3/fi_freeinfo.3 \
-        man/man3/fi_getname.3 \
-        man/man3/fi_getopt.3 \
-        man/man3/fi_getpeer.3 \
-        man/man3/fi_inject.3 \
-        man/man3/fi_injectdata.3 \
-        man/man3/fi_inject_atomic.3 \
-        man/man3/fi_inject_write.3 \
-        man/man3/fi_inject_writedata.3 \
-        man/man3/fi_join.3 \
-        man/man3/fi_join_collective.3 \
-        man/man3/fi_leave.3 \
-        man/man3/fi_listen.3 \
-        man/man3/fi_mr_bind.3 \
-        man/man3/fi_mr_desc.3 \
-        man/man3/fi_mr_key.3 \
-        man/man3/fi_mr_reg.3 \
-        man/man3/fi_mr_regattr.3 \
-        man/man3/fi_mr_regv.3 \
-        man/man3/fi_open.3 \
-        man/man3/fi_open_ops.3 \
-        man/man3/fi_passive_ep.3 \
-        man/man3/fi_pep_bind.3 \
-        man/man3/fi_poll_add.3 \
-        man/man3/fi_poll_del.3 \
-        man/man3/fi_poll_open.3 \
-        man/man3/fi_query_atomic.3 \
-        man/man3/fi_query_collective.3 \
-        man/man3/fi_read.3 \
-        man/man3/fi_readmsg.3 \
-        man/man3/fi_readv.3 \
-        man/man3/fi_recv.3 \
-        man/man3/fi_recvmsg.3 \
-        man/man3/fi_recvv.3 \
-        man/man3/fi_reduce_scatter.3 \
-        man/man3/fi_reject.3 \
-        man/man3/fi_rx_addr.3 \
-        man/man3/fi_rx_size_left.3 \
-        man/man3/fi_scalable_ep_bind.3 \
-        man/man3/fi_send.3 \
-        man/man3/fi_senddata.3 \
-        man/man3/fi_sendmsg.3 \
-        man/man3/fi_sendv.3 \
-        man/man3/fi_setname.3 \
-        man/man3/fi_setopt.3 \
-        man/man3/fi_shutdown.3 \
-        man/man3/fi_strerror.3 \
-        man/man3/fi_tinject.3 \
-        man/man3/fi_tinjectdata.3 \
-        man/man3/fi_tostr.3 \
-        man/man3/fi_trecv.3 \
-        man/man3/fi_trecvmsg.3 \
-        man/man3/fi_trecvv.3 \
-        man/man3/fi_trywait.3 \
-        man/man3/fi_tsend.3 \
-        man/man3/fi_tsenddata.3 \
-        man/man3/fi_tsendmsg.3 \
-        man/man3/fi_tsendv.3 \
-        man/man3/fi_tx_size_left.3 \
-        man/man3/fi_wait.3 \
-        man/man3/fi_wait_open.3 \
-        man/man3/fi_write.3 \
-        man/man3/fi_writedata.3 \
-        man/man3/fi_writemsg.3 \
-        man/man3/fi_writev.3
+	man/man3/fi_accept.3 \
+	man/man3/fi_alias.3 \
+	man/man3/fi_allgather.3 \
+	man/man3/fi_allreduce.3 \
+	man/man3/fi_alltoall.3 \
+	man/man3/fi_atomic_valid.3 \
+	man/man3/fi_atomicmsg.3 \
+	man/man3/fi_atomicv.3 \
+	man/man3/fi_av_bind.3 \
+	man/man3/fi_av_insert.3 \
+	man/man3/fi_av_insertsvc.3 \
+	man/man3/fi_av_lookup.3 \
+	man/man3/fi_av_open.3 \
+	man/man3/fi_av_remove.3 \
+	man/man3/fi_av_set_diff.3 \
+	man/man3/fi_av_set_insert.3 \
+	man/man3/fi_av_set_intersect.3 \
+	man/man3/fi_av_set_remove.3 \
+	man/man3/fi_av_set_union.3 \
+	man/man3/fi_av_straddr.3 \
+	man/man3/fi_barrier.3 \
+	man/man3/fi_broadcast.3 \
+	man/man3/fi_cancel.3 \
+	man/man3/fi_close.3 \
+	man/man3/fi_cntr_add.3 \
+	man/man3/fi_cntr_open.3 \
+	man/man3/fi_cntr_read.3 \
+	man/man3/fi_cntr_set.3 \
+	man/man3/fi_cntr_wait.3 \
+	man/man3/fi_compare_atomic.3 \
+	man/man3/fi_compare_atomic_valid.3 \
+	man/man3/fi_compare_atomicmsg.3 \
+	man/man3/fi_compare_atomicv.3 \
+	man/man3/fi_connect.3 \
+	man/man3/fi_cq_open.3 \
+	man/man3/fi_cq_read.3 \
+	man/man3/fi_cq_readerr.3 \
+	man/man3/fi_cq_readfrom.3 \
+	man/man3/fi_cq_sread.3 \
+	man/man3/fi_cq_sreadfrom.3 \
+	man/man3/fi_cq_strerror.3 \
+	man/man3/fi_cq_signal.3 \
+	man/man3/fi_domain_bind.3 \
+	man/man3/fi_domain_query.3 \
+	man/man3/fi_dupinfo.3 \
+	man/man3/fi_enable.3 \
+	man/man3/fi_ep.3 \
+	man/man3/fi_ep_bind.3 \
+	man/man3/fi_eq_open.3 \
+	man/man3/fi_eq_read.3 \
+	man/man3/fi_eq_readerr.3 \
+	man/man3/fi_eq_sread.3 \
+	man/man3/fi_eq_strerror.3 \
+	man/man3/fi_eq_write.3 \
+	man/man3/fi_fetch_atomic.3 \
+	man/man3/fi_fetch_atomic_valid.3 \
+	man/man3/fi_fetch_atomicmsg.3 \
+	man/man3/fi_fetch_atomicv.3 \
+	man/man3/fi_freeinfo.3 \
+	man/man3/fi_getname.3 \
+	man/man3/fi_getopt.3 \
+	man/man3/fi_getpeer.3 \
+	man/man3/fi_inject.3 \
+	man/man3/fi_injectdata.3 \
+	man/man3/fi_inject_atomic.3 \
+	man/man3/fi_inject_write.3 \
+	man/man3/fi_inject_writedata.3 \
+	man/man3/fi_join.3 \
+	man/man3/fi_join_collective.3 \
+	man/man3/fi_leave.3 \
+	man/man3/fi_listen.3 \
+	man/man3/fi_mr_bind.3 \
+	man/man3/fi_mr_desc.3 \
+	man/man3/fi_mr_key.3 \
+	man/man3/fi_mr_reg.3 \
+	man/man3/fi_mr_regattr.3 \
+	man/man3/fi_mr_regv.3 \
+	man/man3/fi_open.3 \
+	man/man3/fi_open_ops.3 \
+	man/man3/fi_passive_ep.3 \
+	man/man3/fi_pep_bind.3 \
+	man/man3/fi_poll_add.3 \
+	man/man3/fi_poll_del.3 \
+	man/man3/fi_poll_open.3 \
+	man/man3/fi_query_atomic.3 \
+	man/man3/fi_query_collective.3 \
+	man/man3/fi_read.3 \
+	man/man3/fi_readmsg.3 \
+	man/man3/fi_readv.3 \
+	man/man3/fi_recv.3 \
+	man/man3/fi_recvmsg.3 \
+	man/man3/fi_recvv.3 \
+	man/man3/fi_reduce_scatter.3 \
+	man/man3/fi_reject.3 \
+	man/man3/fi_rx_addr.3 \
+	man/man3/fi_rx_size_left.3 \
+	man/man3/fi_scalable_ep_bind.3 \
+	man/man3/fi_send.3 \
+	man/man3/fi_senddata.3 \
+	man/man3/fi_sendmsg.3 \
+	man/man3/fi_sendv.3 \
+	man/man3/fi_setname.3 \
+	man/man3/fi_setopt.3 \
+	man/man3/fi_shutdown.3 \
+	man/man3/fi_strerror.3 \
+	man/man3/fi_tinject.3 \
+	man/man3/fi_tinjectdata.3 \
+	man/man3/fi_tostr.3 \
+	man/man3/fi_trecv.3 \
+	man/man3/fi_trecvmsg.3 \
+	man/man3/fi_trecvv.3 \
+	man/man3/fi_trywait.3 \
+	man/man3/fi_tsend.3 \
+	man/man3/fi_tsenddata.3 \
+	man/man3/fi_tsendmsg.3 \
+	man/man3/fi_tsendv.3 \
+	man/man3/fi_tx_size_left.3 \
+	man/man3/fi_wait.3 \
+	man/man3/fi_wait_open.3 \
+	man/man3/fi_write.3 \
+	man/man3/fi_writedata.3 \
+	man/man3/fi_writemsg.3 \
+	man/man3/fi_writev.3
 
 windows_files = \
 	Libfabric.Build.Default.props \
@@ -454,7 +454,7 @@ test:
 	./util/fi_info
 
 rpm: dist
-	LDFLAGS=-Wl,--build-id rpmbuild -ta libfabric-$(PACKAGE_VERSION).tar.bz2
+	LDFLAGS=-Wl,--build-id rpmbuild -ta $(RPMBUILD_OPTS) libfabric-$(PACKAGE_VERSION).tar.bz2
 
 prov_install_man_pages=
 prov_dist_man_pages=
@@ -488,13 +488,13 @@ include prov/hook/dmabuf_peer_mem/Makefile.include
 man_MANS = $(real_man_pages) $(prov_install_man_pages) $(dummy_man_pages)
 
 EXTRA_DIST += \
-        autogen.sh \
-        NEWS.md \
-        libfabric.spec.in \
-        config/distscript.pl \
-        $(real_man_pages) $(prov_dist_man_pages) $(dummy_man_pages) \
+	autogen.sh \
+	NEWS.md \
+	libfabric.spec.in \
+	config/distscript.pl \
+	$(real_man_pages) $(prov_dist_man_pages) $(dummy_man_pages) \
 	$(windows_files) \
-        $(prov_extra_dist)
+	$(prov_extra_dist)
 
 # a workaround for http://debbugs.gnu.org/cgi/bugreport.cgi?bug=18744, this
 # bug was fixed in automake 1.15, but lesser automake is supported by us.
