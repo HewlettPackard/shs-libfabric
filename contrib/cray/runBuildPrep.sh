@@ -33,6 +33,8 @@ else
     ARTI_BRANCH=dev/master
 fi
 
+TARGET_OS_SHORT=$(echo $TARGET_OS | sed -E 's/(_cn|_ncn)$//')
+
 CNE_BRANCH=""
 
 case "${OBS_TARGET_OS}" in
@@ -40,8 +42,9 @@ case "${OBS_TARGET_OS}" in
     cos_2_5_*)      COS_BRANCH='release/cos-2.5' ;;
     csm_1_4_*)      COS_BRANCH='release/cos-2.5' ;;
     cos_3_0_*)      COS_BRANCH='release/cos-3.0' ;;
-    csm_1_5_*)      COS_BRANCH='release/cos-3.0' ;;
-    sle15_sp5_*)    COS_BRANCH='release/cos-3.0' ;;
+    cos_3_1_*)      COS_BRANCH='release/uss-1.1' ;;
+    csm_1_5_*)      COS_BRANCH='release/uss-1.1' ;;
+    sle15_sp5_*)    COS_BRANCH='release/uss-1.1' ;;
     *)              COS_BRANCH='dev/master' ;;
 esac
 
@@ -108,6 +111,16 @@ function install_gdrcopy_cne() {
   rpm_install_wrapper "${BASE_URL}/$TARGET_ARCH/gdrcopy-devel-${GDR_VERSION}.${TARGET_ARCH}.rpm"
 }
 
+function install_gdrcopy_uss() {
+  release=$1
+  os=$2
+
+  zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+        --priority 20 --name=gdr-copy \
+         ${ARTI_URL}/uss-rpm-stable-local/release/${release}/${os}/ gdr-copy
+  zypper --non-interactive --no-gpg-checks install gdrcopy gdrcopy-devel 
+}
+
 function install_gdrcopy_cos() {
   release=$1
   os=$2
@@ -168,6 +181,7 @@ function install_gdrcopy_nvidia() {
 }
 
 function install_gdrcopy() {
+  echo "OBS_TARGET_OS = ${OBS_TARGET_OS}"
   case $OBS_TARGET_OS in
     cos_2_4*)
       install_gdrcopy_cos "cos-2.4" "sle15_sp4_cn"
@@ -175,8 +189,11 @@ function install_gdrcopy() {
     cos_2_5*)
       install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
       ;;
-    cos_3*)
+    cos_3_0*)
       install_gdrcopy_cne "cne-1.0" "sle15_sp5_cn"
+      ;;
+    cos_3_1*)
+      install_gdrcopy_uss "uss-1.1" "sle15_sp5"
       ;;
     csm_1_3*)
       install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
@@ -185,7 +202,7 @@ function install_gdrcopy() {
       install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
       ;;
     csm_1_5*)
-      install_gdrcopy_cne "cne-1.0" "sle15_sp5_cn"
+      install_gdrcopy_uss "uss-1.1" "sle15_sp5"
       ;;
     sle15_sp5*)
       if [[ "$TARGET_ARCH" == "aarch64" ]]; then
@@ -199,6 +216,7 @@ function install_gdrcopy() {
       ;;
   esac
 }
+
 
 install_gdrcopy
 
@@ -282,6 +300,8 @@ elif command -v zypper > /dev/null; then
         csm_1_5_*)      CUDA_RPMS="nvhpc"
                     ;;
         cos_3_0_*)      CUDA_RPMS="nvhpc"
+	                  ;;
+	      cos_3_1_*)      CUDA_RPMS="nvhpc"
                     ;;
         sle15_sp5_*)    CUDA_RPMS="nvhpc"
                     ;;
@@ -289,36 +309,51 @@ elif command -v zypper > /dev/null; then
                     ;;
     esac
 
-
     zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
         --priority 20 --name=${PRODUCT}-${ARTI_LOCATION} \
          ${ARTI_URL}/${PRODUCT}-${ARTI_LOCATION}/${ARTI_BRANCH}/${OBS_TARGET_OS}/ \
          ${PRODUCT}-${ARTI_LOCATION}
 
     if [ $with_cuda -eq 1 ]; then
-        zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
-            --priority 20 --name=cuda \
-            ${ARTI_URL}/cos-internal-third-party-generic-local/nvidia_hpc_sdk/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
-            cuda
+	if [[ "${COS_BRANCH}" == release/uss-* ]]; then
+	    zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+		   --priority 20 --name=cuda \
+		   ${ARTI_URL}/uss-internal-third-party-rpm-local/nvidia_hpc_sdk/${COS_BRANCH}/${TARGET_OS_SHORT}/ cuda
+	else
+	    zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+		   --priority 20 --name=cuda \
+		   ${ARTI_URL}/cos-internal-third-party-generic-local/nvidia_hpc_sdk/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ cuda
+	fi
 
         RPMS+=" ${CUDA_RPMS} "
     fi
 
     if [ $with_rocm -eq 1 ]; then
-        zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
-            --priority 20 --name=rocm \
-            ${ARTI_URL}/cos-internal-third-party-generic-local/rocm/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
-            rocm
+	if [[ "${COS_BRANCH}" == release/uss-* ]]; then
+	    zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+		   --priority 20 --name=rocm \
+		   ${ARTI_URL}/uss-internal-third-party-rpm-local/rocm/${COS_BRANCH}/${TARGET_OS_SHORT}/ rocm
+	else
+	    zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+		   --priority 20 --name=rocm \
+		   ${ARTI_URL}/cos-internal-third-party-generic-local/rocm/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ rocm
+	fi
 
         RPMS+=" ${ROCR_RPMS} "
     fi
 
     if [[ $with_ze -eq 1 ]]; then
-        zypper --verbose --non-interactive  addrepo --no-gpgcheck --check \
-            --priority 20 --name=ze \
-            ${ARTI_URL}/cos-internal-third-party-generic-local/intel_gpu/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
-            ze
+        if [[ "${COS_BRANCH}" == release/uss-* ]]; then
+          zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+            --priority 20 --name=intel-ze \
+            ${ARTI_URL}/uss-internal-third-party-rpm-local/intel_gpu/${COS_BRANCH}/${TARGET_OS_SHORT}/ intel-ze
 
+        else
+          zypper --verbose --non-interactive  addrepo --no-gpgcheck --check \
+              --priority 20 --name=ze \
+              ${ARTI_URL}/cos-internal-third-party-generic-local/intel_gpu/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
+              ze
+        fi 
         RPMS+=" ${ZE_RPMS} "
     fi
 
