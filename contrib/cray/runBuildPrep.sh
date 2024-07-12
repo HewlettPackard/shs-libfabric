@@ -33,6 +33,8 @@ else
     ARTI_BRANCH=dev/master
 fi
 
+TARGET_OS_SHORT=$(echo $TARGET_OS | sed -E 's/(_cn|_ncn)$//')
+
 CNE_BRANCH=""
 
 case "${OBS_TARGET_OS}" in
@@ -40,8 +42,9 @@ case "${OBS_TARGET_OS}" in
     cos_2_5_*)      COS_BRANCH='release/cos-2.5' ;;
     csm_1_4_*)      COS_BRANCH='release/cos-2.5' ;;
     cos_3_0_*)      COS_BRANCH='release/cos-3.0' ;;
-    csm_1_5_*)      COS_BRANCH='release/cos-3.0' ;;
-    sle15_sp5_*)    COS_BRANCH='release/cos-3.0' ;;
+    cos_3_1_*)      COS_BRANCH='release/uss-1.1' ;;
+    csm_1_5_*)      COS_BRANCH='release/uss-1.1' ;;
+    sle15_sp5_*)    COS_BRANCH='release/uss-1.1' ;;
     *)              COS_BRANCH='dev/master' ;;
 esac
 
@@ -56,19 +59,13 @@ with_cuda=0
 with_ze=0
 
 RPMS="kdreg2-devel "
-if [ -n "${VERBS_BUILD}" ]
-then
+if [ -n "${VERBS_BUILD}" ]; then
     RPMS+="rdma-core rdma-core-devel "
 else
     RPMS+="cray-libcxi-devel "
 fi
 
-if [[ ${TARGET_OS} == "centos_8" ]]; then
-    TARGET_OS="centos_8_ncn"
-fi
-
 ROCR_RPMS="hsa-rocr-devel"
-
 
 if [[ ( ${TARGET_OS} == sle15_sp4* || ${TARGET_OS} == sle15_sp5* ) \
         && ${TARGET_ARCH} == x86_64 ]]; then
@@ -78,7 +75,7 @@ else
     ZE_RPMS=""
 fi
 
-if [[ ${TARGET_OS} =~ ^centos || ${TARGET_OS} =~ ^rhel ]]; then
+if [[ ${TARGET_OS} =~ ^rhel ]]; then
     RPMS+=" libcurl-devel json-c-devel cray-libcxi-static "
 else
     RPMS+=" libcurl-devel libjson-c-devel cray-libcxi-devel-static "
@@ -108,14 +105,21 @@ function install_gdrcopy_cne() {
   rpm_install_wrapper "${BASE_URL}/$TARGET_ARCH/gdrcopy-devel-${GDR_VERSION}.${TARGET_ARCH}.rpm"
 }
 
+function install_gdrcopy_uss() {
+  release=$1
+  os=$2
+
+  zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+        --priority 20 --name=gdr-copy \
+         ${ARTI_URL}/uss-rpm-stable-local/release/${release}/${os}/ gdr-copy
+  zypper --non-interactive --no-gpg-checks install gdrcopy gdrcopy-devel 
+}
+
 function install_gdrcopy_cos() {
   release=$1
   os=$2
 
   case $release in
-    "cos-2.4")
-      GDR_VERSION=2.3-2.4_8.9__g3f1d0f8.shasta
-      ;;
     "cos-2.5")
       GDR_VERSION=2.3-2.5_9.5__ga81d33c.shasta
       ;;
@@ -168,24 +172,22 @@ function install_gdrcopy_nvidia() {
 }
 
 function install_gdrcopy() {
+  echo "OBS_TARGET_OS = ${OBS_TARGET_OS}"
   case $OBS_TARGET_OS in
-    cos_2_4*)
-      install_gdrcopy_cos "cos-2.4" "sle15_sp4_cn"
-      ;;
     cos_2_5*)
       install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
       ;;
-    cos_3*)
+    cos_3_0*)
       install_gdrcopy_cne "cne-1.0" "sle15_sp5_cn"
       ;;
-    csm_1_3*)
-      install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
+    cos_3_1*)
+      install_gdrcopy_uss "uss-1.1" "sle15_sp5"
       ;;
     csm_1_4*)
       install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
       ;;
     csm_1_5*)
-      install_gdrcopy_cne "cne-1.0" "sle15_sp5_cn"
+      install_gdrcopy_uss "uss-1.1" "sle15_sp5"
       ;;
     sle15_sp5*)
       if [[ "$TARGET_ARCH" == "aarch64" ]]; then
@@ -200,22 +202,24 @@ function install_gdrcopy() {
   esac
 }
 
+
 install_gdrcopy
 
 if command -v yum > /dev/null; then
+
     yum-config-manager --add-repo=${ARTI_URL}/${PRODUCT}-${ARTI_LOCATION}/${ARTI_BRANCH}/${TARGET_OS}/
     yum-config-manager --setopt=gpgcheck=0 --save
 
     if [ $OS_TYPE = "rhel"  ] && \
-            [[ $RHEL_GPU_SUPPORTED_VERSIONS = *$OS_VERSION* ]]; then
+        [[ $RHEL_GPU_SUPPORTED_VERSIONS = *$OS_VERSION* ]]; then
 
-	if [[ ${TARGET_ARCH} == x86_64 ]]; then
-            with_rocm=1
-	fi
+      if [[ ${TARGET_ARCH} == x86_64 ]]; then
+        with_rocm=1
+      fi
 
-        with_cuda=1
+      with_cuda=1
 
-        case $OS_VERSION in
+      case $OS_VERSION in
         8.8)
             ROCM_VERSION="5.7"
             NVIDIA_VERSION="23.9"
@@ -235,36 +239,35 @@ if command -v yum > /dev/null; then
         9.4)
             ROCM_VERSION="6.1"
             NVIDIA_VERSION="24.3"
-			      ;;
+            ;;
         *)
             echo "GPU software versions not defined for OS version \"${OS_VERSION}\""
             exit 1
-        esac
+      esac
 
-	rocm_rpms=""
+      rocm_rpms=""
 
-	if [[ ${TARGET_ARCH} == x86_64 ]]; then
-            if [[ $OS_VERSION =~ ^8\.[0-9]+ ]]; then
-		echo "Using radeon-rocm-remote/rhel8"
-		yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel8/${ROCM_VERSION}/main
-            elif [[ $OS_VERSION =~ ^9\.[0-9]+ ]]; then
-		echo "Using radeon-rocm-remote/rhel9"
-		yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel9/${ROCM_VERSION}/main
-            else
-		echo "Variable: $OS_VERSION does not start with 8 or 9"
-		exit 1
-            fi
+      if [[ ${TARGET_ARCH} == x86_64 ]]; then
+        if [[ $OS_VERSION =~ ^8\.[0-9]+ ]]; then
+          echo "Using radeon-rocm-remote/rhel8"
+          yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel8/${ROCM_VERSION}/main
+        elif [[ $OS_VERSION =~ ^9\.[0-9]+ ]]; then
+          echo "Using radeon-rocm-remote/rhel9"
+          yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel9/${ROCM_VERSION}/main
+        else
+          echo "Variable: $OS_VERSION does not start with 8 or 9"
+          exit 1
+        fi
+        rocm_rpms="rocm-dev hip-devel"
+      fi
 
-	    rocm_rpms="rocm-dev hip-devel"
-	fi
+      yum-config-manager --add-repo=${ARTI_URL}/mirror-nvhpc/rhel/${TARGET_ARCH}
+      RPMS+="  ${rocm_rpms} nvhpc-${NVIDIA_VERSION} "
 
-        yum-config-manager --add-repo=${ARTI_URL}/mirror-nvhpc/rhel/${TARGET_ARCH}
-
-        RPMS+="  ${rocm_rpms} nvhpc-${NVIDIA_VERSION} "
     fi
 
     yum install -y $RPMS
-    
+
 elif command -v zypper > /dev/null; then
     with_cuda=1
 
@@ -283,12 +286,13 @@ elif command -v zypper > /dev/null; then
                     ;;
         cos_3_0_*)      CUDA_RPMS="nvhpc"
                     ;;
+        cos_3_1_*)      CUDA_RPMS="nvhpc"
+                    ;;
         sle15_sp5_*)    CUDA_RPMS="nvhpc"
                     ;;
         *)              CUDA_RPMS="nvhpc"
                     ;;
     esac
-
 
     zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
         --priority 20 --name=${PRODUCT}-${ARTI_LOCATION} \
@@ -296,29 +300,42 @@ elif command -v zypper > /dev/null; then
          ${PRODUCT}-${ARTI_LOCATION}
 
     if [ $with_cuda -eq 1 ]; then
-        zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+        if [[ "${COS_BRANCH}" == release/uss-* ]]; then
+            zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
             --priority 20 --name=cuda \
-            ${ARTI_URL}/cos-internal-third-party-generic-local/nvidia_hpc_sdk/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
-            cuda
-
+            ${ARTI_URL}/uss-internal-third-party-rpm-local/nvidia_hpc_sdk/${COS_BRANCH}/${TARGET_OS_SHORT}/ cuda
+        else
+            zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+            --priority 20 --name=cuda \
+            ${ARTI_URL}/cos-internal-third-party-generic-local/nvidia_hpc_sdk/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ cuda
+        fi
         RPMS+=" ${CUDA_RPMS} "
     fi
 
     if [ $with_rocm -eq 1 ]; then
-        zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+        if [[ "${COS_BRANCH}" == release/uss-* ]]; then
+            zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
             --priority 20 --name=rocm \
-            ${ARTI_URL}/cos-internal-third-party-generic-local/rocm/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
-            rocm
-
+            ${ARTI_URL}/uss-internal-third-party-rpm-local/rocm/${COS_BRANCH}/${TARGET_OS_SHORT}/ rocm
+        else
+            zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+            --priority 20 --name=rocm \
+            ${ARTI_URL}/cos-internal-third-party-generic-local/rocm/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ rocm
+        fi
         RPMS+=" ${ROCR_RPMS} "
     fi
 
     if [[ $with_ze -eq 1 ]]; then
-        zypper --verbose --non-interactive  addrepo --no-gpgcheck --check \
-            --priority 20 --name=ze \
-            ${ARTI_URL}/cos-internal-third-party-generic-local/intel_gpu/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
-            ze
-
+        if [[ "${COS_BRANCH}" == release/uss-* ]]; then
+            zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+              --priority 20 --name=intel-ze \
+              ${ARTI_URL}/uss-internal-third-party-rpm-local/intel_gpu/${COS_BRANCH}/${TARGET_OS_SHORT}/ intel-ze
+        else
+            zypper --verbose --non-interactive  addrepo --no-gpgcheck --check \
+                --priority 20 --name=ze \
+                ${ARTI_URL}/cos-internal-third-party-generic-local/intel_gpu/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ \
+                ze
+        fi 
         RPMS+=" ${ZE_RPMS} "
     fi
 
@@ -327,7 +344,8 @@ elif command -v zypper > /dev/null; then
     zypper --non-interactive --no-gpg-checks install $RPMS
 
 else
-    "Unsupported package manager or package manager not found -- installing nothing"
+    echo "Unsupported package manager or package manager not found -- installing nothing"
+    exit 1
 fi
 
 set -x
