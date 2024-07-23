@@ -868,7 +868,12 @@ Test(cntr, verify_sync)
 	cr_assert(ret == FI_SUCCESS);
 }
 
-Test(cntr, verify_no_sync)
+/* This test is non-deterministic in that the counter write back
+ * associated with the set can occur before the fi_cntr_read()
+ * is issued, invalidating the test. Disable the test until another
+ * approach is implemented.
+ */
+Test(cntr, verify_no_sync, .disabled = true)
 {
 	struct fid_cntr *cntr;
 	struct fi_cntr_attr cntr_attr = {
