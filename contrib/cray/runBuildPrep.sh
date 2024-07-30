@@ -45,6 +45,7 @@ case "${OBS_TARGET_OS}" in
     cos_3_1_*)      COS_BRANCH='release/uss-1.1' ;;
     csm_1_5_*)      COS_BRANCH='release/uss-1.1' ;;
     sle15_sp5_*)    COS_BRANCH='release/uss-1.1' ;;
+    sle15_sp6_*)    COS_BRANCH='release/uss-1.2' ;;
     *)              COS_BRANCH='dev/master' ;;
 esac
 
@@ -196,6 +197,10 @@ function install_gdrcopy() {
         install_gdrcopy_nvidia
       fi
       ;;
+    sle15_sp6*)
+      # FIX THIS when GPU is enabled
+      continue
+      ;;
     *)
       install_gdrcopy_nvidia
       ;;
@@ -290,6 +295,8 @@ elif command -v zypper > /dev/null; then
                     ;;
         sle15_sp5_*)    CUDA_RPMS="nvhpc"
                     ;;
+        sle15_sp6_*)    CUDA_RPMS="nvhpc"
+                    ;;
         *)              CUDA_RPMS="nvhpc"
                     ;;
     esac
@@ -298,6 +305,11 @@ elif command -v zypper > /dev/null; then
         --priority 20 --name=${PRODUCT}-${ARTI_LOCATION} \
          ${ARTI_URL}/${PRODUCT}-${ARTI_LOCATION}/${ARTI_BRANCH}/${OBS_TARGET_OS}/ \
          ${PRODUCT}-${ARTI_LOCATION}
+
+    if [[  ${TARGET_OS} == sle15_sp6* ]]; then
+          with_rocm=0
+          with_cuda=0
+    fi
 
     if [ $with_cuda -eq 1 ]; then
         if [[ "${COS_BRANCH}" == release/uss-* ]]; then
