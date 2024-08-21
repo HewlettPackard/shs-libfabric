@@ -1,6 +1,6 @@
+*       @hpe/hpc-shs-ss11-codereviewers  @hpe/hpc-shs-libfabric-netc-codereviewers
 Jenkinsfile* @hpe/hpc-shs-cassini-enablement
 *.spec.in @hpe/hpc-shs-cassini-enablement
 contrib/cray/Jenkinsfile* @hpe/hpc-shs-cassini-enablement
 contrib/cray/*rpmbuild* @hpe/hpc-shs-cassini-enablement
 contrib/cray/*runBuildPrep* @hpe/hpc-shs-cassini-enablement
-*       @hpe/hpc-shs-ss11-codereviewers  @hpe/hpc-shs-libfabric-netc-codereviewers
