@@ -468,7 +468,7 @@ int cxip_recv_cancel(struct cxip_req *req)
 	/* In hybrid mode requests could be on priority list
 	 * or software receive list.
 	 */
-	if (req->recv.software_list) {
+	if (!req->recv.hw_offloaded) {
 		dlist_remove_init(&req->recv.rxc_entry);
 		req->recv.canceled = true;
 		req->recv.unlinked = true;
@@ -583,6 +583,7 @@ int cxip_recv_req_dropped(struct cxip_req *req)
 	assert(rxc->base.protocol == FI_PROTO_CXI);
 	assert(dlist_empty(&req->recv.rxc_entry));
 
+	req->recv.hw_offloaded = false;
 	dlist_insert_tail(&req->recv.rxc_entry, &rxc->replay_queue);
 
 	RXC_DBG(rxc, "Receive dropped: %p\n", req);

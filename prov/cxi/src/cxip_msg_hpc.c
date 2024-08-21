@@ -3467,8 +3467,7 @@ static int cxip_recv_req_queue(struct cxip_req *req, bool restart_seq)
 		if (ret)
 			goto err_dequeue_req;
 	} else {
-
-		req->recv.software_list = true;
+		req->recv.hw_offloaded = false;
 		dlist_insert_tail(&req->recv.rxc_entry, &rxc->sw_recv_queue);
 	}
 
