@@ -1141,7 +1141,6 @@ struct cxip_req_recv {
 	uint32_t rget_nic;
 	uint32_t rget_pid;
 	int multirecv_inflight;		// SW EP Multi-receives in progress
-	bool software_list;		// Appended to HW or SW
 	bool canceled;			// Request canceled?
 	bool unlinked;
 	bool multi_recv;
