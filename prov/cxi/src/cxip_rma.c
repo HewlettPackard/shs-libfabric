@@ -633,7 +633,7 @@ ssize_t cxip_rma_common(enum fi_op_type op, struct cxip_txc *txc,
 	/* Select the correct traffic class type within a traffic class. */
 	if (!unr && (flags & FI_CXI_HRP))
 		tc_type = CXI_TC_TYPE_HRP;
-	else if (!unr)
+	else if (!unr && !triggered)
 		tc_type = CXI_TC_TYPE_RESTRICTED;
 	else
 		tc_type = CXI_TC_TYPE_DEFAULT;
