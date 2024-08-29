@@ -43,7 +43,9 @@ case "${OBS_TARGET_OS}" in
     csm_1_4_*)      COS_BRANCH='release/cos-2.5' ;;
     cos_3_0_*)      COS_BRANCH='release/cos-3.0' ;;
     cos_3_1_*)      COS_BRANCH='release/uss-1.1' ;;
+    cos_3_2_*)      COS_BRANCH='release/uss-1.2' ;;
     csm_1_5_*)      COS_BRANCH='release/uss-1.1' ;;
+    csm_1_6_*)      COS_BRANCH='release/uss-1.2' ;;
     sle15_sp5_*)    COS_BRANCH='release/uss-1.1' ;;
     sle15_sp6_*)    COS_BRANCH='release/uss-1.2' ;;
     *)              COS_BRANCH='dev/master' ;;
@@ -184,11 +186,19 @@ function install_gdrcopy() {
     cos_3_1*)
       install_gdrcopy_uss "uss-1.1" "sle15_sp5"
       ;;
+    cos_3_2*)
+      # FIX THIS when GDR support is enabled
+      continue
+      ;;
     csm_1_4*)
       install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
       ;;
     csm_1_5*)
       install_gdrcopy_uss "uss-1.1" "sle15_sp5"
+      ;;
+    csm_1_6*)
+      # FIX THIS when GDR support is enabled
+      continue
       ;;
     sle15_sp5*)
       if [[ "$TARGET_ARCH" == "aarch64" ]]; then
@@ -289,9 +299,13 @@ elif command -v zypper > /dev/null; then
                     ;;
         csm_1_5_*)      CUDA_RPMS="nvhpc"
                     ;;
+        csm_1_6_*)      CUDA_RPMS="nvhpc"
+                    ;;
         cos_3_0_*)      CUDA_RPMS="nvhpc"
                     ;;
         cos_3_1_*)      CUDA_RPMS="nvhpc"
+                    ;;
+        cos_3_2_*)      CUDA_RPMS="nvhpc"
                     ;;
         sle15_sp5_*)    CUDA_RPMS="nvhpc"
                     ;;
