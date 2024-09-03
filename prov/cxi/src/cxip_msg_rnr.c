@@ -339,7 +339,7 @@ static int cxip_rxc_rnr_msg_init(struct cxip_rxc *rxc_base)
 		dlist_init(&req->recv.rxc_entry);
 
 		/* Selective does not count toward outstanding RX operations */
-		ofi_atomic_dec32(&rxc->base.orx_reqs);
+		cxip_rxc_orx_reqs_dec(&rxc->base);
 
 		ret = cxip_recv_req_alloc(&rxc->base, NULL, 0, NULL, &req,
 					  cxip_rnr_recv_selective_comp_cb);
@@ -359,7 +359,7 @@ static int cxip_rxc_rnr_msg_init(struct cxip_rxc *rxc_base)
 		dlist_init(&req->recv.rxc_entry);
 
 		/* Selective does not count toward outstanding RX operations */
-		ofi_atomic_dec32(&rxc->base.orx_reqs);
+		cxip_rxc_orx_reqs_dec(&rxc->base);
 		rxc->hybrid_mr_desc = true;
 	}
 
@@ -400,12 +400,12 @@ free_pte:
 	cxip_pte_free(rxc->base.rx_pte);
 free_req_tag:
 	if (rxc->req_selective_comp_tag) {
-		ofi_atomic_inc32(&rxc->base.orx_reqs);
+		cxip_rxc_orx_reqs_inc(&rxc->base);
 		cxip_recv_req_free(rxc->req_selective_comp_tag);
 	}
 free_req_msg:
 	if (rxc->req_selective_comp_msg) {
-		ofi_atomic_inc32(&rxc->base.orx_reqs);
+		cxip_rxc_orx_reqs_inc(&rxc->base);
 		cxip_recv_req_free(rxc->req_selective_comp_msg);
 	}
 
@@ -423,11 +423,11 @@ static int cxip_rxc_rnr_msg_fini(struct cxip_rxc *rxc_base)
 	 * back before freeing.
 	 */
 	if (rxc->req_selective_comp_msg) {
-		ofi_atomic_inc32(&rxc->base.orx_reqs);
+		cxip_rxc_orx_reqs_inc(&rxc->base);
 		cxip_recv_req_free(rxc->req_selective_comp_msg);
 	}
 	if (rxc->req_selective_comp_tag) {
-		ofi_atomic_inc32(&rxc->base.orx_reqs);
+		cxip_rxc_orx_reqs_inc(&rxc->base);
 		cxip_recv_req_free(rxc->req_selective_comp_tag);
 	}
 

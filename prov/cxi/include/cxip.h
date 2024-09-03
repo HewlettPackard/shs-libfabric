@@ -2451,6 +2451,29 @@ static inline void cxip_txc_otx_reqs_init(struct cxip_txc *txc)
 	txc->otx_reqs = 0;
 }
 
+static inline void cxip_rxc_orx_reqs_inc(struct cxip_rxc *rxc)
+{
+	assert(ofi_genlock_held(&rxc->ep_obj->lock) == 1);
+	ofi_atomic_inc32(&rxc->orx_reqs);
+}
+
+static inline void cxip_rxc_orx_reqs_dec(struct cxip_rxc *rxc)
+{
+	assert(ofi_genlock_held(&rxc->ep_obj->lock) == 1);
+	ofi_atomic_dec32(&rxc->orx_reqs);
+}
+
+static inline int cxip_rxc_orx_reqs_get(struct cxip_rxc *rxc)
+{
+	assert(ofi_genlock_held(&rxc->ep_obj->lock) == 1);
+	return ofi_atomic_get32(&rxc->orx_reqs);
+}
+
+static inline void cxip_rxc_orx_reqs_init(struct cxip_rxc *rxc)
+{
+	ofi_atomic_initialize32(&rxc->orx_reqs, 0);
+}
+
 /*
  * CXI endpoint implementations to support FI_CLASS_EP.
  */

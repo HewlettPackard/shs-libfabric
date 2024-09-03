@@ -2065,7 +2065,7 @@ static void cxip_ux_onload_complete(struct cxip_req *req)
 	else
 		cxip_post_ux_onload_fc(rxc);
 
-	ofi_atomic_dec32(&rxc->base.orx_reqs);
+	cxip_rxc_orx_reqs_dec(&rxc->base);
 	cxip_evtq_req_free(req);
 }
 
@@ -2252,7 +2252,7 @@ static int cxip_ux_onload(struct cxip_rxc_hpc *rxc)
 		ret = -FI_EAGAIN;
 		goto err_free_onload_offset;
 	}
-	ofi_atomic_inc32(&rxc->base.orx_reqs);
+	cxip_rxc_orx_reqs_inc(&rxc->base);
 
 	req->cb = cxip_ux_onload_cb;
 	req->type = CXIP_REQ_SEARCH;
@@ -2278,7 +2278,7 @@ static int cxip_ux_onload(struct cxip_rxc_hpc *rxc)
 	return FI_SUCCESS;
 
 err_dec_free_cq_req:
-	ofi_atomic_dec32(&rxc->base.orx_reqs);
+	cxip_rxc_orx_reqs_dec(&rxc->base);
 	cxip_evtq_req_free(req);
 err_free_onload_offset:
 	free(rxc->ule_offsets);
@@ -2303,7 +2303,7 @@ static int cxip_flush_appends_cb(struct cxip_req *req,
 
 	ret = cxip_ux_onload(rxc);
 	if (ret == FI_SUCCESS) {
-		ofi_atomic_dec32(&rxc->base.orx_reqs);
+		cxip_rxc_orx_reqs_dec(&rxc->base);
 		cxip_evtq_req_free(req);
 	}
 
@@ -3868,7 +3868,7 @@ static int cxip_rxc_check_recv_count_hybrid_preempt(struct cxip_rxc *rxc)
 
 	if (cxip_env.rx_match_mode == CXIP_PTLTE_HYBRID_MODE &&
 	    cxip_env.hybrid_posted_recv_preemptive == 1) {
-		count = ofi_atomic_get32(&rxc->orx_reqs);
+		count = cxip_rxc_orx_reqs_get(rxc);
 
 		if (count > rxc->attr.size) {
 			assert(rxc->state == RXC_ENABLED);

@@ -104,7 +104,7 @@ int cxip_recv_req_alloc(struct cxip_rxc *rxc, void *buf, size_t len,
 	dlist_init(&req->recv.children);
 	dlist_init(&req->recv.rxc_entry);
 
-	ofi_atomic_inc32(&rxc->orx_reqs);
+	cxip_rxc_orx_reqs_inc(rxc);
 	*cxip_req = req;
 
 	return FI_SUCCESS;
@@ -123,7 +123,7 @@ void cxip_recv_req_free(struct cxip_req *req)
 	assert(dlist_empty(&req->recv.children));
 	assert(dlist_empty(&req->recv.rxc_entry));
 
-	ofi_atomic_dec32(&rxc->orx_reqs);
+	cxip_rxc_orx_reqs_dec(rxc);
 
 	if (req->recv.recv_md && !req->recv.hybrid_md)
 		cxip_unmap(req->recv.recv_md);
@@ -534,7 +534,7 @@ int cxip_flush_appends(struct cxip_rxc_hpc *rxc,
 		ret = -FI_EAGAIN;
 		goto err;
 	}
-	ofi_atomic_inc32(&rxc->base.orx_reqs);
+	cxip_rxc_orx_reqs_inc(&rxc->base);
 
 	rxc->base.rx_evtq.ack_batch_size = 1;
 
@@ -561,7 +561,7 @@ int cxip_flush_appends(struct cxip_rxc_hpc *rxc,
 	return FI_SUCCESS;
 
 err_dec_free_cq_req:
-	ofi_atomic_dec32(&rxc->base.orx_reqs);
+	cxip_rxc_orx_reqs_dec(&rxc->base);
 	cxip_evtq_req_free(req);
 err:
 	return ret;
