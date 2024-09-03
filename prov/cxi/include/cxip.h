@@ -2208,7 +2208,7 @@ struct cxip_txc {
 	struct ofi_bufpool *ibuf_pool;
 
 	struct cxip_cmdq *tx_cmdq;	// added during cxip_txc_enable()
-	ofi_atomic32_t otx_reqs;	// outstanding transmit requests
+	int otx_reqs;	// outstanding transmit requests
 
 	/* Queue of TX messages in flight for the context */
 	struct dlist_entry msg_queue;
@@ -2430,24 +2430,25 @@ struct cxip_ep_obj {
 static inline void cxip_txc_otx_reqs_inc(struct cxip_txc *txc)
 {
 	assert(ofi_genlock_held(&txc->ep_obj->lock) == 1);
-	ofi_atomic_inc32(&txc->otx_reqs);
+	txc->otx_reqs++;
 }
 
 static inline void cxip_txc_otx_reqs_dec(struct cxip_txc *txc)
 {
 	assert(ofi_genlock_held(&txc->ep_obj->lock) == 1);
-	ofi_atomic_dec32(&txc->otx_reqs);
+	txc->otx_reqs--;
+	assert(txc->otx_reqs >= 0);
 }
 
 static inline int cxip_txc_otx_reqs_get(struct cxip_txc *txc)
 {
 	assert(ofi_genlock_held(&txc->ep_obj->lock) == 1);
-	return ofi_atomic_get32(&txc->otx_reqs);
+	return txc->otx_reqs;
 }
 
 static inline void cxip_txc_otx_reqs_init(struct cxip_txc *txc)
 {
-	ofi_atomic_initialize32(&txc->otx_reqs, 0);
+	txc->otx_reqs = 0;
 }
 
 /*
