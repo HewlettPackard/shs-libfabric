@@ -1933,6 +1933,82 @@ Test(rma, invalid_read_target_opt_mr_key)
 	rma_invalid_read_target_mr_key(0x10);
 }
 
+/* Tests to verify FI_RM_ENABLED */
+
+static void mr_overrun(bool write)
+{
+     int ret;
+     uint8_t *local;
+     size_t good_len = 4096;
+     uint64_t key_val = 0xa;
+     struct fi_cq_err_entry err;
+     struct fi_cq_tagged_entry cqe;
+     struct mem_region remote;
+
+     /* Create over-sized local buffer */
+     local = calloc(1, good_len * 2);
+     cr_assert_not_null(local, "local alloc failed");
+
+     mr_create(good_len, write ? FI_REMOTE_WRITE : FI_REMOTE_READ, 0xc0,
+                    &key_val, &remote);
+
+     /* Perform good length data transfer first */
+     if(write) {
+          ret = fi_write(cxit_ep, local, good_len, NULL, cxit_ep_fi_addr, 0,
+                    key_val, NULL);
+          cr_assert_eq(ret, FI_SUCCESS, "fi_write() failed (%d)", ret);
+     } 
+     else {
+          ret = fi_read(cxit_ep, local, good_len, NULL, cxit_ep_fi_addr, 0,
+                    key_val, NULL);
+          cr_assert_eq(ret, FI_SUCCESS, "fi_read() failed (%d)", ret);
+     }
+
+     /* Wait for async event indicating data has been sent */
+     ret = cxit_await_completion(cxit_tx_cq, &cqe);
+     cr_assert_eq(ret, 1, "fi_cq_read() failed (%d)", ret);
+
+     validate_tx_event(&cqe, FI_RMA | (write ? FI_WRITE : FI_READ), NULL);
+
+     /* Validate read data */
+     for (int i = 0; i < good_len; i++)
+          cr_expect_eq(local[i], remote.mem[i],
+                    "data mismatch, element: (%d) %02x != %02x\n", i,
+                    local[i], remote.mem[i]);
+
+     /* Perform overrun data transfer */
+     if (write) {
+          ret = fi_write(cxit_ep, local, good_len*2, NULL, cxit_ep_fi_addr,
+                    0, key_val, NULL);
+          cr_assert_eq(ret, FI_SUCCESS, "fi_write() failed (%d)", ret);
+     }
+     else {
+          ret = fi_read(cxit_ep, local, good_len*2, NULL, cxit_ep_fi_addr, 
+                    0, key_val, NULL);
+          cr_assert_eq(ret, FI_SUCCESS, "fi_read() failed (%d)", ret);
+     }
+
+     /* Wait for async event indicating data has been sent */
+     ret = cxit_await_completion(cxit_tx_cq, &cqe);
+     cr_assert_eq(ret, -FI_EAVAIL, "Unexpected RMA success %d", ret);
+     ret = fi_cq_readerr(cxit_tx_cq, &err, 1);
+     cr_assert(ret == 1);
+     cr_assert_eq(err.err, FI_EIO, "Error return %d", err.err);
+
+     mr_destroy(&remote);
+     free(local);
+}
+
+Test(rma, read_mr_overrun)
+{
+     mr_overrun(false);
+}
+
+Test(rma, write_mr_overrun)
+{
+     mr_overrun(true);
+}
+
 static void rma_hybrid_mr_desc_test_runner(bool write, bool cq_events)
 {
 	struct mem_region source_window;
