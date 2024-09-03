@@ -1066,7 +1066,7 @@ int cxip_rdzv_pte_zbp_cb(struct cxip_req *req, const union c_event *event)
 		 */
 		cxip_report_send_completion(put_req, true);
 
-		ofi_atomic_dec32(&put_req->send.txc->otx_reqs);
+		cxip_txc_otx_reqs_dec(put_req->send.txc);
 		cxip_evtq_req_free(put_req);
 
 		return FI_SUCCESS;
@@ -4127,7 +4127,7 @@ static void rdzv_send_req_complete(struct cxip_req *req)
 
 	cxip_report_send_completion(req, true);
 
-	ofi_atomic_dec32(&req->send.txc->otx_reqs);
+	cxip_txc_otx_reqs_dec(req->send.txc);
 	cxip_evtq_req_free(req);
 }
 
@@ -4462,7 +4462,7 @@ static int cxip_send_eager_cb(struct cxip_req *req,
 	/* If MATCH_COMPLETE was requested, software must manage counters. */
 	cxip_report_send_completion(req, match_complete);
 
-	ofi_atomic_dec32(&req->send.txc->otx_reqs);
+	cxip_txc_otx_reqs_dec(req->send.txc);
 	cxip_evtq_req_free(req);
 
 	return FI_SUCCESS;
@@ -4887,7 +4887,7 @@ int cxip_fc_resume(struct cxip_ep_obj *ep_obj, uint32_t nic_addr, uint32_t pid,
 		 * a TXC credit for replay. _cxip_send_req() will take the
 		 * credit again.
 		 */
-		ofi_atomic_dec32(&txc->base.otx_reqs);
+		cxip_txc_otx_reqs_dec(&txc->base);
 
 		/* -FI_EAGAIN can be return if the command queue is full. Loop
 		 * until this goes through.
@@ -5161,7 +5161,7 @@ cxip_send_common(struct cxip_txc *txc, uint32_t tclass, const void *buf,
 	}
 
 	/* Restrict outstanding success event requests to queue size */
-	if (ofi_atomic_get32(&txc->otx_reqs) >= txc->attr.size) {
+	if (cxip_txc_otx_reqs_get(txc) >= txc->attr.size) {
 		ret = -FI_EAGAIN;
 		goto err_req_free;
 	}

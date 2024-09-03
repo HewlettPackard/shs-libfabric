@@ -450,7 +450,7 @@ static int _cxip_amo_cb(struct cxip_req *req, const union c_event *event)
 			TXC_WARN_RET(txc, ret, "Failed to report error\n");
 	}
 
-	ofi_atomic_dec32(&req->amo.txc->otx_reqs);
+	cxip_txc_otx_reqs_dec(req->amo.txc);
 	cxip_evtq_req_free(req);
 
 	return FI_SUCCESS;

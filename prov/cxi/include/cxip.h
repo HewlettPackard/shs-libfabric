@@ -2427,6 +2427,29 @@ struct cxip_ep_obj {
 	struct cxip_portals_table *ptable;
 };
 
+static inline void cxip_txc_otx_reqs_inc(struct cxip_txc *txc)
+{
+	assert(ofi_genlock_held(&txc->ep_obj->lock) == 1);
+	ofi_atomic_inc32(&txc->otx_reqs);
+}
+
+static inline void cxip_txc_otx_reqs_dec(struct cxip_txc *txc)
+{
+	assert(ofi_genlock_held(&txc->ep_obj->lock) == 1);
+	ofi_atomic_dec32(&txc->otx_reqs);
+}
+
+static inline int cxip_txc_otx_reqs_get(struct cxip_txc *txc)
+{
+	assert(ofi_genlock_held(&txc->ep_obj->lock) == 1);
+	return ofi_atomic_get32(&txc->otx_reqs);
+}
+
+static inline void cxip_txc_otx_reqs_init(struct cxip_txc *txc)
+{
+	ofi_atomic_initialize32(&txc->otx_reqs, 0);
+}
+
 /*
  * CXI endpoint implementations to support FI_CLASS_EP.
  */
