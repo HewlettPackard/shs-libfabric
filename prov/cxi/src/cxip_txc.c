@@ -437,6 +437,8 @@ void cxip_txc_flush_msg_trig_reqs(struct cxip_txc *txc)
 	struct cxip_req *req;
 	struct dlist_entry *tmp;
 
+	ofi_genlock_lock(&txc->ep_obj->lock);
+
 	/* Drain the message queue. */
 	dlist_foreach_container_safe(&txc->msg_queue, struct cxip_req, req,
 				     send.txc_entry, tmp) {
@@ -447,6 +449,8 @@ void cxip_txc_flush_msg_trig_reqs(struct cxip_txc *txc)
 			cxip_evtq_req_free(req);
 		}
 	}
+
+	ofi_genlock_unlock(&txc->ep_obj->lock);
 }
 
 static bool cxip_txc_can_emit_op(struct cxip_txc *txc,
