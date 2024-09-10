@@ -580,9 +580,10 @@ void cxit_rma_setup_no_rma_events(void)
 }
 
 /* Test HRP Put */
-Test(rma_opt, hrp,
+Test(rma_opt_hrp, hrp,
      .init = cxit_rma_setup_no_rma_events,
-     .fini = cxit_teardown_rma)
+     .fini = cxit_teardown_rma,
+     .timeout = CXIT_DEFAULT_TIMEOUT)
 {
 	int ret;
 	uint64_t hrp_acks_start;
