@@ -477,11 +477,18 @@ ssize_t cxip_ep_cancel(fid_t fid, void *context)
 	if (!ofi_recv_allowed(ep->ep_obj->caps))
 		return -FI_ENOENT;
 
+	ofi_genlock_lock(&ep->ep_obj->lock);
+
 	ret = cxip_rxc_cancel(ep->ep_obj->rxc, context);
 	if (ret != -FI_ENOENT)
-		return ret;
+		goto out_unlock;
 
-	return cxip_txc_cancel(ep->ep_obj->txc, context);
+	ret = cxip_txc_cancel(ep->ep_obj->txc, context);
+
+out_unlock:
+	ofi_genlock_unlock(&ep->ep_obj->lock);
+
+	return ret;
 }
 
 /*
