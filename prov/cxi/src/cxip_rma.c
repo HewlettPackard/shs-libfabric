@@ -203,7 +203,7 @@ static int cxip_rma_emit_dma(struct cxip_txc *txc, const void *buf, size_t len,
 {
 	struct cxip_req *req = NULL;
 	struct cxip_md *dma_md = NULL;
-	void *dma_buf;
+	void *dma_buf = NULL;
 	struct c_full_dma_cmd dma_cmd = {};
 	int ret;
 	struct cxip_domain *dom = txc->domain;

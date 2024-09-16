@@ -626,7 +626,7 @@ int _test_barrier(fi_addr_t *fiaddrs, size_t size, int count)
 	struct dlist_entry joinlist;
 	uint64_t context;
 	uint64_t mc;
-	int i, ret, total;
+	int i, ret, total = 0;
 
 	TRACE("%s entry, create_mcast=%d\n", __func__, create_multicast);
 	ret = _simple_join(fiaddrs, size, &setary, &joinlist);

@@ -970,7 +970,7 @@ static inline int cxip_ep_set_val(struct cxip_ep *cxi_ep,
 	uint64_t *req_order;
 	uint64_t *req_rnr_max_time;
 	uint32_t *req_tclass;
-	uint32_t new_tclass;
+	uint32_t new_tclass = FI_TC_UNSPEC;
 
 	if (!val->val)
 		return -FI_EINVAL;
@@ -1192,7 +1192,7 @@ int cxip_alloc_endpoint(struct cxip_domain *cxip_dom, struct fi_info *hints,
 {
 	int ret;
 	struct cxip_ep_obj *ep_obj;
-	uint32_t txc_tclass;
+	uint32_t txc_tclass = FI_TC_UNSPEC;
 	uint32_t nic;
 	uint32_t pid;
 	int i;
