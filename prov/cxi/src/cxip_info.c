@@ -390,13 +390,13 @@ struct util_prov cxip_util_prov = {
 	.flags = 0,
 };
 
-int s_page_size;
+int sc_page_size;
 
 /* Get _SC_PAGESIZE */
 static void set_system_page_size(void)
 {
-	if (!s_page_size)
-		s_page_size = sysconf(_SC_PAGESIZE);
+	if (!sc_page_size)
+		sc_page_size = sysconf(_SC_PAGESIZE);
 }
 
 /*
