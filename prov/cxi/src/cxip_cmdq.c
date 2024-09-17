@@ -25,6 +25,29 @@ enum cxi_traffic_class cxip_ofi_to_cxi_tc(uint32_t ofi_tclass)
 	}
 }
 
+static int cxip_cp_find(struct cxip_lni *lni, uint16_t vni,
+		       enum cxi_traffic_class tc,
+		       enum cxi_traffic_class_type tc_type,
+		       struct cxi_cp **cp)
+{
+	struct cxip_remap_cp *sw_cp;
+
+	dlist_foreach_container(&lni->remap_cps, struct cxip_remap_cp, sw_cp,
+				remap_entry) {
+		if (sw_cp->remap_cp.vni == vni && sw_cp->remap_cp.tc == tc &&
+		    sw_cp->remap_cp.tc_type == tc_type) {
+			CXIP_DBG("Reusing SW CP: %u VNI: %u TC: %s TYPE: %s\n",
+				 sw_cp->remap_cp.lcid, sw_cp->remap_cp.vni,
+				 cxi_tc_to_str(sw_cp->remap_cp.tc),
+				 cxi_tc_type_to_str(sw_cp->remap_cp.tc_type));
+			*cp = &sw_cp->remap_cp;
+			return FI_SUCCESS;
+		}
+	}
+
+	return -FI_ENOENT;
+}
+
 static int cxip_cp_get(struct cxip_lni *lni, uint16_t vni,
 		       enum cxi_traffic_class tc,
 		       enum cxi_traffic_class_type tc_type,
@@ -35,21 +58,22 @@ static int cxip_cp_get(struct cxip_lni *lni, uint16_t vni,
 	struct cxip_remap_cp *sw_cp;
 	static const enum cxi_traffic_class remap_tc = CXI_TC_BEST_EFFORT;
 
-	ofi_spin_lock(&lni->lock);
-
 	/* Always prefer SW remapped CPs over allocating HW CP. */
-	dlist_foreach_container(&lni->remap_cps, struct cxip_remap_cp, sw_cp,
-				remap_entry) {
-		if (sw_cp->remap_cp.vni == vni && sw_cp->remap_cp.tc == tc &&
-		    sw_cp->remap_cp.tc_type == tc_type) {
-			CXIP_DBG("Reusing SW CP: %u VNI: %u TC: %s TYPE: %s\n",
-				 sw_cp->remap_cp.lcid, sw_cp->remap_cp.vni,
-				 cxi_tc_to_str(sw_cp->remap_cp.tc),
-				 cxi_tc_type_to_str(sw_cp->remap_cp.tc_type));
-			*cp = &sw_cp->remap_cp;
-			goto success_unlock;
-		}
-	}
+	pthread_rwlock_rdlock(&lni->cp_lock);
+	ret = cxip_cp_find(lni, vni, tc, tc_type, cp);
+	pthread_rwlock_unlock(&lni->cp_lock);
+
+	if (ret == FI_SUCCESS)
+		return FI_SUCCESS;
+
+	/* Need to repeat search with write lock held to ensure no CPs have
+	 * been added in threaded env.
+	 */
+	pthread_rwlock_wrlock(&lni->cp_lock);
+	ret = cxip_cp_find(lni, vni, tc, tc_type, cp);
+
+	if (ret == FI_SUCCESS)
+		goto success_unlock;
 
 	/* Allocate a new SW remapped CP entry and attempt to allocate the
 	 * user requested HW CP.
@@ -113,14 +137,14 @@ found_hw_cp:
 	*cp = &sw_cp->remap_cp;
 
 success_unlock:
-	ofi_spin_unlock(&lni->lock);
+	pthread_rwlock_unlock(&lni->cp_lock);
 
 	return FI_SUCCESS;
 
 err_free_sw_cp:
 	free(sw_cp);
 err_unlock:
-	ofi_spin_unlock(&lni->lock);
+	pthread_rwlock_unlock(&lni->cp_lock);
 
 	return ret;
 }

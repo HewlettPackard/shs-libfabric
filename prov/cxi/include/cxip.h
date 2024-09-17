@@ -709,7 +709,7 @@ struct cxip_lni {
 	/* Software remapped communication profiles. */
 	struct dlist_entry remap_cps;
 
-	ofi_spin_t lock;
+	pthread_rwlock_t cp_lock;
 };
 
 /* A portals table define a network endpoint address. The endpoint address is
