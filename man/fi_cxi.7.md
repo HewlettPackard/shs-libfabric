@@ -1577,7 +1577,7 @@ To enable PCIe fetch add for libfabric, the following CXI driver kernel module
 parameter must be set to non-zero.
 
 ```
-/sys/module/cxi_core/parameters/amo_remap_to_pcie_fadd
+/sys/module/cxi_ss1/parameters/amo_remap_to_pcie_fadd
 ```
 
 The following are the possible values for this kernel module and the impact of
