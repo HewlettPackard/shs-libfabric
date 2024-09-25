@@ -12,7 +12,7 @@ OS_TYPE=`cat /etc/os-release | grep "^ID=" | sed "s/\"//g" | cut -d "=" -f 2`
 OS_VERSION=`cat /etc/os-release | grep "^VERSION_ID=" | sed "s/\"//g" | cut -d "=" -f 2`
 OS_MAJOR_VERSION=$(echo $OS_VERSION | cut -d "." -f 1)
 
-RHEL_GPU_SUPPORTED_VERSIONS="8.8 8.9 8.10 9.3 9.4"
+RHEL_GPU_SUPPORTED_VERSIONS="8.9 8.10 9.4"
 
 # Override product since we are only using the internal product stream to avoid
 # clashing with slingshot10 libfabric
@@ -46,7 +46,6 @@ case "${OBS_TARGET_OS}" in
     sle15_sp4_*)    COS_BRANCH='release/cos-2.5' ;;
     cos_2_5_*)      COS_BRANCH='release/cos-2.5' ;;
     csm_1_4_*)      COS_BRANCH='release/cos-2.5' ;;
-    cos_3_0_*)      COS_BRANCH='release/cos-3.0' ;;
     cos_3_1_*)      COS_BRANCH='release/uss-1.1' ;;
     cos_3_2_*)      COS_BRANCH='release/uss-1.2' ;;
     csm_1_5_*)      COS_BRANCH='release/uss-1.1' ;;
@@ -186,9 +185,6 @@ function install_gdrcopy() {
     cos_2_5*)
       install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
       ;;
-    cos_3_0*)
-      install_gdrcopy_cne "cne-1.0" "sle15_sp5_cn"
-      ;;
     cos_3_1*)
       install_gdrcopy_uss "uss-1.1" "sle15_sp5"
       ;;
@@ -310,8 +306,6 @@ elif command -v zypper > /dev/null; then
         csm_1_5_*)      CUDA_RPMS="nvhpc"
                     ;;
         csm_1_6_*)      CUDA_RPMS="nvhpc"
-                    ;;
-        cos_3_0_*)      CUDA_RPMS="nvhpc"
                     ;;
         cos_3_1_*)      CUDA_RPMS="nvhpc"
                     ;;
