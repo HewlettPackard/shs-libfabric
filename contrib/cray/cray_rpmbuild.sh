@@ -65,12 +65,6 @@ if [[ "${TARGET_OS}" == sle*  || "${TARGET_OS}" == rhel* ]]; then
     CUDA_CONFIG="--with-cuda=/usr/local/cuda --enable-cuda-dlopen"
     GDRCOPY_CONFIG="--enable-gdrcopy-dlopen"
 
-    if [[  ${TARGET_OS} == sle15_sp6* ]]; then
-        ROCM_CONFIG=""
-        CUDA_CONFIG=""
-        GDRCOPY_CONFIG=""
-    fi
-
 else
     ROCM_CONFIG=""
     CUDA_CONFIG=""

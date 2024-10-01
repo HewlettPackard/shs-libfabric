@@ -116,10 +116,15 @@ function install_gdrcopy_cne() {
 function install_gdrcopy_uss() {
   release=$1
   os=$2
-
-  zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+  if [[ "$release" == "master" ]]; then
+    zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
+        --priority 20 --name=gdr-copy \
+         ${ARTI_URL}/uss-rpm-master-local/dev/master/${os}/ gdr-copy
+  else
+    zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
         --priority 20 --name=gdr-copy \
          ${ARTI_URL}/uss-rpm-stable-local/release/${release}/${os}/ gdr-copy
+  fi
   zypper --non-interactive --no-gpg-checks install gdrcopy gdrcopy-devel 
 }
 
@@ -189,8 +194,7 @@ function install_gdrcopy() {
       install_gdrcopy_uss "uss-1.1" "sle15_sp5"
       ;;
     cos_3_2*)
-      # FIX THIS when GDR support is enabled
-      continue
+      install_gdrcopy_uss "master" "sle15_sp6"
       ;;
     csm_1_4*)
       install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
@@ -199,8 +203,7 @@ function install_gdrcopy() {
       install_gdrcopy_uss "uss-1.1" "sle15_sp5"
       ;;
     csm_1_6*)
-      # FIX THIS when GDR support is enabled
-      continue
+      install_gdrcopy_uss "master" "sle15_sp6"
       ;;
     sle15_sp5*)
       if [[ "$TARGET_ARCH" == "aarch64" ]]; then
@@ -210,8 +213,7 @@ function install_gdrcopy() {
       fi
       ;;
     sle15_sp6*)
-      # FIX THIS when GPU is enabled
-      continue
+      install_gdrcopy_uss "master" "sle15_sp6"
       ;;
     *)
       install_gdrcopy_nvidia
@@ -323,11 +325,6 @@ elif command -v zypper > /dev/null; then
         --priority 20 --name=${PRODUCT}-${ARTI_LOCATION} \
          ${ARTI_URL}/${PRODUCT}-${ARTI_LOCATION}/${ARTI_BRANCH}/${OBS_TARGET_OS}/ \
          ${PRODUCT}-${ARTI_LOCATION}
-
-    if [[  ${TARGET_OS} == sle15_sp6* ]]; then
-          with_rocm=0
-          with_cuda=0
-    fi
 
     if [ $with_cuda -eq 1 ]; then
         if [[ "${COS_BRANCH}" == release/uss-* ]]; then
