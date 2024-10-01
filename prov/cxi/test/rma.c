@@ -14,6 +14,59 @@
 
 #define RMA_WIN_KEY 0x1f
 
+TestSuite(rma_no_init, .timeout = CXIT_DEFAULT_TIMEOUT);
+
+Test(rma_no_init, xfer_disable_optimized_mrs_disable_prov_key_cache)
+{
+	int ret;
+	bool value;
+	uint64_t key;
+	struct mem_region mem_window;
+	size_t len = 16 * 1024;
+	uint8_t *send_buf;
+	struct fi_cq_tagged_entry cqe;
+	struct cxip_mr_key mr_key;
+
+	send_buf = calloc(1, len);
+	cr_assert_not_null(send_buf, "send_buf alloc failed");
+
+	ret = setenv("CXIP_TEST_PROV_KEY", "1", 1);
+	cr_assert_eq(ret, 0);
+
+	cxit_setup_rma();
+
+	value = false;
+	ret = fi_control(&cxit_domain->fid,
+			 FI_OPT_CXI_SET_OPTIMIZED_MRS, &value);
+	cr_assert_eq(ret, FI_SUCCESS, "Unexpected call failure");
+
+	value = false;
+	ret = fi_control(&cxit_domain->fid,
+			 FI_OPT_CXI_SET_PROV_KEY_CACHE, &value);
+	cr_assert_eq(ret, FI_SUCCESS, "Unexpected call failure");
+
+	ret = mr_create(len, FI_REMOTE_READ | FI_REMOTE_WRITE, 0, &key,
+			&mem_window);
+	cr_assert_eq(ret, FI_SUCCESS);
+
+	mr_key.raw = key;
+	cr_assert(mr_key.opt == 0);
+
+	ret = fi_write(cxit_ep, send_buf, len, NULL, cxit_ep_fi_addr, 0, key,
+		       NULL);
+	cr_assert(ret == FI_SUCCESS);
+
+	/* Wait for async event indicating data has been sent */
+	ret = cxit_await_completion(cxit_tx_cq, &cqe);
+	cr_assert_eq(ret, 1, "fi_cq_read failed %d", ret);
+
+	validate_tx_event(&cqe, FI_RMA | FI_WRITE, NULL);
+
+	mr_destroy(&mem_window);
+	cxit_teardown_rma();
+	free(send_buf);
+}
+
 TestSuite(rma, .init = cxit_setup_rma, .fini = cxit_teardown_rma,
 	  .timeout = CXIT_DEFAULT_TIMEOUT);
 
@@ -1958,7 +2011,7 @@ static void mr_overrun(bool write)
           ret = fi_write(cxit_ep, local, good_len, NULL, cxit_ep_fi_addr, 0,
                     key_val, NULL);
           cr_assert_eq(ret, FI_SUCCESS, "fi_write() failed (%d)", ret);
-     } 
+     }
      else {
           ret = fi_read(cxit_ep, local, good_len, NULL, cxit_ep_fi_addr, 0,
                     key_val, NULL);
@@ -1984,7 +2037,7 @@ static void mr_overrun(bool write)
           cr_assert_eq(ret, FI_SUCCESS, "fi_write() failed (%d)", ret);
      }
      else {
-          ret = fi_read(cxit_ep, local, good_len*2, NULL, cxit_ep_fi_addr, 
+          ret = fi_read(cxit_ep, local, good_len*2, NULL, cxit_ep_fi_addr,
                     0, key_val, NULL);
           cr_assert_eq(ret, FI_SUCCESS, "fi_read() failed (%d)", ret);
      }
