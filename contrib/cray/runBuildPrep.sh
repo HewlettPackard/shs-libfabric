@@ -194,7 +194,7 @@ function install_gdrcopy() {
       install_gdrcopy_uss "uss-1.1" "sle15_sp5"
       ;;
     cos_3_2*)
-      install_gdrcopy_uss "master" "sle15_sp6"
+      install_gdrcopy_uss "uss-1.2" "sle15_sp6"
       ;;
     csm_1_4*)
       install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
@@ -203,7 +203,7 @@ function install_gdrcopy() {
       install_gdrcopy_uss "uss-1.1" "sle15_sp5"
       ;;
     csm_1_6*)
-      install_gdrcopy_uss "master" "sle15_sp6"
+      install_gdrcopy_uss "uss-1.2" "sle15_sp6"
       ;;
     sle15_sp5*)
       if [[ "$TARGET_ARCH" == "aarch64" ]]; then
@@ -213,7 +213,7 @@ function install_gdrcopy() {
       fi
       ;;
     sle15_sp6*)
-      install_gdrcopy_uss "master" "sle15_sp6"
+      install_gdrcopy_uss "uss-1.2" "sle15_sp6"
       ;;
     *)
       install_gdrcopy_nvidia
