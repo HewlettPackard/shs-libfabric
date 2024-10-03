@@ -4,14 +4,11 @@
  * Copyright (c) 2014 Intel Corporation, Inc. All rights reserved.
  * Copyright (c) 2016 Cisco Systems, Inc. All rights reserved.
  * Copyright (c) 2017 DataDirect Networks, Inc. All rights reserved.
- * Copyright (c) 2018-2023 Hewlett Packard Enterprise Development LP
+ * Copyright (c) 2018-2024 Hewlett Packard Enterprise Development LP
  */
 
 #ifndef _CXIP_PROV_H_
 #define _CXIP_PROV_H_
-
-/* NETCASSINI-6560 disable FI_COLLECTIVE until released */
-#define NETCASSINI_6560_DISABLE	1
 
 #include <netinet/ether.h>
 #include "config.h"
@@ -129,7 +126,8 @@
 #define CXIP_EP_PRI_CAPS \
 	(FI_RMA | FI_ATOMICS | FI_TAGGED | FI_RECV | FI_SEND | \
 	 FI_READ | FI_WRITE | FI_REMOTE_READ | FI_REMOTE_WRITE | \
-	 FI_DIRECTED_RECV | FI_MSG | FI_NAMED_RX_CTX | FI_HMEM)
+	 FI_DIRECTED_RECV | FI_MSG | FI_NAMED_RX_CTX | FI_HMEM | \
+	 FI_COLLECTIVE)
 #define CXIP_EP_SEC_CAPS \
 	(FI_SOURCE | FI_SOURCE_ERR | FI_LOCAL_COMM | \
 	 FI_REMOTE_COMM | FI_RMA_EVENT | FI_MULTI_RECV | FI_FENCE | FI_TRIGGER)
@@ -181,12 +179,17 @@
 #define	CXIP_COLL_MIN_RX_SIZE		4096
 #define	CXIP_COLL_MIN_MULTI_RECV	64
 #define	CXIP_COLL_MAX_DATA_SIZE		32
-#define	CXIP_COLL_MAX_SEQNO		(1 << 10)
+#define	CXIP_COLL_MAX_SEQNO		((1 << 10) - 1)
+#define	CXIP_COLL_MOD_SEQNO		(CXIP_COLL_MAX_SEQNO - 1)
+
 // TODO adjust based on performance testing
-#define	CXIP_COLL_MIN_RETRY_USEC	1
-#define	CXIP_COLL_MAX_RETRY_USEC	32000
-#define	CXIP_COLL_MIN_TIMEOUT_USEC	1
-#define	CXIP_COLL_MAX_TIMEOUT_USEC	32000
+#define CXIP_COLL_MIN_RETRY_USEC	1
+#define CXIP_COLL_MAX_RETRY_USEC	32000
+#define CXIP_COLL_MIN_TIMEOUT_USEC	1
+#define CXIP_COLL_MAX_TIMEOUT_USEC	32000
+#define CXIP_COLL_MIN_FM_TIMEOUT_MSEC	1
+#define CXIP_COLL_DFL_FM_TIMEOUT_MSEC	100
+#define CXIP_COLL_MAX_FM_TIMEOUT_MSEC	1000000
 
 #define CXIP_REQ_BUF_HEADER_MAX_SIZE (sizeof(struct c_port_fab_hdr) + \
 	sizeof(struct c_port_unrestricted_hdr))
@@ -297,6 +300,7 @@ struct cxip_environment {
 	char *coll_job_step_id;
 	size_t coll_retry_usec;
 	size_t coll_timeout_usec;
+	size_t coll_fm_timeout_msec;
 	char *coll_fabric_mgr_url;
 	char *coll_mcast_token;
 	size_t hwcoll_addrs_per_job;
@@ -2755,18 +2759,7 @@ enum cxip_coll_state {
 	CXIP_COLL_STATE_FAULT,
 };
 
-/* Similar to C_RC_* provider errors, but pure libfabric */
-/* These should be in priority order, from lowest to highest */
-enum cxip_coll_prov_errno {
-	CXIP_PROV_ERRNO_OK = -1,		// good
-	CXIP_PROV_ERRNO_PTE = -2,		// PTE setup failure
-	CXIP_PROV_ERRNO_MCAST_INUSE = -3,	// multicast in-use
-	CXIP_PROV_ERRNO_HWROOT_INUSE = -4,	// hwroot in-use
-	CXIP_PROV_ERRNO_MCAST_INVALID = -5,	// multicast invalid
-	CXIP_PROV_ERRNO_HWROOT_INVALID = -6,	// hwroot invalid
-	CXIP_PROV_ERRNO_CURL = -7,		// CURL failure
-	CXIP_PROV_ERRNO_LAST = -8,		// last error code (unused)
-};
+const char *cxip_strerror(int prov_errno);
 
 /* Rosetta reduction engine error codes */
 typedef enum cxip_coll_rc {
@@ -2822,6 +2815,33 @@ struct cxip_coll_data {
 	bool initialized;
 };
 
+struct coll_counters {
+	int32_t coll_recv_cnt;
+	int32_t send_cnt;
+	int32_t recv_cnt;
+	int32_t pkt_cnt;
+	int32_t seq_err_cnt;
+	int32_t tmout_cnt;
+};
+
+struct cxip_coll_metrics_ep {
+	int myrank;
+	bool isroot;
+};
+struct cxip_coll_metrics {
+	long red_count_bad;
+	long red_count_full;
+	long red_count_partial;
+	long red_count_unreduced;
+	struct cxip_coll_metrics_ep ep_data;
+};
+
+void cxip_coll_reset_mc_ctrs(struct fid_mc *mc);
+void cxip_coll_get_mc_ctrs(struct fid_mc *mc, struct coll_counters *counters);
+
+void cxip_coll_init_metrics(void);
+void cxip_coll_get_metrics(struct cxip_coll_metrics *metrics);
+
 struct cxip_coll_reduction {
 	struct cxip_coll_mc *mc_obj;		// parent mc_obj
 	uint32_t red_id;			// reduction id
@@ -2851,6 +2871,7 @@ struct cxip_coll_mc {
 	struct cxip_zbcoll_obj *zb;		// zb object for zbcol
 	struct cxip_coll_pte *coll_pte;		// collective PTE
 	struct timespec timeout;		// state machine timeout
+	struct timespec curlexpires;		// CURL delete expiration timeout
 	fi_addr_t mynode_fiaddr;		// fi_addr of this node
 	int mynode_idx;				// av_set index of this node
 	uint32_t hwroot_idx;			// av_set index of hwroot node
@@ -3208,8 +3229,6 @@ int cxip_coll_arm_disable(struct fid_mc *mc, bool disable);
 void cxip_coll_limit_red_id(struct fid_mc *mc, int max_red_id);
 void cxip_coll_drop_send(struct cxip_coll_reduction *reduction);
 void cxip_coll_drop_recv(struct cxip_coll_reduction *reduction);
-
-void cxip_coll_reset_mc_ctrs(struct fid_mc *mc);
 
 void cxip_dbl_to_rep(struct cxip_repsum *x, double d);
 void cxip_rep_to_dbl(double *d, const struct cxip_repsum *x);

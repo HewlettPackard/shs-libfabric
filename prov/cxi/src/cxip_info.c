@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
  *
- * Copyright (c) 2019,2022 Hewlett Packard Enterprise Development LP
+ * Copyright (c) 2019,2022-2024 Hewlett Packard Enterprise Development LP
  */
 
 /* CXI fabric discovery implementation. */
@@ -665,6 +665,7 @@ struct cxip_environment cxip_env = {
 	.coll_fabric_mgr_url = NULL,
 	.coll_retry_usec = CXIP_COLL_MAX_RETRY_USEC,
 	.coll_timeout_usec = CXIP_COLL_MAX_TIMEOUT_USEC,
+	.coll_fm_timeout_msec = CXIP_COLL_DFL_FM_TIMEOUT_MSEC,
 	.coll_use_dma_put = false,
 	.telemetry_rgid = -1,
 	.disable_hmem_dev_register = 0,
@@ -1251,6 +1252,17 @@ static void cxip_env_init(void)
 	if (cxip_env.coll_timeout_usec > CXIP_COLL_MAX_TIMEOUT_USEC)
 		cxip_env.coll_timeout_usec = CXIP_COLL_MAX_TIMEOUT_USEC;
 
+	fi_param_define(&cxip_prov, "coll_fm_timeout_msec", FI_PARAM_SIZE_T,
+		"FM API timeout (msec) (default %d, min %d, max %d).",
+		cxip_env.coll_fm_timeout_msec, CXIP_COLL_MIN_FM_TIMEOUT_MSEC,
+		CXIP_COLL_MAX_FM_TIMEOUT_MSEC);
+	fi_param_get_size_t(&cxip_prov, "coll_fm_timeout_msec",
+			    &cxip_env.coll_fm_timeout_msec);
+	if (cxip_env.coll_fm_timeout_msec < CXIP_COLL_MIN_FM_TIMEOUT_MSEC)
+		cxip_env.coll_fm_timeout_msec = CXIP_COLL_MIN_FM_TIMEOUT_MSEC;
+	if (cxip_env.coll_fm_timeout_msec > CXIP_COLL_MAX_FM_TIMEOUT_MSEC)
+		cxip_env.coll_fm_timeout_msec = CXIP_COLL_MAX_FM_TIMEOUT_MSEC;
+
 	fi_param_define(&cxip_prov, "default_tx_size", FI_PARAM_SIZE_T,
 			"Default provider tx_attr.size (default: %lu).",
 			cxip_env.default_tx_size);
@@ -1373,7 +1385,6 @@ static void cxip_alter_caps(struct fi_info *info, const struct fi_info *hints)
 	/* If FI_COLLECTIVE explicitly requested then must enable
 	 * FI_MSG for send and receive if not already enabled.
 	 */
-#if !NETCASSINI_6560_DISABLE
 	if (hints && hints->caps && (hints->caps & FI_COLLECTIVE)) {
 		if (!(info->caps & (FI_MSG | FI_TAGGED))) {
 			info->caps |= FI_MSG | FI_SEND | FI_RECV;
@@ -1381,7 +1392,6 @@ static void cxip_alter_caps(struct fi_info *info, const struct fi_info *hints)
 			info->rx_attr->caps |= FI_MSG | FI_RECV;
 		}
 	}
-#endif	/* NETCASSINI_6560_DISABLE */
 }
 
 static void cxip_alter_tx_attr(struct fi_tx_attr *attr,

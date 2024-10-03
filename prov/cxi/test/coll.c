@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
  *
  * Copyright (c) 2017-2019 Intel Corporation. All rights reserved.
- * Copyright (c) 2020-2023 Hewlett Packard Enterprise Development LP
+ * Copyright (c) 2020-2024 Hewlett Packard Enterprise Development LP
  */
 
 /*
@@ -37,53 +37,6 @@
 
 #define	MIN(a,b) (((a)<(b))?(a):(b))
 
-#if !NETCASSINI_6560_DISABLE
-
-/**
- * Sanity tests for proper integration with EP, enable/disable checks.
- */
-
-TestSuite(coll_init, .disabled = false, .timeout = CXIT_DEFAULT_TIMEOUT);
-
-/* Test EP close without explicitly enabling collectives.
- */
-Test(coll_init, noop)
-{
-	struct cxip_ep *ep;
-
-	cxit_setup_rma();
-	ep = container_of(cxit_ep, struct cxip_ep, ep);
-	cr_assert(ep->ep_obj->coll.enabled,
-		  "coll not enabled on startup\n");
-
-	cr_assert(sizeof(struct cxip_coll_accumulator) >=
-		  sizeof(struct cxip_coll_data),
-		  "sizeof(cxip_coll_accumulator=%ld <"
-		  "sizeof(cxip_coll_data=%ld",
-		  sizeof(struct cxip_coll_accumulator),
-		  sizeof(struct cxip_coll_data));
-
-	cxit_teardown_rma();
-}
-
-/* Test EP close after explicitly enabling collectives.
- */
-Test(coll_init, enable)
-{
-	struct cxip_ep *ep;
-	int ret;
-
-	cxit_setup_rma();
-	ep = container_of(cxit_ep, struct cxip_ep, ep);
-
-	ret = cxip_coll_enable(ep);
-	cr_assert(ret == 0, "cxip_coll_enable failed: %d\n", ret);
-	cr_assert(ep->ep_obj->coll.enabled,
-		  "coll not enabled after enabling\n");
-	cxit_teardown_rma();
-}
-
-/***************************************/
 /**
  * Sanity tests for proper integration with EP, enable/disable checks.
  */
@@ -413,7 +366,7 @@ Test(coll_join, retry_getgroup) {
 	TRACE("=========================\n");
 	TRACE("join retry getgroup\n");
 	for (node = 0; node < 5; node++) {
-		cxip_trap_set(node, CXIP_TRAP_GETGRP, -FI_EAGAIN);
+		cxip_trap_set(node, CXIP_TRAP_GETGRP, -FI_EAGAIN, 0);
 		_create_netsim_collective(5, true, FI_SUCCESS);
 		_wait_for_join(5, FI_SUCCESS, 0);
 		_destroy_netsim_collective();
@@ -427,7 +380,7 @@ Test(coll_join, retry_broadcast) {
 	TRACE("=========================\n");
 	TRACE("join retry broadcast\n");
 	for (node = 0; node < 5; node++) {
-		cxip_trap_set(node, CXIP_TRAP_BCAST, -FI_EAGAIN);
+		cxip_trap_set(node, CXIP_TRAP_BCAST, -FI_EAGAIN, 0);
 		_create_netsim_collective(5, true, FI_SUCCESS);
 		_wait_for_join(5, FI_SUCCESS, 0);
 		_destroy_netsim_collective();
@@ -441,7 +394,7 @@ Test(coll_join, retry_reduce) {
 	TRACE("=========================\n");
 	TRACE("join retry reduce\n");
 	for (node = 0; node < 5; node++) {
-		cxip_trap_set(node, CXIP_TRAP_REDUCE, -FI_EAGAIN);
+		cxip_trap_set(node, CXIP_TRAP_REDUCE, -FI_EAGAIN, 0);
 		_create_netsim_collective(5, true, FI_SUCCESS);
 		_wait_for_join(5, FI_SUCCESS, 0);
 		_destroy_netsim_collective();
@@ -455,9 +408,10 @@ Test(coll_join, fail_ptlte) {
 	TRACE("=========================\n");
 	TRACE("join fail mixed errors\n");
 	for (node = 0; node < 5; node++) {
-		cxip_trap_set(node, CXIP_TRAP_INITPTE, -FI_EFAULT);
+		cxip_trap_set(node, CXIP_TRAP_INITPTE, -FI_EAVAIL,
+			      FI_CXI_ERRNO_JOIN_FAIL_PTE);
 		_create_netsim_collective(5, true, FI_SUCCESS);
-		_wait_for_join(5, -FI_EAVAIL, CXIP_PROV_ERRNO_PTE);
+		_wait_for_join(5, -FI_ECONNREFUSED, FI_CXI_ERRNO_JOIN_FAIL_PTE);
 		_destroy_netsim_collective();
 		cxip_trap_close();
 	}
@@ -1104,7 +1058,7 @@ void _allreduce(int start_node, int bad_node, int concur)
 		uint64_t expval, actval;
 
 		/* If there was a bad node, all reductions should fail */
-		rc_err0 = (bad_node < 0) ? 0 : CXIP_COLL_RC_OP_MISMATCH;
+		rc_err0 = (bad_node < 0) ? 0 : FI_CXI_ERRNO_RED_OP_MISMATCH;
 		for (node = 0; node < nodes; node++) {
 			_allreduce_wait(rx_cq_fid, tx_cq_fid,
 					&context[node][first]);
@@ -1866,8 +1820,6 @@ Test(coll_reduce_ops, bor)
 	cr_assert(!ret, "_allreduceop() failed\n");
 	ret = _check_ival(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed\n");
 	STDCLEANUP
 }
 
@@ -1891,8 +1843,6 @@ Test(coll_reduce_ops, band)
 	cr_assert(!ret, "_allreduceop() failed = %d\n", ret);
 	ret = _check_ival(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed\n");
 	STDCLEANUP
 }
 
@@ -1916,8 +1866,6 @@ Test(coll_reduce_ops, bxor)
 	cr_assert(!ret, "_allreduceop() failed\n");
 	ret = _check_ival(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed\n");
 	STDCLEANUP
 }
 
@@ -1941,8 +1889,6 @@ Test(coll_reduce_ops, imin)
 	cr_assert(!ret, "_allreduceop() failed\n");
 	ret = _check_ival(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed\n");
 	STDCLEANUP
 }
 
@@ -1966,8 +1912,6 @@ Test(coll_reduce_ops, imax)
 	cr_assert(!ret, "_allreduceop() failed\n");
 	ret = _check_ival(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed\n");
 	STDCLEANUP
 }
 
@@ -1991,8 +1935,6 @@ Test(coll_reduce_ops, isum)
 	cr_assert(!ret, "_allreduceop() failed\n");
 	ret = _check_ival(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed\n");
 	STDCLEANUP
 }
 
@@ -2024,8 +1966,6 @@ Test(coll_reduce_ops, iminmaxloc)
 	cr_assert(!ret, "_allreduceop() failed = %d\n", ret);
 	ret = _check_iminmax(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed\n");
 	STDCLEANUP
 }
 
@@ -2055,8 +1995,6 @@ Test(coll_reduce_ops, fsum)
 	cr_assert(!ret, "_allreduceop() failed\n");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_FLT_INEXACT);
-	cr_assert(!ret, "rc failed\n");
 
 	/* Note: inexact computation is guaranteed by the small value included
 	 * in the data set. There is a hidden trick when performing the
@@ -2086,8 +2024,6 @@ Test(coll_reduce_ops, fmin)
 	cr_assert(!ret, "_allreduceop failed normal");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed normal\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed normal\n");
 
 	data[1].fval[1] = NAN;
 	_predict_fmin(nodes, data, &check, true);
@@ -2095,7 +2031,7 @@ Test(coll_reduce_ops, fmin)
 	cr_assert(!ret, "_allreduceop failed NAN");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed NAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_FLT_OVERFLOW);
+	ret = _check_rc(nodes, context, FI_CXI_ERRNO_RED_FLT_OVERFLOW);
 	cr_assert(!ret, "rc failed NAN\n");
 
 	data[1].fval[1] = _snan64();
@@ -2104,7 +2040,7 @@ Test(coll_reduce_ops, fmin)
 	cr_assert(!ret, "_allreduceop failed sNAN");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed sNAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_FLT_INVALID);
+	ret = _check_rc(nodes, context, FI_CXI_ERRNO_RED_FLT_INVALID);
 	cr_assert(!ret, "rc failed sNAN\n");
 	STDCLEANUP
 }
@@ -2126,8 +2062,6 @@ Test(coll_reduce_ops, fmax)
 	cr_assert(!ret, "_allreduceop failed normal");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed normal\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed normal\n");
 
 	data[1].fval[1] = NAN;
 	_predict_fmax(nodes, data, &check, true);
@@ -2135,7 +2069,7 @@ Test(coll_reduce_ops, fmax)
 	cr_assert(!ret, "_allreduceop failed NAN");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed NAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_FLT_OVERFLOW);
+	ret = _check_rc(nodes, context, FI_CXI_ERRNO_RED_FLT_OVERFLOW);
 	cr_assert(!ret, "rc failed NAN\n");
 
 	data[1].fval[1] = _snan64();
@@ -2144,7 +2078,7 @@ Test(coll_reduce_ops, fmax)
 	cr_assert(!ret, "_allreduceop failed sNAN");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed sNAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_FLT_INVALID);
+	ret = _check_rc(nodes, context, FI_CXI_ERRNO_RED_FLT_INVALID);
 	cr_assert(!ret, "rc failed sNAN\n");
 	STDCLEANUP
 }
@@ -2178,8 +2112,6 @@ Test(coll_reduce_ops, fminmaxloc)
 	cr_assert(!ret, "_allreduceop failed normal");
 	ret = _check_fminmax(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed normal\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed normal\n");
 
 	/* NAN is given preference over number */
 	data[1].fminval = NAN;
@@ -2190,8 +2122,6 @@ Test(coll_reduce_ops, fminmaxloc)
 	cr_assert(!ret, "_allreduceop failed NAN");
 	ret = _check_fminmax(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed NAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed NAN\n");
 
 	/* SNAN is given preference over NAN */
 	data[1].fminval = NAN;
@@ -2203,7 +2133,7 @@ Test(coll_reduce_ops, fminmaxloc)
 	cr_assert(!ret, "_allreduceop failed sNAN");
 	ret = _check_fminmax(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed sNAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_FLT_INVALID);
+	ret = _check_rc(nodes, context, FI_CXI_ERRNO_RED_FLT_INVALID);
 	cr_assert(!ret, "rc failed sNAN\n");
 	STDCLEANUP
 }
@@ -2226,8 +2156,6 @@ Test(coll_reduce_ops, fminnum)
 	cr_assert(!ret, "_allreduceop failed normal");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed normal\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed normal\n");
 
 	/* number is given preference over NAN */
 	data[1].fval[1] = NAN;
@@ -2237,7 +2165,7 @@ Test(coll_reduce_ops, fminnum)
 	cr_assert(!ret, "_allreduceop failed NAN");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed NAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_FLT_OVERFLOW);
+	ret = _check_rc(nodes, context, FI_CXI_ERRNO_RED_FLT_OVERFLOW);
 	cr_assert(!ret, "rc failed NAN\n");
 
 	/* number is given preference over NAN */
@@ -2248,7 +2176,7 @@ Test(coll_reduce_ops, fminnum)
 	cr_assert(!ret, "_allreduceop failed sNAN");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed sNAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_FLT_INVALID);
+	ret = _check_rc(nodes, context, FI_CXI_ERRNO_RED_FLT_INVALID);
 	cr_assert(!ret, "rc failed sNAN\n");
 	STDCLEANUP
 }
@@ -2271,8 +2199,6 @@ Test(coll_reduce_ops, fmaxnum)
 	cr_assert(!ret, "_allreduceop failed normal");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed normal\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed normal\n");
 
 	/* number is given preference over NAN */
 	data[1].fval[1] = NAN;
@@ -2282,7 +2208,7 @@ Test(coll_reduce_ops, fmaxnum)
 	cr_assert(!ret, "_allreduceop failed NAN");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed NAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_FLT_OVERFLOW);
+	ret = _check_rc(nodes, context, FI_CXI_ERRNO_RED_FLT_OVERFLOW);
 	cr_assert(!ret, "rc failed NAN\n");
 
 	/* SNAN is given preference over number */
@@ -2293,7 +2219,7 @@ Test(coll_reduce_ops, fmaxnum)
 	cr_assert(!ret, "_allreduceop failed sNAN");
 	ret = _check_fval(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed sNAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_FLT_INVALID);
+	ret = _check_rc(nodes, context, FI_CXI_ERRNO_RED_FLT_INVALID);
 	cr_assert(!ret, "rc failed sNAN\n");
 	STDCLEANUP
 }
@@ -2327,8 +2253,6 @@ Test(coll_reduce_ops, fminmaxnumloc)
 	cr_assert(!ret, "_allreduceop failed normal");
 	ret = _check_fminmax(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed normal\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed normal\n");
 
 	/* NAN is given preference over number */
 	data[1].fminval = NAN;
@@ -2339,8 +2263,6 @@ Test(coll_reduce_ops, fminmaxnumloc)
 	cr_assert(!ret, "_allreduceop failed NAN");
 	ret = _check_fminmax(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed NAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed NAN\n");
 
 	/* SNAN is given preference over NAN */
 	data[1].fminval = NAN;
@@ -2352,7 +2274,7 @@ Test(coll_reduce_ops, fminmaxnumloc)
 	cr_assert(!ret, "_allreduceop failed sNAN");
 	ret = _check_fminmax(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed sNAN\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_FLT_INVALID);
+	ret = _check_rc(nodes, context, FI_CXI_ERRNO_RED_FLT_INVALID);
 	cr_assert(!ret, "rc failed sNAN\n");
 	STDCLEANUP
 }
@@ -2413,51 +2335,8 @@ Test(coll_reduce_ops, prereduce)
 	/* validate results */
 	ret = _check_ival(nodes, rslt, &check);
 	cr_assert(!ret, "compare failed\n");
-	ret = _check_rc(nodes, context, CXIP_COLL_RC_SUCCESS);
-	cr_assert(!ret, "rc failed\n");
 
 	free(accum1);
 	free(mc_obj);
 	STDCLEANUP
 }
-
-#else	/* NETCASSINI_6560_DISABLE */
-
-/**
- * Sanity tests for proper integration with EP, enable/disable checks.
- */
-
-TestSuite(coll_init, .disabled = false, .timeout = CXIT_DEFAULT_TIMEOUT);
-
-/* Test EP close without explicitly enabling collectives.
- */
-Test(coll_init, noop)
-{
-	struct cxip_ep *ep;
-
-	cxit_setup_rma();
-	ep = container_of(cxit_ep, struct cxip_ep, ep);
-	cr_assert(!ep->ep_obj->coll.enabled,
-		  "coll enabled, should be disabled\n");
-
-	cxit_teardown_rma();
-}
-
-/* Test EP close after explicitly enabling collectives.
- */
-Test(coll_init, enable)
-{
-	struct cxip_ep *ep;
-	int ret;
-
-	cxit_setup_rma();
-	ep = container_of(cxit_ep, struct cxip_ep, ep);
-
-	ret = cxip_coll_enable(ep);
-	cr_assert(!ret, "cxip_coll_enable failed: %d\n", ret);
-	cr_assert(!ep->ep_obj->coll.enabled,
-		  "coll enabled, should be disabled\n");
-	cxit_teardown_rma();
-}
-
-#endif	/* NETCASSINI_6560_DISABLE */

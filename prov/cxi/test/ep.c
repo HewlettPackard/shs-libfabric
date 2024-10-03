@@ -1,7 +1,8 @@
 /*
  * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
  *
- * Copyright (c) 2018 Hewlett Packard Enterprise Development LP
+ * Copyright (c) 2018 Cray Inc. All rights reserved.
+ * Copyright (c) 2020-2024 Hewlett Packard Enterprise Development LP
  */
 
 #include <stdio.h>
@@ -1747,7 +1748,6 @@ Test(ep_caps, atomic_only)
 
 Test(ep_caps, coll_only)
 {
-#if !NETCASSINI_6560_DISABLE
 	struct fi_info *info;
 	int ret;
 
@@ -1762,7 +1762,6 @@ Test(ep_caps, coll_only)
 	fi_freeinfo(info);
 
 	cxit_teardown_getinfo();
-#endif	/* NETCASSINI_6560_DISABLE */
 }
 
 Test(ep_caps, rma_initiator)
