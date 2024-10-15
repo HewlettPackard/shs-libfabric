@@ -201,11 +201,11 @@ static int cxip_mr_enable_std(struct cxip_mr *mr)
 /* If MR event counts are recorded then we can check event counts to determine
  * if invalidate can be skipped.
  */
-static bool cxip_mr_disable_check_count_events(struct cxip_mr *mr)
+static bool cxip_mr_disable_check_count_events(struct cxip_mr *mr,
+					       uint64_t timeout)
 {
 	struct cxip_ep_obj *ep_obj = mr->ep->ep_obj;
-	uint64_t end = ofi_gettime_ns() +
-		cxip_env.mr_cache_events_disable_poll_nsecs;
+	uint64_t end = ofi_gettime_ns() + timeout;
 
 	while (true) {
 
@@ -244,7 +244,7 @@ static int cxip_mr_disable_std(struct cxip_mr *mr)
 	} while (mr->mr_state != CXIP_MR_UNLINKED);
 
 	if (mr->count_events) {
-		count_events_disabled = cxip_mr_disable_check_count_events(mr);
+		count_events_disabled = cxip_mr_disable_check_count_events(mr, cxip_env.mr_cache_events_disable_poll_nsecs);
 		if (count_events_disabled)
 			goto disabled_success;
 
