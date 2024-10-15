@@ -235,7 +235,8 @@ static int cxip_mr_disable_std(struct cxip_mr *mr)
 	/* TODO: Handle -FI_EAGAIN. */
 	ret = cxip_pte_unlink(ep_obj->ctrl.pte, C_PTL_LIST_PRIORITY,
 			      mr->req.req_id, ep_obj->ctrl.tgq);
-	assert(ret == FI_SUCCESS);
+	if (ret != FI_SUCCESS)
+		CXIP_FATAL("Unable to queue unlink command: %d\n", ret);
 
 	do {
 		sched_yield();
