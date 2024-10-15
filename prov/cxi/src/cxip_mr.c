@@ -198,6 +198,29 @@ static int cxip_mr_enable_std(struct cxip_mr *mr)
 	return FI_SUCCESS;
 }
 
+/* If MR event counts are recorded then we can check event counts to determine
+ * if invalidate can be skipped.
+ */
+static bool cxip_mr_disable_check_count_events(struct cxip_mr *mr)
+{
+	struct cxip_ep_obj *ep_obj = mr->ep->ep_obj;
+	uint64_t end = ofi_gettime_ns() +
+		cxip_env.mr_cache_events_disable_poll_nsecs;
+
+	while (true) {
+
+		if (ofi_atomic_get32(&mr->match_events) ==
+		    ofi_atomic_get32(&mr->access_events))
+			return true;
+
+		if (ofi_gettime_ns() >= end)
+			return false;
+
+		sched_yield();
+		cxip_ep_tgt_ctrl_progress_locked(ep_obj);
+	}
+}
+
 /*
  * cxip_mr_disable_std() - Free HW resources from the standard MR.
  *
@@ -207,6 +230,7 @@ static int cxip_mr_disable_std(struct cxip_mr *mr)
 {
 	int ret;
 	struct cxip_ep_obj *ep_obj = mr->ep->ep_obj;
+	bool count_events_disabled;
 
 	/* TODO: Handle -FI_EAGAIN. */
 	ret = cxip_pte_unlink(ep_obj->ctrl.pte, C_PTL_LIST_PRIORITY,
@@ -218,24 +242,24 @@ static int cxip_mr_disable_std(struct cxip_mr *mr)
 		cxip_ep_tgt_ctrl_progress_locked(ep_obj);
 	} while (mr->mr_state != CXIP_MR_UNLINKED);
 
-	/* If MR event counts are recorded then we can check event counts
-	 * to determine if invalidate can be skipped.
-	 */
-	if (!mr->count_events || ofi_atomic_get32(&mr->match_events) !=
-	    ofi_atomic_get32(&mr->access_events)) {
-		/* TODO: Temporary debug helper for DAOS to track if
-		 * Match events detect a need to flush.
-		 */
-		if (mr->count_events)
-			CXIP_WARN("Match events required pte LE invalidate\n");
+	if (mr->count_events) {
+		count_events_disabled = cxip_mr_disable_check_count_events(mr);
+		if (count_events_disabled)
+			goto disabled_success;
 
-		ret = cxil_invalidate_pte_le(ep_obj->ctrl.pte->pte, mr->key,
-					     C_PTL_LIST_PRIORITY);
-		if (ret)
-			CXIP_WARN("MR %p key 0x%016lX invalidate failed %d\n",
-				  mr, mr->key, ret);
+		CXIP_WARN("Match events required pte LE invalidate: match_events=%u access_events=%u\n",
+			  ofi_atomic_get32(&mr->match_events),
+			  ofi_atomic_get32(&mr->access_events));
 	}
 
+
+	ret = cxil_invalidate_pte_le(ep_obj->ctrl.pte->pte, mr->key,
+				     C_PTL_LIST_PRIORITY);
+	if (ret)
+		CXIP_WARN("MR %p key 0x%016lX invalidate failed %d\n", mr,
+			  mr->key, ret);
+
+disabled_success:
 	mr->enabled = false;
 
 	CXIP_DBG("Standard MR disabled: %p (key: 0x%016lX)\n", mr, mr->key);

@@ -1294,6 +1294,9 @@ The CXI provider checks for the following environment variables:
 :   Enable enforcement of triggered operation limit. Doing this can prevent
     fi_control(FI_QUEUE_WORK) deadlocking at the cost of performance.
 
+*FI_CXI_MR_CACHE_EVENTS_DISABLE_POLL_NSECS*
+:   Max amount of time to poll when disabling an MR configured with MR match events.
+
 Note: Use the fi_info utility to query provider environment variables:
 <code>fi_info -p cxi -e</code>
 

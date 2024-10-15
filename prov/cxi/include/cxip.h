@@ -118,6 +118,8 @@
 #define CXIP_UX_BUFFER_SIZE		(CXIP_OFLOW_BUF_MIN_POSTED * \
 					 CXIP_OFLOW_BUF_SIZE)
 
+#define CXIP_MR_CACHE_EVENTS_DISABLE_POLL_NSECS 100000U
+
 /* When device memory is safe to access via load/store then the
  * CPU will be used to move data below this threshold.
  */
@@ -316,6 +318,7 @@ struct cxip_environment {
 	int enable_trig_op_limit;
 	int hybrid_posted_recv_preemptive;
 	int hybrid_unexpected_msg_preemptive;
+	size_t mr_cache_events_disable_poll_nsecs;
 };
 
 extern struct cxip_environment cxip_env;
