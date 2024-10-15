@@ -257,8 +257,8 @@ static int cxip_mr_disable_std(struct cxip_mr *mr)
 	ret = cxil_invalidate_pte_le(ep_obj->ctrl.pte->pte, mr->key,
 				     C_PTL_LIST_PRIORITY);
 	if (ret)
-		CXIP_WARN("MR %p key 0x%016lX invalidate failed %d\n", mr,
-			  mr->key, ret);
+		CXIP_FATAL("MR %p key 0x%016lX invalidate failed %d\n", mr,
+			   mr->key, ret);
 
 disabled_success:
 	mr->enabled = false;
