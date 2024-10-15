@@ -674,6 +674,8 @@ struct cxip_environment cxip_env = {
 	.enable_trig_op_limit = false,
 	.mr_cache_events_disable_poll_nsecs =
 		CXIP_MR_CACHE_EVENTS_DISABLE_POLL_NSECS,
+	.mr_cache_events_disable_le_poll_nsecs =
+		CXIP_MR_CACHE_EVENTS_DISABLE_LE_POLL_NSECS,
 };
 
 static void cxip_env_init(void)
@@ -1352,6 +1354,12 @@ static void cxip_env_init(void)
 			cxip_env.mr_cache_events_disable_poll_nsecs);
 	fi_param_get_size_t(&cxip_prov, "mr_cache_events_disable_poll_nsecs",
 			    &cxip_env.mr_cache_events_disable_poll_nsecs);
+
+	fi_param_define(&cxip_prov, "mr_cache_events_disable_le_poll_nsecs", FI_PARAM_SIZE_T,
+			"Max amount of time to poll when LE invalidate disabling an MR configured with MR match events (default: %lu).",
+			cxip_env.mr_cache_events_disable_le_poll_nsecs);
+	fi_param_get_size_t(&cxip_prov, "mr_cache_events_disable_le_poll_nsecs",
+			    &cxip_env.mr_cache_events_disable_le_poll_nsecs);
 
 	set_system_page_size();
 }

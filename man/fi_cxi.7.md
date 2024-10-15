@@ -1297,6 +1297,10 @@ The CXI provider checks for the following environment variables:
 *FI_CXI_MR_CACHE_EVENTS_DISABLE_POLL_NSECS*
 :   Max amount of time to poll when disabling an MR configured with MR match events.
 
+*FI_CXI_MR_CACHE_EVENTS_DISABLE_LE_POLL_NSECS*
+:   Max amount of time to poll when LE invalidate disabling an MR configured with MR
+    match events.
+
 Note: Use the fi_info utility to query provider environment variables:
 <code>fi_info -p cxi -e</code>
 

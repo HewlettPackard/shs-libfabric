@@ -253,12 +253,20 @@ static int cxip_mr_disable_std(struct cxip_mr *mr)
 			  ofi_atomic_get32(&mr->access_events));
 	}
 
-
 	ret = cxil_invalidate_pte_le(ep_obj->ctrl.pte->pte, mr->key,
 				     C_PTL_LIST_PRIORITY);
 	if (ret)
 		CXIP_FATAL("MR %p key 0x%016lX invalidate failed %d\n", mr,
 			   mr->key, ret);
+
+	/* For LE invalidate and MR events, need to flush event queues until
+	 * access equals match.
+	 */
+	if (mr->count_events) {
+		count_events_disabled = cxip_mr_disable_check_count_events(mr, cxip_env.mr_cache_events_disable_le_poll_nsecs);
+		if (!count_events_disabled)
+			CXIP_FATAL("Failed LE MR invalidation\n");
+	}
 
 disabled_success:
 	mr->enabled = false;
