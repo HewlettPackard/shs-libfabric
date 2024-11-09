@@ -10,7 +10,7 @@ function move_rpms() {
 	fi
 
 	# Move the RPMs and SRPMS to where the "Publish" stage expects to find them
-	mv `find rpmbuild/RPMS | grep rpm$` `find rpmbuild/SRPMS | grep rpm$` RPMS
+	cp `find rpmbuild/RPMS | grep rpm$` `find rpmbuild/SRPMS | grep rpm$` RPMS
 	chmod a+rX -R RPMS
 }
 
@@ -55,20 +55,23 @@ configure_options="LDFLAGS=-Wl,--build-id --enable-only --enable-restricted-dl"
 
 rpmbuilddir=$PWD/rpmbuild
 
-if [[ "${TARGET_OS}" == sle*  || "${TARGET_OS}" == rhel* ]]; then
+with_cuda=0
+with_rocm=0
 
-    if [[ "${TARGET_ARCH}" == x86_64 ]]; then
-        ROCM_CONFIG="--with-rocr=/opt/rocm --enable-rocr-dlopen"
-    else
-        ROCM_CONFIG=""
-    fi
+if rpm -q cuda-drivers; then
+    with_cuda=1
     CUDA_CONFIG="--with-cuda=/usr/local/cuda --enable-cuda-dlopen"
     GDRCOPY_CONFIG="--enable-gdrcopy-dlopen"
+else
+    CUDA_CONFIG=""
+    GDRCOPY_CONFIG=""    
+fi
 
+if rpm -q amdgpu-dkms; then
+    with_rocm=1
+    ROCM_CONFIG="--with-rocr=/opt/rocm --enable-rocr-dlopen"
 else
     ROCM_CONFIG=""
-    CUDA_CONFIG=""
-    GDRCOPY_CONFIG=""
 fi
 
 if [[ ( ${TARGET_OS} == sle15_sp4* || ${TARGET_OS} == sle15_sp5* ) \

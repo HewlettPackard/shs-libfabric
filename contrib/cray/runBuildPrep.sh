@@ -40,18 +40,36 @@ fi
 
 TARGET_OS_SHORT=$(echo $TARGET_OS | sed -E 's/(_cn|_ncn)$//')
 
-CNE_BRANCH=""
+OSNAME_SHORT="invalid"
 
 case "${OBS_TARGET_OS}" in
-    sle15_sp4_*)    COS_BRANCH='release/cos-2.5' ;;
-    cos_2_5_*)      COS_BRANCH='release/cos-2.5' ;;
-    csm_1_4_*)      COS_BRANCH='release/cos-2.5' ;;
-    cos_3_1_*)      COS_BRANCH='release/uss-1.1' ;;
-    cos_3_2_*)      COS_BRANCH='release/uss-1.2' ;;
-    csm_1_5_*)      COS_BRANCH='release/uss-1.1' ;;
-    csm_1_6_*)      COS_BRANCH='release/uss-1.2' ;;
-    sle15_sp5_*)    COS_BRANCH='release/uss-1.1' ;;
-    sle15_sp6_*)    COS_BRANCH='release/uss-1.2' ;;
+    sle15_sp4_*)    COS_BRANCH='release/cos-2.5'
+                    OSNAME_SHORT="sle15_sp4_cn"
+                    ;;
+    cos_2_5_*)      COS_BRANCH='release/cos-2.5'
+                    OSNAME_SHORT="sle15_sp4_cn";
+                    ;;
+    csm_1_4_*)      COS_BRANCH='release/cos-2.5'
+                    OSNAME_SHORT="sle15_sp4_cn"
+                    ;;
+    cos_3_1_*)      COS_BRANCH='release/uss-1.1'
+                    OSNAME_SHORT="sle15_sp5"
+                    ;;
+    cos_3_2_*)      COS_BRANCH='release/uss-1.2'
+                    OSNAME_SHORT="sle15_sp6"
+                    ;;
+    csm_1_5_*)      COS_BRANCH='release/uss-1.1'
+                    OSNAME_SHORT="sle15_sp5"
+                    ;;
+    csm_1_6_*)      COS_BRANCH='release/uss-1.2'
+                    OSNAME_SHORT="sle15_sp6"
+                    ;;
+    sle15_sp5_*)    COS_BRANCH='release/uss-1.1'
+                    OSNAME_SHORT="sle15_sp5";
+                    ;;
+    sle15_sp6_*)    COS_BRANCH='release/uss-1.2'
+                    OSNAME_SHORT="sle15_sp6"
+                    ;;
     *)              COS_BRANCH='dev/master' ;;
 esac
 
@@ -224,6 +242,15 @@ function install_gdrcopy() {
 
 install_gdrcopy
 
+if rpm -q cuda-drivers; then
+    with_cuda=1
+fi
+
+if rpm -q amdgpu-dkms; then
+    with_rocm=1
+fi
+
+
 if command -v yum > /dev/null; then
 
     yum-config-manager --add-repo=${ARTI_URL}/${PRODUCT}-${ARTI_LOCATION}/${ARTI_BRANCH}/${TARGET_OS}/
@@ -231,12 +258,6 @@ if command -v yum > /dev/null; then
 
     if [ $OS_TYPE = "rhel"  ] && \
         [[ $RHEL_GPU_SUPPORTED_VERSIONS = *$OS_VERSION* ]]; then
-
-      if [[ ${TARGET_ARCH} == x86_64 ]]; then
-        with_rocm=1
-      fi
-
-      with_cuda=1
 
       case $OS_VERSION in
         8.8)
@@ -292,22 +313,14 @@ if command -v yum > /dev/null; then
     yum install -y $RPMS
 
 elif command -v zypper > /dev/null; then
-    with_cuda=1
-
-    if [[ ${TARGET_ARCH} == x86_64 ]]; then
-        with_rocm=1
-    fi
 
     case "${OBS_TARGET_OS}" in
         sle15_sp4_*)    CUDA_RPMS="nvhpc-2023"
                     ;;
         cos_2_5_*)      CUDA_RPMS="nvhpc-2023"
                     ;;
-        csm_1_4_*)      CUDA_RPMS="nvhpc-2023"
-                    ;;
-        csm_1_5_*)      CUDA_RPMS="nvhpc"
-                    ;;
-        csm_1_6_*)      CUDA_RPMS="nvhpc"
+        csm_1_*)        with_cuda=0
+                        with_rocm=0
                     ;;
         cos_3_1_*)      CUDA_RPMS="nvhpc"
                     ;;
@@ -330,11 +343,11 @@ elif command -v zypper > /dev/null; then
         if [[ "${COS_BRANCH}" == release/uss-* ]]; then
             zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
             --priority 20 --name=cuda \
-            ${ARTI_URL}/uss-internal-third-party-rpm-local/nvidia_hpc_sdk/${COS_BRANCH}/${TARGET_OS_SHORT}/ cuda
+            ${ARTI_URL}/uss-internal-third-party-rpm-local/nvidia_hpc_sdk/${COS_BRANCH}/${OSNAME_SHORT}/ cuda
         else
             zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
             --priority 20 --name=cuda \
-            ${ARTI_URL}/cos-internal-third-party-generic-local/nvidia_hpc_sdk/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ cuda
+            ${ARTI_URL}/cos-internal-third-party-generic-local/nvidia_hpc_sdk/${OSNAME_SHORT}/${TARGET_ARCH}/${COS_BRANCH}/ cuda
         fi
 
         if [[ ! -v SHS_NEW_BUILD_SYSTEM ]]; then
@@ -346,13 +359,16 @@ elif command -v zypper > /dev/null; then
         if [[ "${COS_BRANCH}" == release/uss-* ]]; then
             zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
             --priority 20 --name=rocm \
-            ${ARTI_URL}/uss-internal-third-party-rpm-local/rocm/${COS_BRANCH}/${TARGET_OS_SHORT}/ rocm
+            ${ARTI_URL}/uss-internal-third-party-rpm-local/rocm/${COS_BRANCH}/${OSNAME_SHORT}/ rocm
         else
             zypper --verbose --non-interactive addrepo --no-gpgcheck --check \
             --priority 20 --name=rocm \
-            ${ARTI_URL}/cos-internal-third-party-generic-local/rocm/latest/${TARGET_OS}/${TARGET_ARCH}/${COS_BRANCH}/ rocm
+            ${ARTI_URL}/cos-internal-third-party-generic-local/rocm/latest/${OSNAME_SHORT}/${TARGET_ARCH}/${COS_BRANCH}/ rocm
         fi
-        RPMS+=" ${ROCR_RPMS} "
+
+        if [[ ! -v SHS_NEW_BUILD_SYSTEM ]]; then
+            RPMS+=" ${ROCR_RPMS} "
+        fi
     fi
 
     if [[ $with_ze -eq 1 ]]; then
@@ -380,82 +396,93 @@ fi
 
 set -x
 
-if [[ $with_cuda -eq 1 ]]; then
+function gpu_config_nvidia() {
+    nvhpc_sdk_version="not supported"
+    rocm_version="not supported"
 
-    # Specify the directory where you want to search for folders
-    search_dir="/opt/nvidia/hpc_sdk/Linux_${TARGET_ARCH}"
+    if [[ $with_cuda -eq 1 ]]; then
 
-    # Define a pattern to match folders in the "x.y" format
-    pattern='^[0-9]+\.[0-9]+$'
+        # Specify the directory where you want to search for folders
+        search_dir="/opt/nvidia/hpc_sdk/Linux_${TARGET_ARCH}"
 
-    # Initialize variables to keep track of the latest folder and its version
-    latest_version=""
-    latest_folder=""
+        # Define a pattern to match folders in the "x.y" format
+        pattern='^[0-9]+\.[0-9]+$'
 
-    # Iterate through the directories in the search directory
-    for dir in "$search_dir"/*; do
-        if [[ -d "$dir" && $(basename "$dir") =~ $pattern ]]; then
-            version="$(basename "$dir")"
-            if [[ -z "$latest_version" || "$version" > "$latest_version" ]]; then
-                latest_version="$version"
-                latest_folder="$dir"
+        # Initialize variables to keep track of the latest folder and its version
+        latest_version=""
+        latest_folder=""
+
+        # Iterate through the directories in the search directory
+        for dir in "$search_dir"/*; do
+            if [[ -d "$dir" && $(basename "$dir") =~ $pattern ]]; then
+                version="$(basename "$dir")"
+                if [[ -z "$latest_version" || "$version" > "$latest_version" ]]; then
+                    latest_version="$version"
+                    latest_folder="$dir"
+                fi
             fi
-        fi
-    done
+        done
 
-    # Check if any matching folders were found
-    if [ -n "$latest_folder" ]; then
-        nvhpc_sdk_version="$latest_version"
-        echo "Using $nvhpc_sdk_version at $latest_folder"
-        nvhpc_cuda_path=$latest_folder/cuda
-        echo "Using $nvhpc_sdk_version at $nvhpc_cuda_path"
-        
-        # Convenient symlink which allows the libfabric build process to not
-        # have to call out a specific versioned CUDA directory.
-        ln -s $nvhpc_cuda_path /usr/local/cuda
+        # Check if any matching folders were found
+        if [ -n "$latest_folder" ]; then
+            nvhpc_sdk_version="$latest_version"
+            echo "Using $nvhpc_sdk_version at $latest_folder"
+            nvhpc_cuda_path=$latest_folder/cuda
+            echo "Using $nvhpc_sdk_version at $nvhpc_cuda_path"
+            
+            # Convenient symlink which allows the libfabric build process to not
+            # have to call out a specific versioned CUDA directory.
+            ln -s $nvhpc_cuda_path /usr/local/cuda
 
-        # The CUDA device driver RPM provides a usable libcuda.so which is
-        # required by the libfabric autoconf checks. Since artifactory does not
-        # provide this RPM, the cuda-driver-devel-11-0 RPM is installed and
-        # provides a stub libcuda.so. But, this stub libcuda.so is installed
-        # into a non-lib path. A symlink is created to fix this.
-        ln -s /usr/local/cuda/lib64/stubs/libcuda.so \
-              /usr/local/cuda/lib64/libcuda.so
+            # The CUDA device driver RPM provides a usable libcuda.so which is
+            # required by the libfabric autoconf checks. Since artifactory does not
+            # provide this RPM, the cuda-driver-devel-11-0 RPM is installed and
+            # provides a stub libcuda.so. But, this stub libcuda.so is installed
+            # into a non-lib path. A symlink is created to fix this.
+            ln -s /usr/local/cuda/lib64/stubs/libcuda.so \
+               /usr/local/cuda/lib64/libcuda.so
 
-    else
-        echo "No matching CUDA folders found."
-        exit 1
-    fi
-fi
-
-if [[ $with_rocm -eq 1 ]]; then
-    update-alternatives --display rocm
-
-    # Find the ROCm version directory in /opt/
-    rocm_version_dir=$(ls -d /opt/rocm-* 2>/dev/null)
-
-    # Check if a ROCm version directory was found
-    if [ -n "$rocm_version_dir" ]; then
-        # Extract the version from the directory path
-        rocm_version=$(basename "$rocm_version_dir")
-        
-        # Check if the version follows the expected format
-        if [[ $rocm_version =~ ^rocm-[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "ROCm version: $rocm_version"
-            ln -s /opt/"$rocm_version" /opt/rocm
         else
-            echo "Unexpected directory structure found: $rocm_version"
+            echo "No matching CUDA folders found."
+            exit 1
+        fi
+    fi
+}
+
+function gpu_config_rocm() {
+    if [[ $with_rocm -eq 1 ]]; then
+        update-alternatives --display rocm
+
+        # Find the ROCm version directory in /opt/
+        rocm_version_dir=$(ls -d /opt/rocm-* 2>/dev/null)
+
+        # Check if a ROCm version directory was found
+        if [ -n "$rocm_version_dir" ]; then
+            # Extract the version from the directory path
+            rocm_version=$(basename "$rocm_version_dir")
+            
+            # Check if the version follows the expected format
+            if [[ $rocm_version =~ ^rocm-[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "ROCm version: $rocm_version"
+                ln -s /opt/"$rocm_version" /opt/rocm
+            else
+                echo "Unexpected directory structure found: $rocm_version"
+                exit 1
+            fi
+        else
+            echo "The installation of ROCm is not found in the /opt/ directory."
             exit 1
         fi
     else
-        echo "The installation of ROCm is not found in the /opt/ directory."
-        exit 1
+        rocm_version="not-found"
     fi
-else
-  rocm_version="not-found"
-fi
 
-echo "ROCm Version: ${rocm_version}" > /var/tmp/gpu-versions
-echo "Nvidia Version: ${nvhpc_sdk_version}" >> /var/tmp/gpu-versions
-echo "GPU Versions File:"
-echo "$(</var/tmp/gpu-versions)"
+    echo "ROCm Version: ${rocm_version}" > /var/tmp/gpu-versions
+    echo "Nvidia Version: ${nvhpc_sdk_version}" >> /var/tmp/gpu-versions
+    echo "GPU Versions File:"
+    echo "$(</var/tmp/gpu-versions)"
+}
+
+gpu_config_nvidia
+gpu_config_rocm
+
