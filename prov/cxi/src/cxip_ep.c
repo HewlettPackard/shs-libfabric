@@ -1183,8 +1183,10 @@ int cxip_ep_setopt_priv(struct cxip_ep *ep, int level, int optname,
 		if (!cuda_api_permitted && !cuda_is_gdrcopy_enabled())
 			return -FI_EOPNOTSUPP;
 
-		ep->ep_obj->require_dev_reg_copy[FI_HMEM_CUDA] =
-			!cuda_api_permitted;
+		if (!cxip_env.force_dev_reg_copy) {
+			ep->ep_obj->require_dev_reg_copy[FI_HMEM_CUDA] =
+				!cuda_api_permitted;
+		}
 		break;
 
 	default:
@@ -1292,7 +1294,7 @@ int cxip_alloc_endpoint(struct cxip_domain *cxip_dom, struct fi_info *hints,
 	 * disables it.
 	 */
 	for (i = 0; i < OFI_HMEM_MAX; i++)
-		ep_obj->require_dev_reg_copy[i] = false;
+		ep_obj->require_dev_reg_copy[i] = cxip_env.force_dev_reg_copy;
 
 	ofi_atomic_initialize32(&ep_obj->txq_ref, 0);
 	ofi_atomic_initialize32(&ep_obj->tgq_ref, 0);
