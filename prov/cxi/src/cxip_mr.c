@@ -340,7 +340,8 @@ static int cxip_mr_enable_opt(struct cxip_mr *mr)
 		goto err_pte_free;
 	}
 
-	ret = cxip_pte_set_state(mr->pte, ep_obj->ctrl.tgq, C_PTLTE_ENABLED, 0);
+	ret = cxip_pte_set_state(mr->pte, ep_obj->ctrl.tgq, C_PTLTE_ENABLED,
+				 CXIP_PTE_IGNORE_DROPS);
 	if (ret != FI_SUCCESS) {
 		/* This is a bug, we have exclusive access to this CMDQ. */
 		CXIP_WARN("Failed to enqueue command: %d\n", ret);
@@ -534,7 +535,7 @@ static int cxip_mr_prov_cache_enable_opt(struct cxip_mr *mr)
 	}
 
 	ret = cxip_pte_set_state(_mr->pte, ep_obj->ctrl.tgq,
-				 C_PTLTE_ENABLED, 0);
+				 C_PTLTE_ENABLED, CXIP_PTE_IGNORE_DROPS);
 	if (ret != FI_SUCCESS) {
 		/* This is a bug, we have exclusive access to this CMDQ. */
 		CXIP_WARN("Failed to enqueue command: %d\n", ret);
