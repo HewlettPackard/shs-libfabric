@@ -113,6 +113,7 @@ static struct ofi_mem_monitor ze_mm = {
 	.unsubscribe = ze_mm_unsubscribe,
 	.valid = ze_mm_valid,
 	.name = "ze",
+	.unsubscribe_on_delete = false,
 };
 
 struct ofi_mem_monitor *ze_monitor = &ze_mm;

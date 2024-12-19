@@ -189,6 +189,17 @@ struct ofi_mem_monitor {
 	bool (*valid)(struct ofi_mem_monitor *notifier,
 		      const struct ofi_mr_info *info, struct ofi_mr_entry *entry);
 	const char *name;
+
+	/* Set this to true if the monitor tracks each individual memory
+	 * registration.  That is, the monitor has a 1-to-1 mapping to MR Cache
+	 * entry and corresponding subscribe.
+	 *
+	 * When true, the MR Cache will call the memory monitor unsubscribe()
+	 * method when deleting an MR Cache entry.  This allows the monitor
+	 * stop tracking memory regions for which there are no longer
+	 * registrations.
+	 */
+	bool unsubscribe_on_delete;
 };
 
 void ofi_monitor_init(struct ofi_mem_monitor *monitor);

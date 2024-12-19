@@ -60,6 +60,7 @@ static struct ofi_mem_monitor xpmem_monitor_ = {
 	.unsubscribe = ofi_monitor_unsubscribe_no_op,
 	.valid = xpmem_monitor_valid,
 	.name = "xpmem",
+	.unsubscribe_on_delete = false,
 };
 
 struct ofi_mem_monitor *xpmem_monitor = &xpmem_monitor_;

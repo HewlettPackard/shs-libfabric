@@ -1,5 +1,5 @@
 /*
- * (C) Copyright (c) 2022 UT-Battelle, LLC. All rights reserved.
+ * (C) Copyright Intel Corporation
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -32,40 +32,40 @@
 
 #include "ofi_mr.h"
 
-#if HAVE_ROCR
+#if HAVE_ZE
 
 #include "ofi_hmem.h"
 
-static bool rocr_ipc_monitor_valid(struct ofi_mem_monitor *monitor,
+static bool ze_ipc_monitor_valid(struct ofi_mem_monitor *monitor,
 			const struct ofi_mr_info *info,
 			struct ofi_mr_entry *entry)
 {
-	return (memcmp((void **)&info->handle,
-		(void **)&entry->info.handle,
-		sizeof(hsa_amd_ipc_memory_t)) == 0);
+	struct ze_pid_handle *existing = (struct ze_pid_handle *)info->handle;
+	struct ze_pid_handle *comp = (struct ze_pid_handle *)entry->info.handle;
+
+	return (existing->get_fd == comp->get_fd);
 }
 
 #else
 
-static bool rocr_ipc_monitor_valid(struct ofi_mem_monitor *monitor,
+static bool ze_ipc_monitor_valid(struct ofi_mem_monitor *monitor,
 			const struct ofi_mr_info *info,
 			struct ofi_mr_entry *entry)
 {
 	return false;
 }
 
-#endif /* HAVE_ROCR */
-
-static struct ofi_mem_monitor rocr_ipc_monitor_ = {
+#endif /* HAVE_ZE */
+static struct ofi_mem_monitor ze_ipc_monitor_ = {
 	.init = ofi_monitor_init,
 	.cleanup = ofi_monitor_cleanup,
 	.start = ofi_monitor_start_no_op,
 	.stop = ofi_monitor_stop_no_op,
 	.subscribe = ofi_monitor_subscribe_no_op,
 	.unsubscribe = ofi_monitor_unsubscribe_no_op,
-	.valid = rocr_ipc_monitor_valid,
-	.name = "rocr_ipc",
+	.valid = ze_ipc_monitor_valid,
+	.name = "ze_ipc",
 	.unsubscribe_on_delete = false,
 };
 
-struct ofi_mem_monitor *rocr_ipc_monitor = &rocr_ipc_monitor_;
+struct ofi_mem_monitor *ze_ipc_monitor = &ze_ipc_monitor_;

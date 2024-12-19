@@ -114,10 +114,19 @@ static void util_mr_entry_free(struct ofi_mr_cache *cache,
 static void util_mr_free_entry(struct ofi_mr_cache *cache,
 			       struct ofi_mr_entry *entry)
 {
+	enum fi_hmem_iface       iface = entry->info.iface;
+	struct ofi_mem_monitor   *monitor = cache->monitors[iface];
+
 	FI_DBG(cache->prov, FI_LOG_MR, "free %p (len: %zu)\n",
 	       entry->info.iov.iov_base, entry->info.iov.iov_len);
 
 	assert(!entry->node);
+
+	if (monitor->unsubscribe_on_delete)
+		ofi_monitor_unsubscribe(monitor, entry->info.iov.iov_base,
+					entry->info.iov.iov_len,
+					&entry->hmem_info);
+
 	cache->delete_region(cache, entry);
 	util_mr_entry_free(cache, entry);
 }

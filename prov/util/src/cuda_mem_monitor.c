@@ -154,6 +154,7 @@ static struct ofi_mem_monitor cuda_mm = {
 	.unsubscribe = cuda_mm_unsubscribe,
 	.valid = cuda_mm_valid,
 	.name = "cuda",
+	.unsubscribe_on_delete = false,
 };
 
 struct ofi_mem_monitor *cuda_monitor = &cuda_mm;

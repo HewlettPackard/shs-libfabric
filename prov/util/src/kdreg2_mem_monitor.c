@@ -39,6 +39,8 @@
 #define EVICTOR_THREAD_ATTR NULL
 #define INFINITE_TIMEOUT -1
 
+/* kdreg2 monitors each address range (byte accurate) with a unique cookie */
+
 static int kdreg2_monitor_subscribe(struct ofi_mem_monitor *monitor,
 				    const void *addr, size_t len,
 				    union ofi_mr_hmem_info *hmem_info)
@@ -62,6 +64,8 @@ static int kdreg2_monitor_subscribe(struct ofi_mem_monitor *monitor,
 
 	return 0;
 }
+
+/* Unsubscribe is via cookie, not address range */
 
 static void kdreg2_monitor_unsubscribe(struct ofi_mem_monitor *monitor,
 				       const void *addr, size_t len,
@@ -359,6 +363,7 @@ static struct ofi_kdreg2 kdreg2_mm = {
 	.monitor.unsubscribe = kdreg2_monitor_unsubscribe,
 	.monitor.valid       = kdreg2_monitor_valid,
 	.monitor.name        = "kdreg2",
+	.monitor.unsubscribe_on_delete = true,
 	.fd                  = -1,
 	.exit_pipe           = { -1, -1 },
 	.status_data         = NULL,
