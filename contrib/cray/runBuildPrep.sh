@@ -58,6 +58,9 @@ case "${OBS_TARGET_OS}" in
     cos_3_2_*)      COS_BRANCH='release/uss-1.2'
                     OSNAME_SHORT="sle15_sp6"
                     ;;
+    cos_3_3_*)      COS_BRANCH='release/uss-1.3'
+                    OSNAME_SHORT="sle15_sp6"
+                    ;;
     csm_1_5_*)      COS_BRANCH='release/uss-1.1'
                     OSNAME_SHORT="sle15_sp5"
                     ;;
@@ -214,6 +217,9 @@ function install_gdrcopy() {
     cos_3_2*)
       install_gdrcopy_uss "uss-1.2" "sle15_sp6"
       ;;
+    cos_3_3*)
+      install_gdrcopy_uss "uss-1.3" "sle15_sp6"
+      ;;
     csm_1_4*)
       install_gdrcopy_cos "cos-2.5" "sle15_sp4_cn"
       ;;
@@ -333,6 +339,8 @@ elif command -v zypper > /dev/null; then
         cos_3_1_*)      CUDA_RPMS="nvhpc"
                     ;;
         cos_3_2_*)      CUDA_RPMS="nvhpc"
+                    ;;
+        cos_3_3_*)      CUDA_RPMS="nvhpc"
                     ;;
         sle15_sp5_*)    CUDA_RPMS="nvhpc"
                     ;;
