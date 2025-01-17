@@ -301,10 +301,6 @@ if command -v yum > /dev/null; then
         if [[ $OS_VERSION =~ ^8\.[0-9]+ ]]; then
           echo "Using radeon-rocm-remote/rhel8"
           yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel8/${ROCM_VERSION}/main
-        elif [[ $OS_VERSION =~ 9.5 ]]; then
-          echo "Using uss-internal-third-party-rpm-local/rocm"
-          yum-config-manager --add-repo=${ARTI_URL}/uss-internal-third-party-rpm-local/rocm/dev/master/rhel_9_5/
-          ## Update link to radeon-rocm-remote/rhel9 when available.
         elif [[ $OS_VERSION =~ ^9\.[0-9]+ ]]; then
           echo "Using radeon-rocm-remote/rhel9"
           yum-config-manager --add-repo=${ARTI_URL}/radeon-rocm-remote/rhel9/${ROCM_VERSION}/main
