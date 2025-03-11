@@ -36,13 +36,24 @@ extern struct fi_ops_tagged cxip_ep_tagged_no_rx_ops;
 extern struct fi_ops_atomic cxip_ep_atomic_ops;
 extern struct fi_ops_atomic cxip_ep_atomic_no_ops;
 
-extern struct fi_ops_collective cxip_collective_ops;
-extern struct fi_ops_collective cxip_collective_no_ops;
-
 extern struct fi_ops_cm cxip_ep_cm_ops;
 extern struct fi_ops_ep cxip_ep_ops;
 extern struct fi_ops cxip_ep_fi_ops;
 extern struct fi_ops_ep cxip_ctx_ep_ops;
+
+struct fi_ops_collective cxip_collective_no_ops = {
+	.size = sizeof(struct fi_ops_collective),
+	.barrier = fi_coll_no_barrier,
+	.broadcast = fi_coll_no_broadcast,
+	.alltoall = fi_coll_no_alltoall,
+	.allreduce = fi_coll_no_allreduce,
+	.allgather = fi_coll_no_allgather,
+	.reduce_scatter = fi_coll_no_reduce_scatter,
+	.reduce = fi_coll_no_reduce,
+	.scatter = fi_coll_no_scatter,
+	.gather = fi_coll_no_gather,
+	.msg = fi_coll_no_msg,
+};
 
 /*
  * cxip_ep_cmdq() - Open a shareable TX or Target command queue.
@@ -150,10 +161,7 @@ static int cxip_ep_cm_getname(fid_t fid, void *addr, size_t *addrlen)
 static int _join_collective(struct fid_ep *ep, const void *addr,
 			    uint64_t flags, struct fid_mc **mc, void *context)
 {
-	struct fi_collective_addr *arg = (struct fi_collective_addr *)addr;
-
-	return cxip_join_collective(ep, arg->coll_addr, arg->set,
-				    flags, mc, context);
+	return -FI_ENOSYS;
 }
 
 struct fi_ops_cm cxip_ep_cm_ops = {
@@ -697,12 +705,6 @@ static int cxip_ep_enable(struct fid_ep *fid_ep)
 		goto unlock;
 	}
 
-	ret = cxip_coll_enable(ep);
-	if (ret != FI_SUCCESS) {
-		CXIP_WARN("cxip_coll_enable returned: %d\n", ret);
-		/* collectives will not function, but EP will */
-	}
-
 	/* Enable only appropriate API functions based on primary/secondary
 	 * capabilities. Send/Receive requires FI_MSG or FI_TAGGED.
 	 */
@@ -762,7 +764,6 @@ unlock:
 static void cxip_ep_disable(struct cxip_ep_obj *ep_obj)
 {
 	if (ep_obj->enabled) {
-		cxip_coll_disable(ep_obj);
 		cxip_zbcoll_fini(ep_obj);
 		cxip_ep_ctrl_fini(ep_obj);
 		cxip_portals_table_free(ep_obj->ptable);
@@ -809,7 +810,6 @@ int cxip_free_endpoint(struct cxip_ep *ep)
 	}
 
 	ofi_genlock_lock(&ep_obj->lock);
-	cxip_coll_close(ep_obj);
 	cxip_txc_close(ep);
 	cxip_rxc_close(ep);
 	cxip_ep_disable(ep_obj);
@@ -1562,7 +1562,6 @@ int cxip_endpoint(struct fid_domain *domain, struct fi_info *info,
 
 	*fid_ep = &ep->ep;
 
-	cxip_coll_init(ep->ep_obj);
 	cxip_domain_add_txc(ep->ep_obj->domain, ep->ep_obj->txc);
 
 	return FI_SUCCESS;

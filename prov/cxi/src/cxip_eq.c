@@ -48,18 +48,6 @@ static int cxip_eq_close(struct fid *fid)
 	return FI_SUCCESS;
 }
 
-static void cxip_eq_progress(struct cxip_eq *eq)
-{
-	struct cxip_ep_obj *ep_obj;
-
-	ofi_mutex_lock(&eq->list_lock);
-	dlist_foreach_container(&eq->ep_list, struct cxip_ep_obj,
-				ep_obj, eq_link) {
-		cxip_coll_progress_join(ep_obj);
-	}
-	ofi_mutex_unlock(&eq->list_lock);
-}
-
 /* cxip_cq_strerror() - Converts provider specific error information into a
  * printable string. Not eq-specific.
  */
@@ -75,14 +63,9 @@ static const char *cxip_eq_strerror(struct fid_eq *eq, int prov_errno,
 ssize_t cxip_eq_read(struct fid_eq *eq_fid, uint32_t *event,
 		     void *buf, size_t len, uint64_t flags)
 {
-	struct cxip_eq *eq;
 	int ret;
 
-	eq = container_of(eq_fid, struct cxip_eq, util_eq.eq_fid.fid);
-
 	ret = ofi_eq_read(eq_fid, event, buf, len, flags);
-	if (ret == -FI_EAGAIN)
-		cxip_eq_progress(eq);
 	return ret;
 }
 

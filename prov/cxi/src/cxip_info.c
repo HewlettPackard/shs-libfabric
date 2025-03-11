@@ -1378,8 +1378,6 @@ CXI_INI
 {
 	cxip_env_init();
 
-	cxip_curl_init();
-
 	cxip_if_init();
 
 	cxip_info_init();
@@ -1399,8 +1397,6 @@ static void cxip_fini(void)
 	fi_freeinfo((void *)cxip_util_prov.info);
 
 	cxip_if_fini();
-
-	cxip_curl_fini();
 }
 
 static void cxip_alter_caps(struct fi_info *info, const struct fi_info *hints)

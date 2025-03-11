@@ -11,9 +11,7 @@ _cxi_files = \
 	prov/cxi/src/cxip_if.c \
 	prov/cxi/src/cxip_fabric.c \
 	prov/cxi/src/cxip_repsum.c \
-	prov/cxi/src/cxip_coll.c \
 	prov/cxi/src/cxip_zbcoll.c \
-	prov/cxi/src/cxip_curl.c \
 	prov/cxi/src/cxip_dom.c \
 	prov/cxi/src/cxip_ep.c \
 	prov/cxi/src/cxip_txc.c \
@@ -52,57 +50,7 @@ _cxi_headers = \
 rdmainclude_HEADERS += \
 	prov/cxi/include/fi_cxi_ext.h
 
-# Stand-alone srun tests for hardware testing environment
-noinst_PROGRAMS += prov/cxi/test/multinode/test_frmwk
-prov_cxi_test_multinode_test_frmwk_SOURCES = \
-	prov/cxi/test/multinode/multinode_frmwk.h \
-	prov/cxi/test/multinode/multinode_frmwk.c \
-	prov/cxi/test/multinode/test_frmwk.c
-prov_cxi_test_multinode_test_frmwk_CPPFLAGS = \
-	$(AM_CPPFLAGS) $(cxi_CPPFLAGS) $(PTHREAD_FLAGS)
-prov_cxi_test_multinode_test_frmwk_LDFLAGS = -static
-prov_cxi_test_multinode_test_frmwk_LDADD = $(linkback) $(PTHREAD_LIBS)
-
-noinst_PROGRAMS += prov/cxi/test/multinode/test_zbcoll
-prov_cxi_test_multinode_test_zbcoll_SOURCES = \
-	prov/cxi/test/multinode/multinode_frmwk.h \
-	prov/cxi/test/multinode/multinode_frmwk.c \
-	prov/cxi/test/multinode/test_zbcoll.c
-prov_cxi_test_multinode_test_zbcoll_CPPFLAGS = \
-	$(AM_CPPFLAGS) $(cxi_CPPFLAGS) $(PTHREAD_FLAGS)
-prov_cxi_test_multinode_test_zbcoll_LDFLAGS = -static
-prov_cxi_test_multinode_test_zbcoll_LDADD = $(linkback) $(PTHREAD_LIBS)
-
-noinst_PROGRAMS += prov/cxi/test/multinode/test_coll
-prov_cxi_test_multinode_test_coll_SOURCES = \
-	prov/cxi/test/multinode/multinode_frmwk.h \
-	prov/cxi/test/multinode/multinode_frmwk.c \
-	prov/cxi/test/multinode/test_coll.c
-prov_cxi_test_multinode_test_coll_CPPFLAGS = \
-	$(AM_CPPFLAGS) $(cxi_CPPFLAGS) $(PTHREAD_FLAGS)
-prov_cxi_test_multinode_test_coll_LDFLAGS = -static
-prov_cxi_test_multinode_test_coll_LDADD = $(linkback) $(PTHREAD_LIBS)
-
-noinst_PROGRAMS += prov/cxi/test/multinode/test_barrier
-prov_cxi_test_multinode_test_barrier_SOURCES = \
-	prov/cxi/test/multinode/multinode_frmwk.h \
-	prov/cxi/test/multinode/multinode_frmwk.c \
-	prov/cxi/test/multinode/test_barrier.c
-prov_cxi_test_multinode_test_barrier_CPPFLAGS = \
-	$(AM_CPPFLAGS) $(cxi_CPPFLAGS) $(PTHREAD_FLAGS)
-prov_cxi_test_multinode_test_barrier_LDFLAGS = -static
-prov_cxi_test_multinode_test_barrier_LDADD = $(linkback) $(PTHREAD_LIBS)
-
 if HAVE_CRITERION
-
-# curltest is not expected to exist outside devel env
-noinst_PROGRAMS += prov/cxi/test/curltest
-prov_cxi_test_curltest_SOURCES = \
-	prov/cxi/test/curl.c
-prov_cxi_test_curltest_CPPFLAGS = $(AM_CPPFLAGS) $(cxi_CPPFLAGS) \
-	$(cxitest_CPPFLAGS) $(PTHREAD_CFLAGS)
-prov_cxi_test_curltest_LDFLAGS = $(cxitest_LDFLAGS) -static
-prov_cxi_test_curltest_LDADD =  $(cxitest_LIBS) $(linkback) $(PTHREAD_LIBS)
 
 bin_PROGRAMS += prov/cxi/test/cxitest
 nodist_prov_cxi_test_cxitest_SOURCES = \
@@ -122,7 +70,6 @@ nodist_prov_cxi_test_cxitest_SOURCES = \
 	prov/cxi/test/tagged_stress.c \
 	prov/cxi/test/mr.c \
 	prov/cxi/test/deferred_work.c \
-	prov/cxi/test/coll.c \
 	prov/cxi/test/ctrl.c \
 	prov/cxi/test/lat.c \
 	prov/cxi/test/repsum.c \
