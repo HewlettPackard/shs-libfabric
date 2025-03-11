@@ -105,9 +105,9 @@ else
 fi
 
 if [[ ${TARGET_OS} =~ ^rhel ]]; then
-    RPMS+=" libcurl-devel json-c-devel cray-libcxi-static "
+    RPMS+=" cray-libcxi-static "
 else
-    RPMS+=" libcurl-devel libjson-c-devel cray-libcxi-devel-static "
+    RPMS+=" cray-libcxi-devel-static "
 fi
 
 function rpm_install_wrapper() {

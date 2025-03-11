@@ -14,7 +14,6 @@
 #include "config.h"
 
 #include <pthread.h>
-#include <json-c/json.h>
 
 #include <rdma/fabric.h>
 #include <rdma/fi_atomic.h>
@@ -2976,14 +2975,6 @@ static inline void single_to_double_quote(char *str)
 {
 	do {if (*str == '\'') *str = '"';} while (*(++str));
 }
-enum json_type cxip_json_obj(const char *desc, struct json_object *jobj,
-			     struct json_object **jval);
-int cxip_json_bool(const char *desc, struct json_object *jobj, bool *val);
-int cxip_json_int(const char *desc, struct json_object *jobj, int *val);
-int cxip_json_int64(const char *desc, struct json_object *jobj, int64_t *val);
-int cxip_json_double(const char *desc, struct json_object *jobj, double *val);
-int cxip_json_string(const char *desc, struct json_object *jobj,
-		     const char **val);
 
 /* Perform zero-buffer collectives */
 void cxip_tree_rowcol(int radix, int nodeidx, int *row, int *col, int *siz);

@@ -34,14 +34,6 @@ AC_DEFUN([FI_CXI_CONFIGURE],[
 		[AS_HELP_STRING([--with-cxi-uapi-headers=DIR], [Install directory for kernel CXI UAPI headers])],
 		[CPPFLAGS="-I$with_cxi_uapi_headers/include $CPPFLAGS"])
 
-	# Support non-standard install path for curl. This is needed by CXI provider.
-	AC_ARG_WITH([curl],
-		[AS_HELP_STRING([--with-curl=DIR], [Install directory for curl])])
-
-	# Support non-standard install path for json-c. This is needed by CXI provider.
-	AC_ARG_WITH([json-c],
-		[AS_HELP_STRING([--with-json-c=DIR], [Install directory for json-c])])
-
 	AS_IF([test x"$enable_cxi" != x"no"],
 		[
 			AC_CHECK_HEADER(cxi_prov_hw.h,
@@ -73,50 +65,6 @@ AC_DEFUN([FI_CXI_CONFIGURE],[
 			if test "$with_cxi_uapi_headers" != "" && test "$with_cxi_uapi_headers" != "no"; then
 				cxi_CPPFLAGS="$cxi_CPPFLAGS -I$with_cxi_uapi_headers/include"
 			fi
-
-			# Add on curl if installed in non-default location.
-			if test "$with_curl" != "" && test "$with_curl" != "no"; then
-				FI_CHECK_PREFIX_DIR([$with_curl], [curl])
-			else
-				curl_PREFIX=""
-				curl_LIBDIR=""
-			fi
-
-			FI_CHECK_PACKAGE([libcurl],
-				[curl/curl.h],
-				[curl],
-				[curl_global_init],
-				[],
-				[$curl_PREFIX],
-				[$curl_LIBDIR],
-				[],
-				[cxi_happy=0])
-
-			cxi_CPPFLAGS="$cxi_CPPFLAGS $libcurl_CPPFLAGS"
-			cxi_LDFLAGS="$cxi_LDFLAGS $libcurl_LDFLAGS"
-			cxi_LIBS="$cxi_LIBS $libcurl_LIBS"
-
-			# Add on json if installed in non-default location.
-			if test "$with_json_c" != "" && test "$with_json_c" != "no"; then
-				FI_CHECK_PREFIX_DIR([$with_json_c], [json])
-			else
-				json_PREFIX=""
-				json_LIBDIR=""
-			fi
-
-			FI_CHECK_PACKAGE([libjson],
-				[json-c/json.h],
-				[json-c],
-				[json_object_get_type],
-				[],
-				[$json_PREFIX],
-				[$json_LIBDIR],
-				[],
-				[cxi_happy=0])
-
-			cxi_CPPFLAGS="$cxi_CPPFLAGS $libjson_CPPFLAGS"
-			cxi_LDFLAGS="$cxi_LDFLAGS $libjson_LDFLAGS"
-			cxi_LIBS="$cxi_LIBS $libjson_LIBS"
 
 			# Need to explicitly link to libmath
 			cxi_LIBS="$cxi_LIBS -lm"
