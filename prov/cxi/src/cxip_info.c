@@ -678,6 +678,7 @@ struct cxip_environment cxip_env = {
 	.mr_cache_events_disable_le_poll_nsecs =
 		CXIP_MR_CACHE_EVENTS_DISABLE_LE_POLL_NSECS,
 	.force_dev_reg_copy = false,
+	.disable_cuda_sync_memops = false,
 };
 
 static void cxip_env_init(void)
@@ -1374,6 +1375,12 @@ static void cxip_env_init(void)
 			cxip_env.force_dev_reg_copy);
 	fi_param_get_bool(&cxip_prov, "force_dev_reg_copy",
 			  &cxip_env.force_dev_reg_copy);
+
+	fi_param_define(&cxip_prov, "disable_cuda_sync_memops", FI_PARAM_BOOL,
+			"Disable CUDA sync of memory operations. Default: %d",
+			cxip_env.disable_cuda_sync_memops);
+	fi_param_get_bool(&cxip_prov, "disable_cuda_sync_memops",
+			  &cxip_env.disable_cuda_sync_memops);
 
 	set_system_page_size();
 }
