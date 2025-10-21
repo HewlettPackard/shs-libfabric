@@ -68,10 +68,83 @@ static void cxip_ep_mr_remove(struct cxip_mr *mr)
 /*
  * cxip_mr_cb() - Process MR LE events.
  */
+/*
+ * cxip_mr_handle_remote_write() - Handle remote write with immediate data.
+ *
+ * Processes PUT events containing immediate data (from fi_writedata) and
+ * generates completion entries to the target endpoint's receive CQ.
+ *
+ * The completion is written with FI_RMA | FI_REMOTE_WRITE | FI_REMOTE_CQ_DATA
+ * flags to indicate a remote RMA write with immediate data.
+ */
+static int cxip_mr_handle_remote_write(struct cxip_mr *mr,
+					const union c_event *event,
+					uint64_t remote_cq_data)
+{
+	struct cxip_ep *ep;
+	struct cxip_rxc *rxc;
+	struct cxip_cq *recv_cq;
+	struct fi_cq_data_entry data_entry = {};
+	int ret;
+
+	if (!mr->ep) {
+		CXIP_DBG("MR not bound to endpoint, skipping completion\n");
+		return FI_SUCCESS;
+	}
+
+	ep = mr->ep;
+	rxc = ep->ep_obj->rxc;
+
+	if (!rxc || !rxc->recv_cq) {
+		CXIP_DBG("No receive CQ bound, skipping completion\n");
+		return FI_SUCCESS;
+	}
+
+	recv_cq = ep->app_recv_cq ? ep->app_recv_cq : rxc->recv_cq;
+
+	/* Build completion entry with immediate data */
+	data_entry.op_context = (void *)mr;
+	data_entry.flags = FI_RMA | FI_REMOTE_WRITE | FI_REMOTE_CQ_DATA;
+	data_entry.len = event->tgt_long.mlength;
+	data_entry.buf = (void *)((uintptr_t)mr->buf + event->tgt_long.start);
+	data_entry.data = remote_cq_data;
+
+	ret = ofi_cq_write(&recv_cq->util_cq, data_entry.op_context,
+			   data_entry.flags, data_entry.len, data_entry.buf,
+			   data_entry.data, 0);
+	if (ret != FI_SUCCESS) {
+		CXIP_WARN("Failed to submit remote write completion: %d\n", ret);
+		return ret;
+	}
+
+	CXIP_DBG("Generated remote write completion: data=0x%" PRIx64 " len=%zu\n",
+		 remote_cq_data, data_entry.len);
+
+	return FI_SUCCESS;
+}
+
 int cxip_mr_cb(struct cxip_ctrl_req *req, const union c_event *event)
 {
 	struct cxip_mr *mr = req->mr.mr;
 	int evt_rc = cxi_event_rc(event);
+	int ret;
+
+	/*
+	 * fi_writedata remote immediate data delivery:
+	 *
+	 * For MRs with FI_RMA_EVENT enabled, process PUT events to extract
+	 * immediate data and generate remote write completions.
+	 */
+	if (mr->rma_events && event->hdr.event_type == C_EVENT_PUT) {
+		if (evt_rc == C_RC_OK) {
+			/* Extract immediate data from event header_data field */
+			uint64_t imm = event->tgt_long.header_data;
+
+			ret = cxip_mr_handle_remote_write(mr, event, imm);
+			if (ret != FI_SUCCESS)
+				CXIP_WARN("Failed to handle remote write: %d\n", ret);
+		}
+	}
 
 	switch (event->hdr.event_type) {
 	case C_EVENT_LINK:
@@ -104,6 +177,11 @@ int cxip_mr_cb(struct cxip_ctrl_req *req, const union c_event *event)
 			goto log_err;
 		break;
 	case C_EVENT_PUT:
+		if (mr->count_events)
+			ofi_atomic_inc32(&mr->access_events);
+		if (evt_rc != C_RC_OK)
+			goto log_err;
+		break;
 	case C_EVENT_GET:
 	case C_EVENT_ATOMIC:
 	case C_EVENT_FETCH_ATOMIC:
@@ -113,7 +191,6 @@ int cxip_mr_cb(struct cxip_ctrl_req *req, const union c_event *event)
 		if (evt_rc != C_RC_OK)
 			goto log_err;
 
-		/* TODO handle fi_writedata/fi_inject_writedata */
 		break;
 	default:
 log_err:
@@ -161,6 +238,7 @@ static int cxip_mr_enable_std(struct cxip_mr *mr)
 	uint32_t le_flags;
 
 	mr->req.cb = cxip_mr_cb;
+	CXIP_DBG("Standard MR callback registered: mr=%p rma_events=%d\n", mr, mr->rma_events);
 
 	le_flags = C_LE_UNRESTRICTED_BODY_RO;
 	if (mr->attr.access & FI_REMOTE_WRITE)
@@ -170,10 +248,14 @@ static int cxip_mr_enable_std(struct cxip_mr *mr)
 	if (mr->cntr)
 		le_flags |= C_LE_EVENT_CT_COMM;
 
-	/* TODO: to support fi_writedata(), we will want to leave
-	 * success events enabled for mr->rma_events true too.
-	 */
-	if (!mr->count_events)
+	/* Enable communication events for RMA events; leave success events enabled */
+	if (mr->rma_events) {
+		le_flags |= C_LE_EVENT_CT_COMM; /* no SUCCESS_DISABLE */
+		CXIP_DBG("MR enabling RMA events: mr=%p le_flags=0x%x\n", mr, le_flags);
+	}
+
+	/* Enable success events only when neither counters nor RMA events are requested */
+	if (!mr->count_events && !mr->rma_events)
 		le_flags |= C_LE_EVENT_SUCCESS_DISABLE;
 
 	ret = cxip_pte_append(ep_obj->ctrl.pte,
@@ -318,6 +400,7 @@ static int cxip_mr_enable_opt(struct cxip_mr *mr)
 
 	target_relaxed_order = cxip_ep_obj_mr_relaxed_order(ep_obj);
 	mr->req.cb = cxip_mr_cb;
+	CXIP_DBG("Optimized MR callback registered: mr=%p rma_events=%d\n", mr, mr->rma_events);
 
 	ret = cxip_pte_alloc_nomap(ep_obj->ptable, ep_obj->ctrl.tgt_evtq,
 				   &opts, cxip_mr_opt_pte_cb, mr, &mr->pte);
@@ -358,10 +441,20 @@ static int cxip_mr_enable_opt(struct cxip_mr *mr)
 	if (mr->cntr)
 		le_flags |= C_LE_EVENT_CT_COMM;
 
+	/* RMA events on optimized MRs are not expected (we force standard), but
+	 * if they occur, enable communication events and keep success disabled.
+	 */
+	if (mr->rma_events) {
+		le_flags &= ~C_LE_EVENT_COMM_DISABLE;
+		le_flags |= C_LE_EVENT_CT_COMM;
+		CXIP_DBG("Optimized MR enabling RMA events (unexpected): mr=%p\n", mr);
+	}
+
 	if (target_relaxed_order) {
 		ib = 1;
-		le_flags |= C_LE_UNRESTRICTED_END_RO |
-			C_LE_UNRESTRICTED_BODY_RO;
+		le_flags |= C_LE_UNRESTRICTED_END_RO | C_LE_UNRESTRICTED_BODY_RO;
+	} else {
+		le_flags |= C_LE_UNRESTRICTED_BODY_RO;
 	}
 
 	ret = cxip_pte_append(mr->pte,
@@ -845,15 +938,18 @@ static int cxip_prov_cache_init_mr_key(struct cxip_mr *mr,
 	struct cxi_md *md = mr->md->md;
 
 	/* If optimized enabled it is preferred for caching */
-	key.opt = mr->domain->optimized_mrs;
+	/* However, force unoptimized keys for RMA events since optimized
+	 * MRs don't support header_data in target events
+	 */
+	key.opt = mr->rma_events ? false : mr->domain->optimized_mrs;
 	key.cached = true;
 	key.is_prov = 1;
 	key.lac = mr->len ? md->lac : 0;
 	key.lac_off = mr->len ? CXI_VA_TO_IOVA(md, mr->buf) : 0;
 	mr->key = key.raw;
 
-	CXIP_DBG("Init cached MR key 0x%016lX, lac: %d, off:0x%016lX\n",
-		 key.raw, key.lac, (uint64_t)key.lac_off);
+	CXIP_DBG("Init cached MR key 0x%016lX, lac: %d, off:0x%016lX, rma_events: %d, opt: %d\n",
+		 key.raw, key.lac, (uint64_t)key.lac_off, mr->rma_events, key.opt);
 
 	return FI_SUCCESS;
 }
@@ -1147,6 +1243,15 @@ int cxip_mr_enable(struct cxip_mr *mr)
 		mr->mr_fid.key = mr->key;
 	}
 	mr->optimized = cxip_generic_is_mr_key_opt(mr->key);
+
+	/* Force standard (unoptimized) MRs for RMA events (fi_writedata support).
+	 * Optimized MRs do not support header_data delivery in target events.
+	 */
+	if (mr->rma_events) {
+		CXIP_DBG("Forcing standard MR for RMA events: mr=%p key=0x%lx\n", 
+			 mr, mr->key);
+		mr->optimized = false;
+	}
 
 	ofi_genlock_lock(&mr->ep->ep_obj->lock);
 	cxip_ep_mr_insert(mr->ep->ep_obj, mr);

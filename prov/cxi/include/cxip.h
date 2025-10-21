@@ -2658,6 +2658,12 @@ struct cxip_ep {
 	struct fi_rx_attr rx_attr;
 	struct cxip_ep_obj *ep_obj;
 	int is_alias;
+	/* User-bound receive CQ pointer for remote RMA event completions.
+	 * Set during fi_ep_bind() with FI_RECV flag to ensure remote write
+	 * completions (e.g., from fi_writedata) are delivered to the
+	 * application's CQ rather than internal provider CQs.
+	 */
+	struct cxip_cq *app_recv_cq;
 };
 
 size_t cxip_ep_get_unexp_msgs(struct fid_ep *fid_ep,
@@ -2692,8 +2698,7 @@ struct cxip_mr {
 	struct cxip_cntr *cntr;		// if bound to cntr
 
 	/* Indicates if FI_RMA_EVENT was specified at creation and
-	 * will be used to enable fi_writedata() and fi_inject_writedata()
-	 * support for this MR (TODO).
+	 * enables fi_writedata() remote completion generation for this MR.
 	 */
 	bool rma_events;
 

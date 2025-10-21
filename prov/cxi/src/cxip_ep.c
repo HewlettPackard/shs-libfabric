@@ -935,6 +935,8 @@ static int cxip_ep_bind_cq(struct cxip_ep *ep, struct cxip_cq *cq,
 
 		ofi_atomic_inc32(&cq->util_cq.ref);
 		rxc->recv_cq = cq;
+		/* record user CQ for remote completion routing */
+		ep->app_recv_cq = cq;
 
 		if (flags & FI_SELECTIVE_COMPLETION)
 			rxc->selective_completion = 1;

@@ -288,7 +288,11 @@ static int cxip_rma_emit_dma(struct cxip_txc *txc, const void *buf, size_t len,
 
 	dma_cmd.command.cmd_type = C_CMD_TYPE_DMA;
 	dma_cmd.index_ext = *idx_ext;
-	dma_cmd.event_send_disable = 1;
+	/* Enable send events if remote completion is requested */
+	if (flags & FI_REMOTE_CQ_DATA)
+		dma_cmd.event_send_disable = 0;
+	else
+		dma_cmd.event_send_disable = 1;
 	dma_cmd.dfa = *dfa;
 	ret = cxip_adjust_remote_offset(&addr, key);
 	if (ret) {
@@ -298,6 +302,13 @@ static int cxip_rma_emit_dma(struct cxip_txc *txc, const void *buf, size_t len,
 	dma_cmd.remote_offset = addr;
 	dma_cmd.eq = cxip_evtq_eqn(&txc->tx_evtq);
 	dma_cmd.match_bits = CXIP_KEY_MATCH_BITS(key);
+
+	/* Set header data for fi_writedata operations */
+	if (write && (flags & FI_REMOTE_CQ_DATA)) {
+		dma_cmd.header_data = data;
+		TXC_DBG(txc, "Setting DMA header_data=0x%lx for writedata (key=0x%016lx)\n", 
+			(unsigned long)data, (unsigned long)key);
+	}
 
 	if (req) {
 		dma_cmd.user_ptr = (uint64_t)req;
@@ -522,8 +533,14 @@ err:
 }
 
 static bool cxip_rma_is_unrestricted(struct cxip_txc *txc, uint64_t key,
-				     uint64_t msg_order, bool write)
+				     uint64_t msg_order, bool write, uint64_t flags)
 {
+	/* Operations with FI_REMOTE_CQ_DATA need unrestricted mode to generate
+	 * target-side PUT events for completion notifications.
+	 */
+	if (flags & FI_REMOTE_CQ_DATA)
+		return true;
+
 	/* Unoptimized keys are implemented with match bits and must always be
 	 * unrestricted.
 	 */
@@ -569,6 +586,12 @@ static bool cxip_rma_is_idc(struct cxip_txc *txc, uint64_t key, size_t len,
 
 	/* Triggered operations never can be issued with an IDC. */
 	if (triggered)
+		return false;
+
+	/* IDC commands do not support header_data for fi_writedata.
+	 * Must use DMA commands for operations with FI_REMOTE_CQ_DATA.
+	 */
+	if (flags & FI_REMOTE_CQ_DATA)
 		return false;
 
 	/* Don't issue non-inject operation as IDC if disabled by env */
@@ -634,7 +657,7 @@ ssize_t cxip_rma_common(enum fi_op_type op, struct cxip_txc *txc,
 		return -FI_EKEYREJECTED;
 	}
 
-	unr = cxip_rma_is_unrestricted(txc, key, msg_order, write);
+	unr = cxip_rma_is_unrestricted(txc, key, msg_order, write, flags);
 	idc = cxip_rma_is_idc(txc, key, len, write, triggered, unr, flags);
 
 	/* Build target network address. */
@@ -803,6 +826,20 @@ ssize_t cxip_rma_inject(struct fid_ep *fid_ep, const void *buf, size_t len,
 			       false, 0, NULL, NULL);
 }
 
+static ssize_t cxip_rma_writedata(struct fid_ep *fid_ep, const void *buf,
+				  size_t len, void *desc, uint64_t data,
+				  fi_addr_t dest_addr, uint64_t addr,
+				  uint64_t key, void *context)
+{
+	struct cxip_ep *ep = container_of(fid_ep, struct cxip_ep, ep);
+
+	return cxip_rma_common(FI_OP_WRITE, ep->ep_obj->txc, buf, len, desc,
+			       dest_addr, addr, key, data,
+			       ep->tx_attr.op_flags | FI_REMOTE_CQ_DATA,
+			       ep->tx_attr.tclass, ep->tx_attr.msg_order,
+			       context, false, 0, NULL, NULL);
+}
+
 static ssize_t cxip_rma_read(struct fid_ep *fid_ep, void *buf, size_t len,
 			     void *desc, fi_addr_t src_addr, uint64_t addr,
 			     uint64_t key, void *context)
@@ -904,7 +941,7 @@ struct fi_ops_rma cxip_ep_rma_ops = {
 	.writemsg = cxip_rma_writemsg,
 	.inject = cxip_rma_inject,
 	.injectdata = fi_no_rma_injectdata,
-	.writedata = fi_no_rma_writedata,
+	.writedata = cxip_rma_writedata,
 };
 
 struct fi_ops_rma cxip_ep_rma_no_ops = {

@@ -389,9 +389,14 @@ int cxip_domain_prov_mr_id_alloc(struct cxip_domain *dom,
 	 */
 	key.events = mr->count_events || mr->rma_events || mr->cntr;
 
-	key.opt = dom->optimized_mrs &&
-			key.id < CXIP_PTL_IDX_PROV_MR_OPT_CNT;
+	/* Force unoptimized keys for RMA events (fi_writedata support).
+	 * Optimized MRs do not support header_data delivery in target events.
+	 */
+	key.opt = mr->rma_events ? false :
+			(dom->optimized_mrs && key.id < CXIP_PTL_IDX_PROV_MR_OPT_CNT);
 	mr->key = key.raw;
+	CXIP_DBG("Prov MR key alloc: mr=%p id=%d events=%d opt=%d rma_events=%d\n",
+		 mr, key.id, key.events, key.opt, mr->rma_events);
 	ofi_spin_unlock(&dom->ctrl_id_lock);
 
 	return FI_SUCCESS;
