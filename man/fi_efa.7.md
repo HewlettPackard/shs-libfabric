@@ -22,6 +22,7 @@ The `efa-direct` fabric, on the contrary, offloads all libfabric data plane call
 the device directly without wire protocols. Compared to the `efa` fabric, the `efa-direct`
 fabric supports fewer capabilities and has more mode requirements for applications.
 But it provides a fast path to hand off application requests to the device.
+To use `efa-direct`, set the name field in `fi_fabric_attr` to `efa-direct`.
 More details and difference between the two fabrics will be presented below.
 
 
@@ -64,7 +65,12 @@ The following features are supported:
 *Completion events*
 : The provider supports *FI_CQ_FORMAT_CONTEXT*, *FI_CQ_FORMAT_MSG*, and
   *FI_CQ_FORMAT_DATA*. *FI_CQ_FORMAT_TAGGED* is supported on the `efa` fabric
-  of RDM endpoint. Wait objects are not currently supported.
+  of RDM endpoint.
+  
+  The `efa` and `efa-direct` fabrics for RDM endpoints support *FI_WAIT_UNSPEC*
+  and *FI_WAIT_FD* wait objects for blocking CQ operations (*fi_cq_sread*).
+  
+  DGRAM endpoints do not support wait objects.
 
 *Modes*
 : The provider requires the use of *FI_MSG_PREFIX* when running over
@@ -92,8 +98,11 @@ The following features are supported:
 # LIMITATIONS
 
 ## Completion events
-- Synchronous CQ read is not supported.
-- Wait objects are not currently supported.
+- DGRAM endpoints do not support synchronous CQ reads (*fi_cq_sread*) or wait objects.
+- *FI_WAIT_FD* is not supported for RDM endpoints with SHM transfers enabled.
+  Valid wait objects are *FI_WAIT_NONE* or *FI_WAIT_UNSPEC*. Blocking read via
+  *fi_cq_sread()* is supported and will wait on SHM completions. When SHM
+  transfers are disabled, *FI_WAIT_FD* wait objects are supported.
 
 ## RMA operations
 - Completion events for RMA targets (*FI_RMA_EVENT*) is not supported.
@@ -178,6 +187,13 @@ provider for AWS Neuron or Habana SynapseAI.
   is kicked off, due to a current device limitation.
   The default value is false.
 
+*FI_OPT_EFA_USE_UNSOLICITED_WRITE_RECV - bool*
+: This option only applies to the fi_setopt() call.
+  It is used to disable unsolicited write recv for this endpoint, which can reduce
+  the likelihood of CQ overflow. The default value is true.
+  For efa-direct, FI_RX_CQ_DATA is required when FI_OPT_EFA_USE_UNSOLICITED_WRITE_RECV
+  is false, or it will return -FI_EOPNOTSUPP for the call to fi_setopt().
+
 # PROVIDER SPECIFIC DOMAIN OPS
 The efa provider exports extensions for operations
 that are not provided by the standard libfabric interface. These extensions
@@ -191,7 +207,8 @@ Domain operation extension is obtained by calling `fi_open_ops`
 int fi_open_ops(struct fid *domain, const char *name, uint64_t flags,
     void **ops, void *context);
 ```
-and requesting `FI_EFA_DOMAIN_OPS` in `name`. `fi_open_ops` returns `ops` as
+
+Requesting `FI_EFA_DOMAIN_OPS` in `name` returns `ops` as
 the pointer to the function table `fi_efa_ops_domain` defined as follows:
 
 ```c
@@ -200,10 +217,8 @@ struct fi_efa_ops_domain {
 };
 ```
 
-It contains the following operations
-
 ### query_mr
-This op query an existing memory registration as input, and outputs the efa
+This op queries an existing memory registration as input, and outputs the efa
 specific mr attribute which is defined as follows
 
 ```c
@@ -239,6 +254,150 @@ struct fi_efa_mr_attr {
 #### Return value
 **query_mr()** returns 0 on success, or the value of errno on failure
 (which indicates the failure reason).
+
+
+To enable GPU Direct Async (GDA), which allows the GPU to interact directly with the NIC, 
+request `FI_EFA_GDA_OPS` in the `name` parameter with efa-direct fabirc.
+This returns `ops` as a pointer to the function table `fi_efa_ops_gda` defined as follows:
+
+```c
+struct fi_efa_ops_gda {
+	int (*query_addr)(struct fid_ep *ep_fid, fi_addr_t addr, uint16_t *ahn,
+			  uint16_t *remote_qpn, uint32_t *remote_qkey);
+	int (*query_qp_wqs)(struct fid_ep *ep_fid, struct fi_efa_wq_attr *sq_attr, struct fi_efa_wq_attr *rq_attr);
+	int (*query_cq)(struct fid_cq *cq_fid, struct fi_efa_cq_attr *cq_attr);
+	int (*cq_open_ext)(struct fid_domain *domain_fid,
+			   struct fi_cq_attr *attr,
+			   struct fi_efa_cq_init_attr *efa_cq_init_attr,
+			   struct fid_cq **cq_fid, void *context);
+	uint64_t (*get_mr_lkey)(struct fid_mr *mr);
+};
+```
+
+### query_addr
+This op queries the following address information for a given endpoint and destination address.
+
+*ahn*
+:	Address handle number.
+
+*remote_qpn*
+:	Remote queue pair Number.
+
+*remote_qkey*
+:	qkey for the remote queue pair.
+
+#### Return value
+**query_addr()** returns FI_SUCCESS on success, or -FI_EINVAL on failure.
+
+### query_qp_wqs
+This op queries EFA specific Queue Pair work queue attributes for a given endpoint.
+It retrieves the send queue attributes in sq_attr and receive queue attributes in rq_attr, which is defined as follows.
+
+```c
+struct fi_efa_wq_attr {
+    uint8_t *buffer;
+    uint32_t entry_size;
+    uint32_t num_entries;
+    uint32_t *doorbell;
+    uint32_t max_batch;
+};
+```
+
+*buffer*
+:	Queue buffer.
+
+*entry_size*
+:	Size of each entry in the queue.
+
+*num_entries*
+:	Maximal number of entries in the queue.
+
+*doorbell*
+:	Queue doorbell.
+
+*max_batch*
+:	Maximum batch size for queue submissions.
+
+#### Return value
+**query_qp_wqs()** returns 0 on success, or the value of errno on failure
+(which indicates the failure reason).
+
+### query_cq
+This op queries EFA specific Completion Queue attributes for a given cq.
+
+```c
+struct fi_efa_cq_attr {
+    uint8_t *buffer;
+    uint32_t entry_size;
+    uint32_t num_entries;
+};
+```
+
+*buffer*
+:	Completion queue buffer.
+
+*entry_size*
+:	Size of each completion queue entry.
+
+*num_entries*
+:	Maximal number of entries in the completion queue.
+
+#### Return value
+**query_cq()** returns 0 on success, or the value of errno on failure
+(which indicates the failure reason).
+
+### cq_open_ext
+This op creates a completion queue with external memory provided via dmabuf.
+The memory can be passed by supplying the following struct.
+
+```c
+struct fi_efa_cq_init_attr {
+	uint64_t flags;
+	struct {
+		uint8_t *buffer;
+		uint64_t length;
+		uint64_t offset;
+		uint32_t fd;
+	} ext_mem_dmabuf;
+};
+```
+
+*flags*
+:	A bitwise OR of the various values described below.
+
+	FI_EFA_CQ_INIT_FLAGS_EXT_MEM_DMABUF:
+		create CQ with external memory provided via dmabuf.
+
+*ext_mem_dmabuf*
+:	Structure containing information about external memory when using
+	FI_EFA_CQ_INIT_FLAGS_EXT_MEM_DMABUF flag.
+
+	*buffer*
+	:	Pointer to the memory mapped in the process's virtual address space. 
+		The field is optional, but if not provided, the use of CQ poll interfaces should be avoided.
+
+	*length*
+	:	Length of the memory region to use.
+
+	*offset*
+	:	Offset within the dmabuf.
+
+	*fd*
+	:	File descriptor of the dmabuf.
+
+#### Return value
+**cq_open_ext()** returns 0 on success, or the value of errno on failure
+(which indicates the failure reason).
+
+### get_mr_lkey
+Returns the local memory translation key associated with a MR. The memory registration must have completed successfully before invoking this.
+
+*lkey*
+:	local memory translation key used by TX/RX buffer descriptor.
+
+#### Return value
+**get_mr_lkey()** returns lkey on success, or FI_KEY_NOTAVAIL if the registration has not completed.
+
 
 # Traffic Class (tclass) in EFA
 To prioritize the messages from a given endpoint, user can specify `fi_info->tx_attr->tclass = FI_TC_LOW_LATENCY` in the fi_endpoint() call to set the service level in rdma-core. All other tclass values will be ignored.
@@ -377,6 +536,11 @@ Setting this environment variable to 0 can disable this feature.
 : The threshold that EFA provider will refill the internal rx pkt pool. (Default: 8).
 When the number of internal rx pkts to post is lower than this threshold,
 the refill will be skipped.
+
+*FI_EFA_USE_DATA_PATH_DIRECT*
+
+: Use the direct data path implementation that bypasses rdma-core on data path, including the CQ polling and TX/RX submissions, when it's available.
+Setting this variable as 0 will disable this feature (Default: true).
 
 # SEE ALSO
 

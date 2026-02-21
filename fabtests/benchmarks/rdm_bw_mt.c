@@ -74,7 +74,7 @@
 #define BUFFER_SIZE 1024
 static char oob_buffer[BUFFER_SIZE];
 
-static int num_eps = 1;
+static size_t num_eps = 1;
 static bool bidir = false;
 static ssize_t xfer_size = 1;
 pthread_barrier_t barrier;
@@ -288,13 +288,15 @@ static int mt_reg_mr(struct fi_info *fi, void *buf, size_t size,
 		dmabuf.fd = dmabuf_fd;
 		dmabuf.offset = dmabuf_offset;
 		dmabuf.len = size;
-		dmabuf.base_addr = (void *)((uintptr_t) buf - dmabuf_offset);
+		dmabuf.base_addr = (void *)((char *) buf - dmabuf_offset);
 		flags |= FI_MR_DMABUF;
 	}
 
 	ft_fill_mr_attr(&iov, &dmabuf, 1, access, key, iface, device, &attr,
 			flags);
 	ret = fi_mr_regattr(dom, &attr, flags, mr);
+	if (opts.options & FT_OPT_REG_DMABUF_MR)
+		ft_hmem_put_dmabuf_fd(iface, dmabuf_fd);
 	if (ret)
 		return ret;
 
@@ -438,6 +440,7 @@ static int bw_recv(void *context)
 static void *uni_bandwidth(void *context)
 {
 	int i, ret;
+	const struct thread_args *targs = context;
 
 	pthread_barrier_wait(&barrier);
 	for (i = 0; i < opts.warmup_iterations; i++) {

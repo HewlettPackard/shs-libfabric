@@ -23,7 +23,7 @@
 /* HANDSHAKE packet related functions */
 
 ssize_t efa_rdm_pke_init_handshake(struct efa_rdm_pke *pkt_entry,
-				   fi_addr_t addr)
+				   struct efa_rdm_peer *peer)
 {
 	int nex;
 	struct efa_rdm_handshake_hdr *handshake_hdr;
@@ -86,22 +86,26 @@ ssize_t efa_rdm_pke_init_handshake(struct efa_rdm_pke *pkt_entry,
 		pkt_entry->pkt_size += sizeof (struct efa_rdm_handshake_opt_user_recv_qp_hdr);
 	}
 
-	pkt_entry->addr = addr;
+	pkt_entry->peer = peer;
 	return 0;
 }
 
 void efa_rdm_pke_handle_handshake_recv(struct efa_rdm_pke *pkt_entry)
 {
-	struct efa_rdm_peer *peer;
 	struct efa_rdm_handshake_hdr *handshake_pkt;
+	struct efa_rdm_peer *peer;
 	uint64_t *host_id_ptr;
 
-	assert(pkt_entry->addr != FI_ADDR_NOTAVAIL);
-	EFA_DBG(FI_LOG_CQ,
-		"HANDSHAKE received from %" PRIu64 "\n", pkt_entry->addr);
-
-	peer = efa_rdm_ep_get_peer(pkt_entry->ep, pkt_entry->addr);
+	peer = pkt_entry->peer;
 	assert(peer);
+
+	efa_rdm_tracepoint(handshake_recv_completion, (size_t) pkt_entry);
+
+	EFA_INFO(FI_LOG_CQ,
+		 "HANDSHAKE received from peer with explicit fi_addr %" PRIu64
+		 " implicit fi_addr %" PRIu64 "\n",
+		 pkt_entry->peer->conn->fi_addr,
+		 pkt_entry->peer->conn->implicit_fi_addr);
 
 	handshake_pkt = (struct efa_rdm_handshake_hdr *)pkt_entry->wiredata;
 
@@ -174,7 +178,7 @@ ssize_t efa_rdm_pke_init_cts(struct efa_rdm_pke *pkt_entry,
 	cts_hdr->flags |= EFA_RDM_PKT_CONNID_HDR;
 	cts_hdr->connid = efa_rdm_ep_raw_addr(ope->ep)->qkey;
 
-	pkt_entry->addr = ope->addr;
+	pkt_entry->peer = ope->peer;
 	pkt_entry->ope = (void *)ope;
 	return 0;
 }
@@ -262,7 +266,7 @@ int efa_rdm_pke_init_ctsdata(struct efa_rdm_pke *pkt_entry,
 		return ret;
 
 	pkt_entry->ope = (void *)ope;
-	pkt_entry->addr = ope->addr;
+	pkt_entry->peer = ope->peer;
 
 	return 0;
 }
@@ -384,7 +388,7 @@ int efa_rdm_pke_init_readrsp(struct efa_rdm_pke *pkt_entry,
 	readrsp_hdr->connid = efa_rdm_ep_raw_addr(rxe->ep)->qkey;
 	readrsp_hdr->seg_length = MIN(rxe->ep->mtu_size - sizeof(struct efa_rdm_readrsp_hdr),
 				      rxe->total_len);
-	pkt_entry->addr = rxe->addr;
+	pkt_entry->peer = rxe->peer;
 	ret = efa_rdm_pke_init_payload_from_ope(pkt_entry, rxe,
 						sizeof(struct efa_rdm_readrsp_hdr),	/* payload offset */
 						0,					/* segment offset */
@@ -455,7 +459,7 @@ void efa_rdm_pke_init_write_context(struct efa_rdm_pke *pkt_entry,
 	struct efa_rdm_rma_context_pkt *rma_context_pkt;
 
 	pkt_entry->ope = (void *)txe;
-	pkt_entry->addr = txe->addr;
+	pkt_entry->peer = txe->peer;
 	rma_context_pkt = (struct efa_rdm_rma_context_pkt *)pkt_entry->wiredata;
 	rma_context_pkt->type = EFA_RDM_RMA_CONTEXT_PKT;
 	rma_context_pkt->version = EFA_RDM_PROTOCOL_VERSION;
@@ -471,14 +475,13 @@ void efa_rdm_pke_init_write_context(struct efa_rdm_pke *pkt_entry,
 
 void efa_rdm_pke_init_read_context(struct efa_rdm_pke *pkt_entry,
 				   struct efa_rdm_ope *ope,
-				   fi_addr_t addr,
 				   int read_id,
 				   size_t seg_size)
 {
 	struct efa_rdm_rma_context_pkt *ctx_pkt;
 
 	pkt_entry->ope = ope;
-	pkt_entry->addr = addr;
+	pkt_entry->peer = ope->peer;
 	pkt_entry->pkt_size = sizeof(struct efa_rdm_rma_context_pkt);
 
 	ctx_pkt = (struct efa_rdm_rma_context_pkt *)pkt_entry->wiredata;
@@ -510,7 +513,7 @@ void efa_rdm_pke_handle_rma_read_completion(struct efa_rdm_pke *context_pkt_entr
 		assert(txe->op == ofi_op_read_req);
 		txe->bytes_read_completed += rma_context_pkt->seg_size;
 		if (txe->bytes_read_total_len == txe->bytes_read_completed) {
-			if (txe->addr == FI_ADDR_NOTAVAIL) {
+			if (txe->peer == NULL) {
 				data_pkt_entry = txe->local_read_pkt_entry;
 				assert(data_pkt_entry->payload_size > 0);
 				/* We were using a held rx pkt to post local read */
@@ -576,6 +579,13 @@ void efa_rdm_pke_handle_rma_completion(struct efa_rdm_pke *context_pkt_entry)
 
 	assert(efa_rdm_pke_get_base_hdr(context_pkt_entry)->version == EFA_RDM_PROTOCOL_VERSION);
 
+	/* pkt_entry->peer can be NULL for a local read operation, which shouldn't be ignored. */
+	if (!context_pkt_entry->peer && !(context_pkt_entry->flags & EFA_RDM_PKE_LOCAL_READ)) {
+		EFA_WARN(FI_LOG_CQ, "ignoring rma completion of a packet to a removed peer.\n");
+		efa_rdm_pke_release_tx(context_pkt_entry);
+		return;
+	}
+
 	rma_context_pkt = (struct efa_rdm_rma_context_pkt *)context_pkt_entry->wiredata;
 
 	switch (rma_context_pkt->context_type) {
@@ -599,7 +609,6 @@ void efa_rdm_pke_handle_rma_completion(struct efa_rdm_pke *context_pkt_entry)
 		assert(0 && "invalid EFA_RDM_RMA_CONTEXT_PKT rma_context_type\n");
 	}
 
-	efa_rdm_ep_record_tx_op_completed(context_pkt_entry->ep, context_pkt_entry);
 	efa_rdm_pke_release_tx(context_pkt_entry);
 }
 
@@ -617,7 +626,7 @@ int efa_rdm_pke_init_eor(struct efa_rdm_pke *pkt_entry, struct efa_rdm_ope *rxe)
 	eor_hdr->flags |= EFA_RDM_PKT_CONNID_HDR;
 	eor_hdr->connid = efa_rdm_ep_raw_addr(rxe->ep)->qkey;
 	pkt_entry->pkt_size = sizeof(struct efa_rdm_eor_hdr);
-	pkt_entry->addr = rxe->addr;
+	pkt_entry->peer = rxe->peer;
 	pkt_entry->ope = rxe;
 	return 0;
 }
@@ -650,7 +659,7 @@ int efa_rdm_pke_init_read_nack(struct efa_rdm_pke *pkt_entry, struct efa_rdm_ope
 	nack_hdr->flags |= EFA_RDM_PKT_CONNID_HDR;
 	nack_hdr->connid = efa_rdm_ep_raw_addr(rxe->ep)->qkey;
 	pkt_entry->pkt_size = sizeof(struct efa_rdm_read_nack_hdr);
-	pkt_entry->addr = rxe->addr;
+	pkt_entry->peer = rxe->peer;
 	pkt_entry->ope = rxe;
 	return 0;
 }
@@ -745,7 +754,7 @@ int efa_rdm_pke_init_receipt(struct efa_rdm_pke *pkt_entry, struct efa_rdm_ope *
 	receipt_hdr->connid = efa_rdm_ep_raw_addr(rxe->ep)->qkey;
 
 	pkt_entry->pkt_size = sizeof(struct efa_rdm_receipt_hdr);
-	pkt_entry->addr = rxe->addr;
+	pkt_entry->peer = rxe->peer;
 	pkt_entry->ope = rxe;
 
 	return 0;
@@ -774,7 +783,16 @@ void efa_rdm_pke_handle_receipt_recv(struct efa_rdm_pke *pkt_entry)
 		return;
 	}
 
-	efa_rdm_ope_handle_send_completed(txe);
+	/* Write send completion immediately to preserve DC semantics */
+	efa_rdm_txe_report_completion(txe);
+
+	/* Set receipt received flag for DC operations */
+	txe->internal_flags |= EFA_RDM_TXE_RECEIPT_RECEIVED;
+
+	/* Only release txe if both conditions are met */
+	if (efa_rdm_txe_dc_ready_for_release(txe))
+		efa_rdm_txe_release(txe);
+
 	efa_rdm_pke_release_rx(pkt_entry);
 }
 
@@ -790,7 +808,7 @@ int efa_rdm_pke_init_atomrsp(struct efa_rdm_pke *pkt_entry, struct efa_rdm_ope *
 	struct efa_rdm_atomrsp_hdr *atomrsp_hdr;
 
 	assert(rxe->atomrsp_data);
-	pkt_entry->addr = rxe->addr;
+	pkt_entry->peer = rxe->peer;
 	pkt_entry->ope = rxe;
 
 	atomrsp_pkt = (struct efa_rdm_atomrsp_pkt *)pkt_entry->wiredata;

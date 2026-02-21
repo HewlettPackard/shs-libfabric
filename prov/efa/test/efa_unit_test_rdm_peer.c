@@ -2,6 +2,7 @@
 /* SPDX-FileCopyrightText: Copyright Amazon.com, Inc. or its affiliates. All rights reserved. */
 
 #include "efa_unit_tests.h"
+#include "efa_rdm_pke_utils.h"
 
 /**
  * @brief Test efa_rdm_peer_reorder_msg
@@ -53,7 +54,6 @@ void test_efa_rdm_peer_reorder_msg_impl(struct efa_resource *resource,
 	(&peer->robuf)->exp_msg_id = exp_msg_id;
 	ret = efa_rdm_peer_reorder_msg(peer, efa_rdm_ep, pkt_entry);
 	assert_int_equal(ret, expected_ret);
-	(&peer->robuf)->exp_msg_id = 0;
 
 	if (!ofi_recvwin_id_valid((&peer->robuf), msg_id) &&
 	    !ofi_recvwin_id_processed((&peer->robuf), msg_id)) {
@@ -88,6 +88,12 @@ void test_efa_rdm_peer_reorder_expected_msg_id(struct efa_resource **state) {
 	expected_ret = 0;
 	/* Receiving expected message id should return 0 */
 	test_efa_rdm_peer_reorder_msg_impl(resource, exp_msg_id, msg_id, expected_ret);
+
+	msg_id = EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE * 3 + 4;
+	exp_msg_id = msg_id;
+	expected_ret = 0;
+	/* Receiving expected message id should return 0 */
+	test_efa_rdm_peer_reorder_msg_impl(resource, exp_msg_id, msg_id, expected_ret);
 }
 
 
@@ -98,8 +104,16 @@ void test_efa_rdm_peer_reorder_smaller_msg_id(struct efa_resource **state) {
 
 	efa_unit_test_resource_construct(resource, FI_EP_RDM, EFA_FABRIC_NAME);
 
+	/* Test with exp_msg_id less than robuf size */
 	msg_id = 1;
-	exp_msg_id = 10;
+	exp_msg_id = EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE - 1;
+	expected_ret = -FI_EALREADY;
+	/* Receiving message id smaller than expected should return -FI_EALREADY */
+	test_efa_rdm_peer_reorder_msg_impl(resource, exp_msg_id, msg_id, expected_ret);
+
+	/* Test with exp_msg_id greater than robuf size */
+	msg_id = EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE - 1;
+	exp_msg_id = EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE * 2 + 3;
 	expected_ret = -FI_EALREADY;
 	/* Receiving message id smaller than expected should return -FI_EALREADY */
 	test_efa_rdm_peer_reorder_msg_impl(resource, exp_msg_id, msg_id, expected_ret);
@@ -112,7 +126,7 @@ void test_efa_rdm_peer_reorder_larger_msg_id(struct efa_resource **state) {
 
 	efa_unit_test_resource_construct(resource, FI_EP_RDM, EFA_FABRIC_NAME);
 
-	msg_id = 10;
+	msg_id = EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE - 2;
 	exp_msg_id = 0;
 	expected_ret = 1;
 	efa_env.rx_copy_ooo = 0; /* Do not copy this pkt entry */
@@ -127,8 +141,17 @@ void test_efa_rdm_peer_reorder_overflow_msg_id(struct efa_resource **state) {
 
 	efa_unit_test_resource_construct(resource, FI_EP_RDM, EFA_FABRIC_NAME);
 
-	msg_id = 16384;
+	/* Test with msg_id equal to robuf size + 1 */
+	msg_id = EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE;
 	exp_msg_id = 0;
+	expected_ret = 1;
+	/* Message id that overflows the receive window should be put in the
+	 * overflow_pke_list and return 1 */
+	test_efa_rdm_peer_reorder_msg_impl(resource, exp_msg_id, msg_id, expected_ret);
+
+	/* Test with larger msg_id */
+	msg_id = EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE * 2;
+	exp_msg_id = EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE - 2;
 	expected_ret = 1;
 	/* Message id that overflows the receive window should be put in the
 	 * overflow_pke_list and return 1 */
@@ -194,13 +217,13 @@ void test_efa_rdm_peer_move_overflow_pke_to_recvwin(struct efa_resource **state)
 
 	efa_unit_test_resource_construct(resource, FI_EP_RDM, EFA_FABRIC_NAME);
 
-	/* overflow_pke_list has a pkt entry with msg_id 18000.
-	 * After calling efa_rdm_peer_move_overflow_pke_to_recvwin when exp_msg_id = 16384,
-	 * 18000 will be moved to recvwin and overflow_pke_list will be empty. */
+	/* overflow_pke_list has a pkt entry with msg_id EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE + EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE / 8.
+	 * After calling efa_rdm_peer_move_overflow_pke_to_recvwin when exp_msg_id = EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE,
+	 * EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE + EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE / 8 will be moved to recvwin and overflow_pke_list will be empty. */
 	test_efa_rdm_peer_move_overflow_pke_to_recvwin_impl(
-		resource, 18000, &peer, &pkt_entry);
+		resource, EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE + EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE / 8, &peer, &pkt_entry);
 
-	assert_non_null(*ofi_recvwin_get_msg((&peer->robuf), 18000));
+	assert_non_null(*ofi_recvwin_get_msg((&peer->robuf), EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE + EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE / 8));
 	assert_int_equal(efa_unit_test_get_dlist_length(&peer->overflow_pke_list), 0);
 
 	efa_rdm_pke_release_rx(pkt_entry);
@@ -215,11 +238,11 @@ void test_efa_rdm_peer_keep_pke_in_overflow_list(struct efa_resource **state) {
 
 	efa_unit_test_resource_construct(resource, FI_EP_RDM, EFA_FABRIC_NAME);
 
-	/* overflow_pke_list has a pkt entry with msg_id 33000.
-	 * After calling efa_rdm_peer_move_overflow_pke_to_recvwin when exp_msg_id = 16384,
-	 * 33000 will stay in overflow_pke_list. */
+	/* overflow_pke_list has a pkt entry with msg_id (EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE * 2) + 1000.
+	 * After calling efa_rdm_peer_move_overflow_pke_to_recvwin when exp_msg_id = EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE,
+	 * (EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE * 2) + 1000 will stay in overflow_pke_list. */
 	test_efa_rdm_peer_move_overflow_pke_to_recvwin_impl(
-		resource, 33000, &peer, &pkt_entry);
+		resource, (EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE * 2) + 1000, &peer, &pkt_entry);
 
 	assert_int_equal(efa_unit_test_get_dlist_length(&peer->overflow_pke_list), 1);
 
@@ -284,19 +307,19 @@ void test_efa_rdm_peer_append_overflow_pke_to_recvwin(struct efa_resource **stat
 	peer = efa_rdm_ep_get_peer(efa_rdm_ep, addr);
 	assert_non_null(peer);
 
-	alloc_pke_in_overflow_list(efa_rdm_ep, &pkt_entry2, peer, raw_addr, 17000);
-	alloc_pke_in_overflow_list(efa_rdm_ep, &pkt_entry1, peer, raw_addr, 17000);
+	alloc_pke_in_overflow_list(efa_rdm_ep, &pkt_entry2, peer, raw_addr, EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE + EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE / 2);
+	alloc_pke_in_overflow_list(efa_rdm_ep, &pkt_entry1, peer, raw_addr, EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE + EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE / 2);
 	assert_int_equal(efa_unit_test_get_dlist_length(&peer->overflow_pke_list), 2);
 
-	/* overflow_pke_list has two pkt entries with msg_id 17000.
-	* After calling efa_rdm_peer_move_overflow_pke_to_recvwin when exp_msg_id = 16384,
+	/* overflow_pke_list has two pkt entries with msg_id EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE + EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE / 2.
+	* After calling efa_rdm_peer_move_overflow_pke_to_recvwin when exp_msg_id = EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE,
 	* two pkt entries of same msg id will be appended to the same entry in recvwin,
 	* and overflow_pke_list will be empty. */
 	(&peer->robuf)->exp_msg_id = efa_env.recvwin_size;
 	efa_env.rx_copy_ooo = 0;
 	efa_rdm_peer_move_overflow_pke_to_recvwin(peer);
 
-	pkt_entry1 = *ofi_recvwin_get_msg((&peer->robuf), 17000);
+	pkt_entry1 = *ofi_recvwin_get_msg((&peer->robuf), EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE + EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE / 2);
 	assert_non_null(pkt_entry1);
 	assert_non_null(pkt_entry1->next);
 	assert_int_equal(efa_unit_test_get_dlist_length(&peer->overflow_pke_list), 0);
@@ -311,7 +334,7 @@ void test_efa_rdm_peer_recvwin_queue_or_append_pke(struct efa_resource **state)
 {
 	struct efa_resource *resource = *state;
 	struct efa_rdm_peer *peer;
-	struct efa_rdm_pke *pkt_entry;
+	struct efa_rdm_pke *pkt_entry, *ooo_entry;
 	struct efa_ep_addr raw_addr;
 	size_t raw_addr_len = sizeof(raw_addr);
 	struct efa_rdm_ep *efa_rdm_ep;
@@ -348,7 +371,9 @@ void test_efa_rdm_peer_recvwin_queue_or_append_pke(struct efa_resource **state)
 	pkt_attr.connid = raw_addr.qkey;
 	efa_unit_test_eager_msgrtm_pkt_construct(pkt_entry, &pkt_attr);
 
-	ret = efa_rdm_peer_recvwin_queue_or_append_pke(pkt_entry, msg_id, (&peer->robuf));
+	ooo_entry = efa_rdm_pke_get_ooo_pke(pkt_entry);
+
+	ret = efa_rdm_peer_recvwin_queue_or_append_pke(ooo_entry, msg_id, (&peer->robuf));
 	assert_int_equal(ret, 1);
 
 #if ENABLE_DEBUG

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2024 Cornelis Networks.
+ * Copyright (C) 2024-2025 Cornelis Networks.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -54,13 +54,21 @@ struct opx_hmem_fabric {
 	struct util_fabric util_fabric;
 };
 
+union opx_hmem_stream;
+
 struct opx_hmem_domain {
 	struct util_domain    util_domain;
 	struct ofi_mr_cache  *hmem_cache;
 	struct fi_opx_domain *opx_domain;
 	struct dlist_entry    list_entry; /* linked to hmem_domain_list */
-	uint32_t	      devreg_copy_from_threshold;
-	uint32_t	      devreg_copy_to_threshold;
+	struct ofi_mr_cache  *ipc_cache;
+	struct {
+		union opx_hmem_stream *stream;
+		struct ofi_bufpool    *event_pool;
+		enum fi_hmem_iface     type;
+	} hmem_stream;
+	uint32_t devreg_copy_from_threshold;
+	uint32_t devreg_copy_to_threshold;
 };
 
 int opx_hmem_close_domain(struct opx_hmem_domain *hmem_domain, int locked);

@@ -404,13 +404,13 @@ static int _cxip_amo_cb(struct cxip_req *req, const union c_event *event)
 
 		event_rc = req->amo.fetching_amo_flush_event_rc;
 
-		if (req->amo.fetching_amo_flush_cntr) {
+		if (req->amo.cntr) {
 			if (event_rc == C_RC_OK)
-				ret = cxip_cntr_mod(req->amo.fetching_amo_flush_cntr,
-						    1, false, false);
+				ret = cxip_cntr_mod(req->amo.cntr, 1, false,
+						    false);
 			else
-				ret = cxip_cntr_mod(req->amo.fetching_amo_flush_cntr,
-						    1, false, true);
+				ret = cxip_cntr_mod(req->amo.cntr, 1, false,
+						    true);
 
 			if (ret != FI_SUCCESS) {
 				req->amo.fetching_amo_flush_event_count--;
@@ -420,6 +420,9 @@ static int _cxip_amo_cb(struct cxip_req *req, const union c_event *event)
 	} else {
 		event_rc = cxi_init_event_rc(event);
 	}
+
+	if (req->amo.cntr)
+		cxip_cntr_progress_dec(req->amo.cntr);
 
 	if (req->amo.result_md)
 		cxip_unmap(req->amo.result_md);
@@ -685,11 +688,21 @@ static int cxip_amo_emit_idc(struct cxip_txc *txc,
 			if (txc->write_cntr) {
 				cstate_cmd.event_ct_ack = 1;
 				cstate_cmd.ct = txc->write_cntr->ct->ctn;
+
+				if (req) {
+					req->amo.cntr = txc->write_cntr;
+					cxip_cntr_progress_inc(req->amo.cntr);
+				}
 			}
 		} else {
 			if (txc->read_cntr) {
 				cstate_cmd.event_ct_reply = 1;
 				cstate_cmd.ct = txc->read_cntr->ct->ctn;
+
+				if (req) {
+					req->amo.cntr = txc->read_cntr;
+					cxip_cntr_progress_inc(req->amo.cntr);
+				}
 			}
 		}
 	}
@@ -775,10 +788,13 @@ static int cxip_amo_emit_idc(struct cxip_txc *txc,
 	/* Optionally configure the flushing command used for fetching AMOs. */
 	if (fetching_amo_flush) {
 		assert(req != NULL);
-		if (req_type == CXIP_RQ_AMO)
-			req->amo.fetching_amo_flush_cntr = txc->write_cntr;
-		else
-			req->amo.fetching_amo_flush_cntr = txc->read_cntr;
+		if (req_type == CXIP_RQ_AMO) {
+			req->amo.cntr = txc->write_cntr;
+			cxip_cntr_progress_inc(req->amo.cntr);
+		} else {
+			req->amo.cntr = txc->read_cntr;
+			cxip_cntr_progress_inc(req->amo.cntr);
+		}
 	}
 
 	ret = cxip_txc_emit_idc_amo(txc, vni, cxip_ofi_to_cxi_tc(tclass),
@@ -1123,6 +1139,11 @@ static int cxip_amo_emit_dma(struct cxip_txc *txc,
 			if (cntr) {
 				dma_amo_cmd.event_ct_ack = 1;
 				dma_amo_cmd.ct = cntr->ct->ctn;
+
+				if (req) {
+					req->amo.cntr = txc->write_cntr;
+					cxip_cntr_progress_inc(req->amo.cntr);
+				}
 			}
 		} else {
 			cntr = triggered ? comp_cntr : txc->read_cntr;
@@ -1130,6 +1151,11 @@ static int cxip_amo_emit_dma(struct cxip_txc *txc,
 			if (cntr) {
 				dma_amo_cmd.event_ct_reply = 1;
 				dma_amo_cmd.ct = cntr->ct->ctn;
+
+				if (req) {
+					req->amo.cntr = txc->read_cntr;
+					cxip_cntr_progress_inc(req->amo.cntr);
+				}
 			}
 		}
 	}
@@ -1137,11 +1163,13 @@ static int cxip_amo_emit_dma(struct cxip_txc *txc,
 	/* Optionally configure the flushing command used for fetching AMOs. */
 	if (fetching_amo_flush) {
 		assert(req != NULL);
-
-		if (req_type == CXIP_RQ_AMO)
-			req->amo.fetching_amo_flush_cntr = txc->write_cntr;
-		else
-			req->amo.fetching_amo_flush_cntr = txc->read_cntr;
+		if (req_type == CXIP_RQ_AMO) {
+			req->amo.cntr = txc->write_cntr;
+			cxip_cntr_progress_inc(req->amo.cntr);
+		} else {
+			req->amo.cntr = txc->read_cntr;
+			cxip_cntr_progress_inc(req->amo.cntr);
+		}
 	}
 
 	ret = cxip_txc_emit_dma_amo(txc, vni, cxip_ofi_to_cxi_tc(tclass),
@@ -1182,10 +1210,15 @@ err:
 	return ret;
 }
 
-static bool cxip_amo_is_idc(struct cxip_txc *txc, uint64_t key, bool triggered)
+static bool cxip_amo_is_idc(struct cxip_txc *txc, uint64_t key, bool triggered,
+			    uint64_t flags)
 {
 	/* Triggered AMOs can never be IDCs. */
 	if (triggered)
+		return false;
+
+	/* Don't issue non-inject operation as IDC if disabled by env */
+	if (!(flags & FI_INJECT) && cxip_env.disable_non_inject_amo_idc)
 		return false;
 
 	/* Only optimized MR can be used for IDCs. */
@@ -1290,7 +1323,7 @@ int cxip_amo_common(enum cxip_amo_req_type req_type, struct cxip_txc *txc,
 		return -FI_EKEYREJECTED;
 	}
 
-	idc = cxip_amo_is_idc(txc, key, triggered);
+	idc = cxip_amo_is_idc(txc, key, triggered, flags);
 
 	/* Convert FI to CXI codes, fail if operation not supported */
 	ret = _cxip_atomic_opcode(req_type, msg->datatype, msg->op,

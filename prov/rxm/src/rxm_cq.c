@@ -353,28 +353,34 @@ static void rxm_rndv_handle_rd_done(struct rxm_ep *rxm_ep,
 static int rxm_rndv_rx_match(struct dlist_entry *item, const void *arg)
 {
 	uint64_t msg_id = *((uint64_t *) arg);
+	uint64_t conn_id = *((uint64_t *) arg + 1);
 	struct rxm_rx_buf *rx_buf;
 
 	rx_buf = container_of(item, struct rxm_rx_buf, rndv_wait_entry);
-	return (msg_id == rx_buf->pkt.ctrl_hdr.msg_id);
+	return (msg_id == rx_buf->pkt.ctrl_hdr.msg_id &&
+		conn_id == rx_buf->pkt.ctrl_hdr.conn_id);
 }
 
 static int rxm_rndv_handle_wr_done(struct rxm_ep *rxm_ep, struct rxm_rx_buf *rx_buf)
 {
 	struct dlist_entry *rx_buf_entry;
 	struct rxm_rx_buf *rndv_rx_buf;
+	uint64_t arg[2];
 	int ret = 0;
 
-	FI_DBG(&rxm_prov, FI_LOG_CQ, "Got DONE for msg_id: 0x%" PRIx64 "\n",
-	       rx_buf->pkt.ctrl_hdr.msg_id);
+	FI_DBG(&rxm_prov, FI_LOG_CQ,
+	       "Got DONE for msg_id: 0x%" PRIx64 ", conn_id: 0x%" PRIx64 "\n",
+	       rx_buf->pkt.ctrl_hdr.msg_id, rx_buf->pkt.ctrl_hdr.conn_id);
 
+	arg[0] = rx_buf->pkt.ctrl_hdr.msg_id;
+	arg[1] = rx_buf->pkt.ctrl_hdr.conn_id;
 	rx_buf_entry = dlist_remove_first_match(&rx_buf->ep->rndv_wait_list,
-						rxm_rndv_rx_match,
-						&rx_buf->pkt.ctrl_hdr.msg_id);
+						rxm_rndv_rx_match, arg);
 	if (!rx_buf_entry) {
 		FI_WARN(&rxm_prov, FI_LOG_CQ,
-			"Failed to find rndv wait entry for msg_id: 0x%" PRIx64 "\n",
-			rx_buf->pkt.ctrl_hdr.msg_id);
+			"Failed to find rndv wait entry for msg_id: 0x%" PRIx64 ", conn_id: 0x%" PRIx64 "\n",
+			rx_buf->pkt.ctrl_hdr.msg_id,
+			rx_buf->pkt.ctrl_hdr.conn_id);
 		ret = -FI_EINVAL;
 		goto out;
 	}
@@ -606,8 +612,12 @@ static ssize_t rxm_rndv_handle_wr_data(struct rxm_rx_buf *rx_buf)
 	total_len = tx_buf->pkt.hdr.size;
 
 	tx_buf->write_rndv.remote_hdr.count = rx_hdr->count;
+	tx_buf->write_rndv.rndv_rma_index = 0;
+	tx_buf->write_rndv.rndv_rma_count = 0;
+
 	memcpy(tx_buf->write_rndv.remote_hdr.iov, rx_hdr->iov,
 	       rx_hdr->count * sizeof(rx_hdr->iov[0]));
+
 	// calculate number of RMA writes required to complete the transfer.
 	// there me be less than iov count RMA writes required,
 	// depending on differences between remote and local IOV sizes.
@@ -618,12 +628,29 @@ static ssize_t rxm_rndv_handle_wr_data(struct rxm_rx_buf *rx_buf)
 		}
 	}
 
-	/* BUG: This is forcing a state change without knowing what state
-	 * we're currently in.  This loses whether we processed the completion
-	 * for the original send request.  Valid states here are
-	 * RXM_RNDV_TX or RXM_RNDV_WRITE_DATA_WAIT.
+	/* Valid states here depends on whether the completion of the original
+	 * send has been processed:
+	 *
+	 *	RXM_RNDV_TX: not processed yet
+	 *	RXM_RNDV_WRITE_DATA_WAIT: processed
+	 *
+	 * We should only transition to RXM_RNDV_WRITE after the completion
+	 * of the original send has been processed, otherwise the send
+	 * completion could be misinterpreted as a write completion and thus
+	 * cause rxm_rndv_send_wr_done() being called prematurely, resulting
+	 * incorrect data being accessed at the receive side.
+	 *
+	 * The RXM_RNDV_WRITE_TX_WAIT state is used to indicate that the
+	 * next completion should be the completion of the original send
+	 * even though the write operation has been posted.
 	 */
-	RXM_UPDATE_STATE(FI_LOG_CQ, tx_buf, RXM_RNDV_WRITE);
+	assert(tx_buf->hdr.state == RXM_RNDV_TX ||
+	       tx_buf->hdr.state == RXM_RNDV_WRITE_DATA_WAIT);
+
+	if (tx_buf->hdr.state == RXM_RNDV_WRITE_DATA_WAIT)
+		RXM_UPDATE_STATE(FI_LOG_CQ, tx_buf, RXM_RNDV_WRITE);
+	else
+		RXM_UPDATE_STATE(FI_LOG_CQ, tx_buf, RXM_RNDV_WRITE_TX_WAIT);
 
 	ret = rxm_rndv_xfer(rx_buf->ep, tx_buf->write_rndv.conn->msg_ep, rx_hdr,
 			    tx_buf->write_rndv.iov, tx_buf->write_rndv.desc,
@@ -653,8 +680,8 @@ static ssize_t rxm_handle_rndv(struct rxm_rx_buf *rx_buf)
 	assert(rx_buf->conn);
 
 	FI_DBG(&rxm_prov, FI_LOG_CQ,
-	       "Got incoming rndv req with msg_id: 0x%" PRIx64 "\n",
-	       rx_buf->pkt.ctrl_hdr.msg_id);
+	       "Got incoming rndv req with msg_id: 0x%" PRIx64 ", conn_id: 0x%" PRIx64 "\n",
+	       rx_buf->pkt.ctrl_hdr.msg_id, rx_buf->pkt.ctrl_hdr.conn_id);
 
 	rx_buf->remote_rndv_hdr = (struct rxm_rndv_hdr *) rx_buf->pkt.data;
 	rx_buf->rndv_rma_index = 0;
@@ -1238,7 +1265,7 @@ static ssize_t rxm_handle_atomic_req(struct rxm_ep *rxm_ep,
 							atomic_op));
 		if (ret) {
 			FI_WARN(&rxm_prov, FI_LOG_EP_DATA,
-				"Atomic RMA MR verify error %ld\n", ret);
+				"Atomic RMA MR verify error %zd\n", ret);
 			return rxm_atomic_send_resp(rxm_ep, rx_buf, resp_buf, 0,
 						    (uint32_t) -FI_EACCES);
 		}
@@ -1256,7 +1283,8 @@ static ssize_t rxm_handle_atomic_req(struct rxm_ep *rxm_ep,
 		void *src_buf = req_hdr->data + offset;
 		void *cmp_buf = req_hdr->data + len + offset;
 		void *res_buf = resp_hdr->data + offset;
-		void *dst_buf = (void *) req_hdr->rma_ioc[i].addr;
+
+		void *dst_buf = (void *)(uintptr_t) req_hdr->rma_ioc[i].addr;
 
 		if (mr->iface != FI_HMEM_SYSTEM) {
 			ret = rxm_do_device_mem_atomic(mr, op, dst_buf, src_buf,
@@ -1265,7 +1293,7 @@ static ssize_t rxm_handle_atomic_req(struct rxm_ep *rxm_ep,
 						       atomic_op, amo_op_size);
 			if (ret) {
 				FI_WARN(&rxm_prov, FI_LOG_EP_DATA,
-					"Atomic operation failed %ld\n", ret);
+					"Atomic operation failed %zd\n", ret);
 
 				return rxm_atomic_send_resp(rxm_ep, rx_buf,
 							    resp_buf, 0,
@@ -1477,6 +1505,11 @@ ssize_t rxm_handle_comp(struct rxm_ep *rxm_ep, struct fi_cq_data_entry *comp)
 
 		rxm_rndv_send_wr_done(rxm_ep, tx_buf);
 		return 0;
+	case RXM_RNDV_WRITE_TX_WAIT:
+		tx_buf = comp->op_context;
+		assert(comp->flags & FI_SEND);
+		RXM_UPDATE_STATE(FI_LOG_CQ, tx_buf, RXM_RNDV_WRITE);
+		return 0;
 	case RXM_RNDV_READ_DONE_SENT:
 		assert(comp->flags & FI_SEND);
 		rxm_rndv_rx_finish(comp->op_context);
@@ -1653,6 +1686,7 @@ void rxm_handle_comp_error(struct rxm_ep *rxm_ep)
 			return;
 		break;
 	case RXM_RNDV_WRITE:
+	case RXM_RNDV_WRITE_TX_WAIT:
 		tx_buf = err_entry.op_context;
 		err_entry.op_context = tx_buf->app_context;
 		err_entry.flags = ofi_tx_cq_flags(tx_buf->pkt.hdr.op);

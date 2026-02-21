@@ -58,6 +58,7 @@ static void util_init_rx_entry(struct util_rx_entry *entry,
 			       size_t count, fi_addr_t addr, void *context,
 			       uint64_t tag, uint64_t flags)
 {
+	entry->status = RX_ENTRY_POSTED;
 	memcpy(entry->peer_entry.iov, iov, sizeof(*iov) * count);
 	if (desc)
 		memcpy(entry->peer_entry.desc, desc, sizeof(*desc) * count);
@@ -103,6 +104,7 @@ static struct util_rx_entry *util_init_unexp(struct util_srx_ctx *srx,
 	if (!util_entry)
 		return NULL;
 
+	util_entry->status = RX_ENTRY_UNEXP;
 	util_entry->peer_entry.owner_context = NULL;
 	util_entry->peer_entry.msg_size = attr->msg_size;
 	util_entry->peer_entry.addr = attr->addr;
@@ -148,8 +150,10 @@ static struct util_rx_entry *util_process_multi_recv(struct util_srx_ctx *srx,
 		return NULL;
 
 	if (util_adjust_multi_recv(srx, &owner_entry->peer_entry,
-				   attr->msg_size))
+				   attr->msg_size)) {
+		util_entry->status = RX_ENTRY_MATCHED;
 		slist_remove_head(queue);
+	}
 
 	util_entry->peer_entry.owner_context = owner_entry;
 	owner_entry->multi_recv_ref++;
@@ -175,8 +179,8 @@ static int util_match_msg(struct fid_peer_srx *srx,
 		ret = -FI_ENOENT;
 	} else {
 		head = srx_ctx->msg_queue.head;
-		util_entry = container_of(head, struct util_rx_entry,
-					  peer_entry);
+		util_entry = container_of(head, struct util_rx_entry, s_entry);
+		assert(util_entry->status == RX_ENTRY_POSTED);
 		if (util_entry->peer_entry.flags & FI_MULTI_RECV) {
 			util_entry = util_process_multi_recv(srx_ctx,
 				&srx_ctx->msg_queue, attr, util_entry);
@@ -187,6 +191,7 @@ static int util_match_msg(struct fid_peer_srx *srx,
 				return -FI_ENOMEM;
 			}
 		} else {
+			util_entry->status = RX_ENTRY_MATCHED;
 			(void) slist_remove_head(&srx_ctx->msg_queue);
 		}
 		util_entry->peer_entry.srx = srx;
@@ -215,16 +220,17 @@ static int util_get_msg(struct fid_peer_srx *srx,
 	if (!queue || slist_empty(queue))
 		return util_match_msg(srx, attr, rx_entry);
 
-	util_entry = container_of(queue->head, struct util_rx_entry,
-				  peer_entry);
+	util_entry = container_of(queue->head, struct util_rx_entry, s_entry);
 	if (!slist_empty(&srx_ctx->msg_queue)) {
 		any_entry = container_of(&srx_ctx->msg_queue.head,
-					 struct util_rx_entry, peer_entry);
+					 struct util_rx_entry, s_entry);
 		if (any_entry->seq_no <= util_entry->seq_no) {
 			queue = &srx_ctx->msg_queue;
 			util_entry = any_entry;
 		}
 	}
+
+	util_entry->status = RX_ENTRY_MATCHED;
 
 	if (util_entry->peer_entry.flags & FI_MULTI_RECV) {
 		util_entry = util_process_multi_recv(srx_ctx, queue, attr,
@@ -254,10 +260,11 @@ static int util_match_tag(struct fid_peer_srx *srx,
 
 	srx_ctx = srx->ep_fid.fid.context;
 	slist_foreach(&srx_ctx->tag_queue, item, prev) {
-		util_entry = container_of(item, struct util_rx_entry,
-					  peer_entry);
+		util_entry = container_of(item, struct util_rx_entry, s_entry);
+		assert(util_entry->status == RX_ENTRY_POSTED);
 		if (ofi_match_tag(util_entry->peer_entry.tag,
 				  util_entry->ignore, attr->tag)) {
+			util_entry->status = RX_ENTRY_MATCHED;
 			util_entry->peer_entry.srx = srx;
 			srx_ctx->update_func(srx_ctx, util_entry);
 			slist_remove(&srx_ctx->tag_queue, item, prev);
@@ -298,8 +305,7 @@ static int util_get_tag(struct fid_peer_srx *srx,
 		return util_match_tag(srx, attr, rx_entry);
 
 	slist_foreach(queue, item, prev) {
-		util_entry = container_of(item, struct util_rx_entry,
-					  peer_entry);
+		util_entry = container_of(item, struct util_rx_entry, s_entry);
 		if (ofi_match_tag(util_entry->peer_entry.tag,
 				  util_entry->ignore, attr->tag))
 			goto check_any;
@@ -322,6 +328,7 @@ check_any:
 			break;
 		}
 	}
+	util_entry->status = RX_ENTRY_MATCHED;
 	util_entry->peer_entry.srx = srx;
 	srx_ctx->update_func(srx_ctx, util_entry);
 	*rx_entry = &util_entry->peer_entry;
@@ -332,19 +339,21 @@ check_any:
 static int util_queue_msg(struct fi_peer_rx_entry *rx_entry)
 {
 	struct util_srx_ctx *srx_ctx = rx_entry->srx->ep_fid.fid.context;
+	struct util_rx_entry *util_entry;
 	struct util_unexp_peer *unexp_peer;
 
 	assert(ofi_genlock_held(srx_ctx->lock));
 
-	if (rx_entry->addr == FI_ADDR_UNSPEC) {
-		dlist_insert_tail((struct dlist_entry *) rx_entry,
+	util_entry = container_of(rx_entry, struct util_rx_entry, peer_entry);
+	assert(util_entry->status == RX_ENTRY_UNEXP);
+	if (!srx_ctx->dir_recv || rx_entry->addr == FI_ADDR_UNSPEC) {
+		dlist_insert_tail(&util_entry->d_entry,
 				  &srx_ctx->unspec_unexp_msg_queue);
 	} else {
 		unexp_peer = ofi_array_at(&srx_ctx->src_unexp_peers,
 					  rx_entry->addr);
 		assert(unexp_peer);
-		slist_insert_tail((struct slist_entry *) rx_entry,
-				  &unexp_peer->msg_queue);
+		slist_insert_tail(&util_entry->s_entry, &unexp_peer->msg_queue);
 		if (!unexp_peer->cnt++)
 			dlist_insert_tail(&unexp_peer->entry,
 					  &srx_ctx->unexp_peers);
@@ -355,19 +364,21 @@ static int util_queue_msg(struct fi_peer_rx_entry *rx_entry)
 static int util_queue_tag(struct fi_peer_rx_entry *rx_entry)
 {
 	struct util_srx_ctx *srx_ctx = rx_entry->srx->ep_fid.fid.context;
+	struct util_rx_entry *util_entry;
 	struct util_unexp_peer *unexp_peer;
 
 	assert(ofi_genlock_held(srx_ctx->lock));
 
-	if (rx_entry->addr == FI_ADDR_UNSPEC) {
-		dlist_insert_tail((struct dlist_entry *) rx_entry,
+	util_entry = container_of(rx_entry, struct util_rx_entry, peer_entry);
+	assert(util_entry->status == RX_ENTRY_UNEXP);
+	if (!srx_ctx->dir_recv || rx_entry->addr == FI_ADDR_UNSPEC) {
+		dlist_insert_tail(&util_entry->d_entry,
 				  &srx_ctx->unspec_unexp_tag_queue);
 	} else {
 		unexp_peer = ofi_array_at(&srx_ctx->src_unexp_peers,
 					  rx_entry->addr);
 		assert(unexp_peer);
-		slist_insert_tail((struct slist_entry *) rx_entry,
-				  &unexp_peer->tag_queue);
+		slist_insert_tail(&util_entry->s_entry, &unexp_peer->tag_queue);
 		if (!unexp_peer->cnt++)
 			dlist_insert_tail(&unexp_peer->entry,
 					  &srx_ctx->unexp_peers);
@@ -379,6 +390,9 @@ static int util_queue_tag(struct fi_peer_rx_entry *rx_entry)
 static void util_free_entry(struct fi_peer_rx_entry *entry)
 {
 	struct util_srx_ctx *srx;
+	struct util_unexp_peer *unexp_peer;
+	struct slist *queue;
+	struct slist_entry *item, *prev;
 	struct util_rx_entry *util_entry, *owner_entry;
 
 	srx = (struct util_srx_ctx *) entry->srx->ep_fid.fid.context;
@@ -399,6 +413,30 @@ static void util_free_entry(struct fi_peer_rx_entry *entry)
 			ofi_buf_free(owner_entry);
 		}
 	}
+
+	if (util_entry->status == RX_ENTRY_UNEXP) {
+		if (util_entry->peer_entry.addr == FI_ADDR_UNSPEC) {
+			dlist_remove(&util_entry->d_entry);
+		} else {
+			unexp_peer = ofi_array_at(&srx->src_unexp_peers,
+						  util_entry->peer_entry.addr);
+			queue = util_entry->peer_entry.flags & FI_TAGGED ?
+					&unexp_peer->tag_queue :
+					&unexp_peer->msg_queue;
+
+			slist_foreach(queue, item, prev) {
+				if ((struct util_rx_entry *) item == util_entry)
+					slist_remove(queue, item, prev);
+			}
+
+			if (!--unexp_peer->cnt) {
+				assert(slist_empty(&unexp_peer->msg_queue) &&
+				       slist_empty(&unexp_peer->tag_queue));
+				dlist_remove(&unexp_peer->entry);
+			}
+		}
+	}
+
 	ofi_buf_free(util_entry);
 }
 
@@ -406,47 +444,48 @@ static void util_foreach_unspec(struct fid_peer_srx *srx,
 		fi_addr_t (*get_addr)(struct fi_peer_rx_entry *))
 {
 	struct util_srx_ctx *srx_ctx;
-	struct fi_peer_rx_entry *rx_entry;
+	struct util_rx_entry *rx_entry;
 	struct util_unexp_peer *unexp_peer;
-	struct dlist_entry *item, *tmp;
+	struct dlist_entry *tmp;
 
 	srx_ctx = srx->ep_fid.fid.context;
 
-	ofi_genlock_lock(srx_ctx->lock);
-	dlist_foreach_safe(&srx_ctx->unspec_unexp_msg_queue, item, tmp) {
-		rx_entry = (struct fi_peer_rx_entry *) item;
-		rx_entry->addr = get_addr(rx_entry);
-		if (rx_entry->addr == FI_ADDR_UNSPEC)
+	assert(ofi_genlock_held(srx_ctx->lock));
+	dlist_foreach_container_safe(&srx_ctx->unspec_unexp_msg_queue,
+				     struct util_rx_entry, rx_entry, d_entry,
+				     tmp) {
+		rx_entry->peer_entry.addr = get_addr(&rx_entry->peer_entry);
+		if (rx_entry->peer_entry.addr == FI_ADDR_UNSPEC ||
+		    !srx_ctx->dir_recv)
 			continue;
 
-		dlist_remove(item);
+		dlist_remove(&rx_entry->d_entry);
 		unexp_peer = ofi_array_at(&srx_ctx->src_unexp_peers,
-					  rx_entry->addr);
+					  rx_entry->peer_entry.addr);
 		assert(unexp_peer);
-		slist_insert_tail((struct slist_entry *) rx_entry,
-				  &unexp_peer->msg_queue);
+		slist_insert_tail(&rx_entry->s_entry, &unexp_peer->msg_queue);
 		if (!unexp_peer->cnt++)
 			dlist_insert_tail(&unexp_peer->entry,
 					  &srx_ctx->unexp_peers);
 	}
 
-	dlist_foreach_safe(&srx_ctx->unspec_unexp_tag_queue, item, tmp) {
-		rx_entry = (struct fi_peer_rx_entry *) item;
-		rx_entry->addr = get_addr(rx_entry);
-		if (rx_entry->addr == FI_ADDR_UNSPEC)
+	dlist_foreach_container_safe(&srx_ctx->unspec_unexp_tag_queue,
+				     struct util_rx_entry, rx_entry, d_entry,
+				     tmp) {
+		rx_entry->peer_entry.addr = get_addr(&rx_entry->peer_entry);
+		if (rx_entry->peer_entry.addr == FI_ADDR_UNSPEC ||
+		    !srx_ctx->dir_recv)
 			continue;
 
-		dlist_remove(item);
+		dlist_remove(&rx_entry->d_entry);
 		unexp_peer = ofi_array_at(&srx_ctx->src_unexp_peers,
-					  rx_entry->addr);
+					  rx_entry->peer_entry.addr);
 		assert(unexp_peer);
-		slist_insert_tail((struct slist_entry *) rx_entry,
-				  &unexp_peer->tag_queue);
+		slist_insert_tail(&rx_entry->s_entry, &unexp_peer->tag_queue);
 		if (!unexp_peer->cnt++)
 			dlist_insert_tail(&unexp_peer->entry,
 					  &srx_ctx->unexp_peers);
 	}
-	ofi_genlock_unlock(srx_ctx->lock);
 }
 
 static struct fi_ops_srx_owner util_srx_owner_ops = {
@@ -485,12 +524,13 @@ static struct util_rx_entry *util_search_unexp_msg(struct util_srx_ctx *srx,
 		if (!dlist_empty(&srx->unspec_unexp_msg_queue)) {
 			dlist_pop_front(&srx->unspec_unexp_msg_queue,
 					struct util_rx_entry, rx_entry,
-					peer_entry);
+					d_entry);
 			return rx_entry;
 		}
 
 		dlist_foreach_container(&srx->unexp_peers,
-				struct util_unexp_peer, unexp_peer, entry) {
+					struct util_unexp_peer, unexp_peer,
+					entry) {
 			rx_entry = util_search_peer_msg(unexp_peer);
 			if (rx_entry)
 				return rx_entry;
@@ -553,6 +593,7 @@ static ssize_t util_generic_mrecv(struct util_srx_ctx *srx,
 
 	rx_entry = util_search_unexp_msg(srx, addr);
 	while (rx_entry) {
+		rx_entry->status = RX_ENTRY_MATCHED;
 		buf_done = util_unexp_mrecv(srx, mrecv_entry, rx_entry);
 
 		srx->update_func(srx, rx_entry);
@@ -567,8 +608,7 @@ static ssize_t util_generic_mrecv(struct util_srx_ctx *srx,
 	queue = addr == FI_ADDR_UNSPEC ? &srx->msg_queue:
 		ofi_array_at(&srx->src_recv_queues, addr);
 	assert(queue);
-	slist_insert_tail((struct slist_entry *)(&mrecv_entry->peer_entry),
-			  queue);
+	slist_insert_tail(&mrecv_entry->s_entry, queue);
 out:
 	ofi_genlock_unlock(srx->lock);
 	return ret;
@@ -606,18 +646,17 @@ static struct util_rx_entry *util_search_unexp_tag(struct util_srx_ctx *srx,
 {
 	struct util_rx_entry *rx_entry;
 	struct util_unexp_peer *unexp_peer;
-	struct dlist_entry *entry;
 
 	if (addr == FI_ADDR_UNSPEC) {
-		dlist_foreach(&srx->unspec_unexp_tag_queue, entry) {
-			rx_entry = container_of(entry, struct util_rx_entry,
-						peer_entry);
+		dlist_foreach_container(&srx->unspec_unexp_tag_queue,
+					struct util_rx_entry, rx_entry,
+					d_entry) {
 			if (!ofi_match_tag(tag, ignore,
 			    rx_entry->peer_entry.tag))
 				continue;
 
 			if (remove)
-				dlist_remove(entry);
+				dlist_remove(&rx_entry->d_entry);
 
 			return rx_entry;
 		}
@@ -725,9 +764,7 @@ ssize_t util_srx_generic_trecv(struct fid_ep *ep_fid, const struct iovec *iov,
 			if (!rx_entry)
 				ret = -FI_ENOMEM;
 			else
-				slist_insert_tail((struct slist_entry *)
-						  (&rx_entry->peer_entry),
-						  queue);
+				slist_insert_tail(&rx_entry->s_entry, queue);
 			goto out;
 		}
 	}
@@ -772,8 +809,7 @@ ssize_t util_srx_generic_recv(struct fid_ep *ep_fid, const struct iovec *iov,
 		if (!rx_entry)
 			ret = -FI_ENOMEM;
 		else
-			slist_insert_tail((struct slist_entry *)
-					  (&rx_entry->peer_entry), queue);
+			slist_insert_tail(&rx_entry->s_entry, queue);
 		goto out;
 	}
 
@@ -937,7 +973,7 @@ static int util_cleanup_queues(struct ofi_dyn_arr *arr, void *list,
 
 	while (!slist_empty(queue)) {
 		item = slist_remove_head(queue);
-		rx_entry = container_of(item, struct util_rx_entry, peer_entry);
+		rx_entry = container_of(item, struct util_rx_entry, s_entry);
 		ofi_buf_free(rx_entry);
 	}
 	return FI_SUCCESS;
@@ -963,18 +999,18 @@ int util_srx_close(struct fid *fid)
 	while (!slist_empty(&srx->msg_queue)) {
 		entry = slist_remove_head(&srx->msg_queue);
 		ofi_buf_free(container_of(entry, struct util_rx_entry,
-				          peer_entry));
+					  s_entry));
 	}
 
 	while (!slist_empty(&srx->tag_queue)) {
 		entry = slist_remove_head(&srx->tag_queue);
 		ofi_buf_free(container_of(entry, struct util_rx_entry,
-				          peer_entry));
+					  s_entry));
 	}
 
 	while (!dlist_empty(&srx->unspec_unexp_msg_queue)) {
 		dlist_pop_front(&srx->unspec_unexp_msg_queue,
-				struct util_rx_entry, rx_entry, peer_entry);
+				struct util_rx_entry, rx_entry, d_entry);
 		rx_entry->peer_entry.srx->peer_ops->discard_msg(
 							&rx_entry->peer_entry);
 		ofi_buf_free(rx_entry);
@@ -982,7 +1018,7 @@ int util_srx_close(struct fid *fid)
 
 	while (!dlist_empty(&srx->unspec_unexp_tag_queue)) {
 		dlist_pop_front(&srx->unspec_unexp_tag_queue,
-				struct util_rx_entry, rx_entry, peer_entry);
+				struct util_rx_entry, rx_entry, d_entry);
 		rx_entry->peer_entry.srx->peer_ops->discard_tag(
 							&rx_entry->peer_entry);
 		ofi_buf_free(rx_entry);
@@ -994,7 +1030,7 @@ int util_srx_close(struct fid *fid)
 		while (!slist_empty(&unexp_peer->msg_queue)) {
 			rx_entry = container_of(slist_remove_head(
 				&unexp_peer->msg_queue), struct util_rx_entry,
-				peer_entry);
+				s_entry);
 			rx_entry->peer_entry.srx->peer_ops->discard_msg(
 							&rx_entry->peer_entry);
 			ofi_buf_free(rx_entry);
@@ -1003,7 +1039,7 @@ int util_srx_close(struct fid *fid)
 		while (!slist_empty(&unexp_peer->tag_queue)) {
 			rx_entry = container_of(slist_remove_head(
 				&unexp_peer->tag_queue), struct util_rx_entry,
-				peer_entry);
+				s_entry);
 			rx_entry->peer_entry.srx->peer_ops->discard_tag(
 							&rx_entry->peer_entry);
 			ofi_buf_free(rx_entry);
@@ -1039,7 +1075,7 @@ static int util_cancel_recv(struct util_srx_ctx *srx, struct slist *queue,
 
 	assert(ofi_genlock_held(srx->lock));
 	slist_foreach(queue, item, prev) {
-		rx_entry = container_of(item, struct util_rx_entry, peer_entry);
+		rx_entry = container_of(item, struct util_rx_entry, s_entry);
 		if (rx_entry->peer_entry.context == context) {
 			/* With multi-recv, cancellation can only be processed
 			 * if the multi-recv buffer is no longer in use. If the

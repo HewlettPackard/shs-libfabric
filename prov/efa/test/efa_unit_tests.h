@@ -18,6 +18,11 @@
 #include "efa.h"
 #include "efa_unit_test_mocks.h"
 
+extern int g_ibv_ah_limit;
+extern int g_ibv_ah_cnt;
+extern int g_self_ah_cnt;
+extern struct ibv_ah g_dummy_ah;
+
 extern struct efa_mock_ibv_send_wr_list g_ibv_send_wr_list;
 extern struct efa_unit_test_mocks g_efa_unit_test_mocks;
 extern struct efa_env efa_env;
@@ -33,6 +38,7 @@ struct efa_resource {
 	struct fid_cq *cq;
 };
 
+/* common functions in efa_unit_test_common.c */
 struct fi_info *efa_unit_test_alloc_hints(enum fi_ep_type ep_type, char *fabric_name);
 struct fi_info *efa_unit_test_alloc_hints_hmem(enum fi_ep_type ep_type, char *fabric_name);
 
@@ -98,21 +104,33 @@ void efa_unit_test_buff_destruct(struct efa_unit_test_buff *buff);
 
 void efa_unit_test_eager_msgrtm_pkt_construct(struct efa_rdm_pke *pkt_entry, struct efa_unit_test_eager_rtm_pkt_attr *attr);
 
-void efa_unit_test_handshake_pkt_construct(struct efa_rdm_pke *pkt_entry, struct efa_unit_test_handshake_pkt_attr *attr);
+void efa_unit_test_construct_handshake_pkt_for_receive(struct efa_rdm_pke *pkt_entry, struct efa_unit_test_handshake_pkt_attr *attr);
 
 struct efa_rdm_ope *efa_unit_test_alloc_txe(struct efa_resource *resource, uint32_t op);
 
 struct efa_rdm_ope *efa_unit_test_alloc_rxe(struct efa_resource *resource, uint32_t op);
+
+/* end of common functions in efa_unit_test_common.c */
 
 /* test cases */
 
 /* begin efa_unit_test_av.c */
 void test_av_insert_duplicate_raw_addr();
 void test_av_insert_duplicate_gid();
-void test_efa_ah_cnt_one_av();
-void test_efa_ah_cnt_multi_av();
+void test_efa_ah_cnt_one_av_efa();
+void test_efa_ah_cnt_one_av_efa_direct();
+void test_efa_ah_cnt_multi_av_efa();
+void test_efa_ah_cnt_multi_av_efa_direct();
 void test_av_multiple_ep_efa();
 void test_av_multiple_ep_efa_direct();
+void test_av_reinsertion();
+void test_av_implicit();
+void test_av_implicit_to_explicit();
+void test_av_implicit_av_lru_insertion();
+void test_av_implicit_av_lru_eviction();
+void test_ah_refcnt();
+void test_ah_lru_eviction_explicit_av_insert();
+void test_ah_lru_eviction_implicit_av_insert();
 /* end efa_unit_test_av.c */
 
 void test_efa_device_construct_error_handling();
@@ -126,7 +144,8 @@ void test_efa_rdm_ep_handshake_receive_valid_peer_host_id_and_do_not_send_local_
 void test_efa_rdm_ep_handshake_receive_without_peer_host_id_and_do_not_send_local_host_id();
 void test_efa_rdm_ep_getopt_undersized_optlen();
 void test_efa_rdm_ep_getopt_oversized_optlen();
-void test_efa_rdm_ep_pkt_pool_flags();
+void test_efa_rdm_ep_tx_pkt_pool_flags();
+void test_efa_rdm_ep_rx_pkt_pool_flags();
 void test_efa_rdm_ep_pkt_pool_page_alignment();
 void test_efa_rdm_ep_dc_atomic_queue_before_handshake();
 void test_efa_rdm_ep_dc_send_queue_before_handshake();
@@ -142,6 +161,8 @@ void test_efa_rdm_ep_setopt_shared_memory_permitted();
 void test_efa_rdm_ep_setopt_homogeneous_peers();
 void test_efa_rdm_ep_enable_qp_in_order_aligned_128_bytes_good();
 void test_efa_rdm_ep_enable_qp_in_order_aligned_128_bytes_bad();
+void test_efa_rdm_ep_close_shm_resource_happy();
+void test_efa_rdm_ep_close_shm_resource_unhappy();
 void test_efa_rdm_ep_user_zcpy_rx_disabled();
 void test_efa_rdm_ep_user_disable_p2p_zcpy_rx_disabled();
 void test_efa_rdm_ep_user_zcpy_rx_unhappy_due_to_sas();
@@ -154,8 +175,8 @@ void test_efa_rdm_ep_post_handshake_error_handling_pke_exhaustion();
 void test_efa_rdm_ep_rx_refill_threshold_smaller_than_rx_size();
 void test_efa_rdm_ep_rx_refill_threshold_larger_than_rx_size();
 void test_efa_rdm_ep_support_unsolicited_write_recv();
-void test_efa_rdm_ep_rma_inconsistent_unsolicited_write_recv();
 void test_efa_rdm_ep_default_sizes();
+void test_efa_rdm_ep_outstanding_tx_ops_decremented_with_error_completion();
 void test_dgram_cq_read_empty_cq();
 void test_ibv_cq_ex_read_empty_cq();
 void test_ibv_cq_ex_read_failed_poll();
@@ -165,6 +186,12 @@ void test_rdm_cq_read_bad_send_status_unresponsive_receiver_missing_peer_host_id
 void test_rdm_cq_read_bad_send_status_unreachable_receiver();
 void test_rdm_cq_read_bad_send_status_invalid_qpn();
 void test_rdm_cq_read_bad_send_status_message_too_long();
+void test_rdm_cq_handshake_bad_send_status_bad_qpn();
+void test_rdm_cq_handshake_bad_send_status_unresp_remote();
+void test_rdm_cq_handshake_bad_send_status_unreach_remote();
+void test_rdm_cq_handshake_bad_send_status_remote_abort();
+void test_rdm_cq_handshake_bad_send_status_unsupported_op();
+void test_ibv_cq_unsolicited_write_recv_status();
 void test_ibv_cq_ex_read_bad_recv_status();
 void test_ibv_cq_ex_read_bad_recv_rdma_with_imm_status_use_unsolicited_recv();
 void test_ibv_cq_ex_read_bad_recv_rdma_with_imm_status_use_solicited_recv();
@@ -172,6 +199,9 @@ void test_ibv_cq_ex_read_recover_forgotten_peer_ah();
 void test_rdm_fallback_to_ibv_create_cq_ex_cq_read_ignore_forgotton_peer();
 void test_ibv_cq_ex_read_ignore_removed_peer();
 void test_efa_rdm_cq_before_ep_enable();
+void test_efa_rdm_cq_sread_no_wait_obj();
+void test_efa_rdm_cq_sread_eagain();
+void test_efa_rdm_cq_sread_with_cqe();
 
 /* begin efa_unit_test_info.c */
 void test_info_open_ep_with_wrong_info();
@@ -197,8 +227,11 @@ void test_info_check_hmem_cuda_support_on_api_ge_1_18();
 void test_info_check_no_hmem_support_when_not_requested();
 void test_info_direct_unsupported();
 void test_info_direct_ordering();
-void test_efa_hmem_info_update_neuron();
-void test_efa_hmem_info_disable_p2p_neuron();
+void test_info_reuse_fabric_via_fabric_attr();
+void test_info_reuse_domain_via_domain_attr();
+void test_info_reuse_fabric_via_name();
+void test_info_reuse_domain_via_name();
+void test_efa_hmem_info_p2p_dmabuf_assumed_neuron();
 void test_efa_hmem_info_disable_p2p_cuda();
 void test_efa_nic_select_all_devices_matches();
 void test_efa_nic_select_first_device_matches();
@@ -214,6 +247,11 @@ void test_efa_use_device_rdma_opt0();
 void test_efa_use_device_rdma_env1();
 void test_efa_use_device_rdma_env0();
 void test_efa_use_device_rdma_opt_old();
+void test_info_direct_null_hints_return_rma_and_rx_cq_data();
+void test_info_direct_rma_with_rx_cq_data_when_no_unsolicited_write_recv();
+void test_info_direct_rma_without_rx_cq_data_when_no_unsolicited_write_recv();
+void test_info_direct_no_rma_no_rx_cq_data_when_no_unsolicited_write_recv();
+void test_info_direct_rma_without_rx_cq_data_when_unsolicited_write_recv_supported();
 /* end efa_unit_test_info.c */
 
 void test_efa_srx_min_multi_recv_size();
@@ -240,6 +278,23 @@ void test_efa_rdm_rxe_map();
 void test_efa_rdm_rxe_list_removal();
 void test_efa_rdm_txe_list_removal();
 void test_efa_rdm_txe_prepare_local_read_pkt_entry();
+void test_efa_rdm_txe_handle_error_queue_flags_cleanup();
+void test_efa_rdm_rxe_handle_error_queue_flags_cleanup();
+void test_efa_rdm_txe_handle_error_duplicate_prevention();
+void test_efa_rdm_rxe_handle_error_duplicate_prevention();
+void test_efa_rdm_ope_receipt_packet_tracking_cq_read();
+void test_efa_rdm_ope_receipt_packet_tracking_wait_send();
+void test_efa_rdm_ope_receipt_packet_failed_posting();
+void test_efa_rdm_ope_receipt_packet_tracking_unresponsive_wait_send();
+void test_efa_rdm_ope_eor_packet_tracking_cq_read();
+void test_efa_rdm_ope_eor_packet_tracking_wait_send();
+void test_efa_rdm_ope_eor_packet_failed_posting();
+void test_efa_rdm_ope_eor_packet_tracking_unresponsive_wait_send();
+void test_efa_rdm_atomic_compare_desc_persistence();
+void test_efa_rdm_txe_dc_send_first();
+void test_efa_rdm_txe_dc_receipt_first();
+
+
 /* end of efa_unit_test_ope.c */
 void test_efa_rdm_msg_send_to_local_peer_with_null_desc();
 void test_efa_fork_support_request_initialize_when_ibv_fork_support_is_needed();
@@ -268,6 +323,11 @@ void test_efa_domain_rdm_attr_mr_allocated();
 void test_efa_domain_dgram_attr_mr_allocated();
 void test_efa_domain_direct_attr_mr_allocated();
 void test_efa_domain_peer_list_cleared();
+void test_efa_domain_open_ops_query_addr();
+void test_efa_domain_open_ops_query_qp_wqs();
+void test_efa_domain_open_ops_query_cq();
+void test_efa_domain_open_ops_cq_open_ext();
+void test_efa_domain_open_ops_get_mr_lkey();
 /* end efa_unit_test_domain.c */
 
 void test_efa_rdm_cq_ibv_cq_poll_list_same_tx_rx_cq_single_ep();
@@ -295,6 +355,10 @@ void test_efa_rdm_pke_alloc_rta_rxe();
 void test_efa_rdm_pke_alloc_rtw_rxe();
 void test_efa_rdm_pke_alloc_rtr_rxe();
 void test_efa_rdm_pke_get_unexp();
+void test_efa_rdm_pke_flag_tracking();
+void test_efa_rdm_pke_proc_matched_eager_rtm_error();
+void test_efa_rdm_pke_proc_matched_mulreq_rtm_first_packet_error();
+void test_efa_rdm_pke_proc_matched_mulreq_rtm_second_packet_error();
 /* end of efa_unit_test_pke.c */
 
 void test_efa_msg_fi_recv();
@@ -327,6 +391,33 @@ void test_efa_cq_read_recv_rdma_with_imm_success();
 void test_efa_cq_read_send_failure();
 void test_efa_cq_read_recv_failure();
 void test_efa_cq_recv_rdma_with_imm_failure();
+void test_efa_cq_data_path_direct_disabled_by_env();
+void test_efa_cq_data_path_direct_disabled_with_old_device();
+void test_efa_cq_data_path_direct_enabled_with_new_device();
+void test_efa_cq_data_path_direct_with_wait_obj();
+void test_efa_rdm_cq_data_path_direct_disabled_with_old_device();
+void test_efa_rdm_cq_data_path_direct_enabled_with_new_device();
+void test_efa_cq_trywait_no_channel();
+void test_efa_cq_trywait_completions_available();
+void test_efa_cq_trywait_success();
+void test_efa_cq_sread_enosys();
+void test_efa_cq_sread_eagain();
+void test_efa_cq_control_getwait_with_channel();
+void test_efa_cq_control_getwait_no_channel();
+void test_efa_cq_control_getwaitobj();
+void test_efa_cq_control_invalid_command();
+void test_efa_cq_ep_list_lock_type_no_op();
+void test_efa_cq_ep_list_lock_type_mutex();
+
+void test_efa_cq_ops_override_with_counter_binding();
+void test_efa_cq_readfrom_input_validation();
+void test_efa_cq_readerr_return_value_user_buffer();
+void test_efa_cq_readerr_return_value_provider_buffer();
+void test_efa_cq_readfrom_start_poll_error();
+void test_efa_cq_readfrom_util_cq_entries();
+void test_efa_cq_readerr_util_cq_error();
+void test_efa_cq_poll_active_no_restart();
+void test_efa_cq_read_mixed_success_error();
 void test_efa_ep_open();
 void test_efa_ep_cancel();
 void test_efa_ep_getopt();
@@ -335,14 +426,57 @@ void test_efa_ep_setopt_hmem_p2p();
 void test_efa_ep_setopt_rnr_retry();
 void test_efa_ep_setopt_sizes();
 void test_efa_ep_bind_and_enable();
+void test_efa_ep_data_path_direct_equal_to_cq_data_path_direct_happy();
+void test_efa_ep_data_path_direct_equal_to_cq_data_path_direct_unhappy();
+void test_efa_rdm_ep_data_path_direct_equal_to_cq_data_path_direct_happy();
+void test_efa_rdm_ep_data_path_direct_equal_to_cq_data_path_direct_unhappy();
+void test_efa_ep_lock_type_no_op();
+void test_efa_ep_lock_type_mutex();
+void test_efa_rdm_ep_shm_ep_different_info();
+void test_efa_base_ep_disable_unsolicited_write_recv_with_rx_cq_data();
+void test_efa_rdm_ep_enable_ah_alloc_failure();
+void test_efa_rdm_ep_ibv_create_ah_failure();
+void test_efa_rdm_ep_setopt_cq_flow_control();
+void test_efa_direct_ep_setopt_cq_flow_control_no_rx_cq_data();
+void test_efa_direct_ep_setopt_cq_flow_control_with_rx_cq_data();
+
+/* begin efa_unit_test_data_path_direct.c */
+void test_efa_data_path_direct_rdma_read_multiple_sge_fail();
+void test_efa_data_path_direct_rdma_write_multiple_sge_fail();
+/* end efa_unit_test_data_path_direct.c */
+
+
 void test_efa_cntr_ibv_cq_poll_list_same_tx_rx_cq_single_ep();
 void test_efa_cntr_ibv_cq_poll_list_separate_tx_rx_cq_single_ep();
 
 /* begin efa_unit_test_mr.c */
 void test_efa_rdm_mr_reg_host_memory();
+void test_efa_rdm_mr_reg_host_memory_no_mr_local();
+void test_efa_rdm_mr_reg_host_memory_overlapping_buffers();
 void test_efa_rdm_mr_reg_cuda_memory();
 void test_efa_direct_mr_reg_no_gdrcopy();
+void test_efa_direct_mr_reg_rdma_read_not_supported();
+void test_efa_direct_mr_reg_rdma_write_not_supported();
+void test_efa_mr_ofi_to_ibv_access_no_access();
+void test_efa_mr_ofi_to_ibv_access_one_flag();
+void test_efa_mr_ofi_to_ibv_access_read_not_supported();
+void test_efa_mr_ofi_to_ibv_access_write_not_supported();
+void test_efa_mr_ofi_to_ibv_access_remote_read_write_read_only_supported();
+void test_efa_mr_ofi_to_ibv_access_all_flags_supported();
+void test_efa_mr_ofi_to_ibv_access_all_flags_not_supported();
+void test_efa_mr_internal_regv_no_shm_mr();
 /* end efa_unit_test_mr.c */
+
+/* begin efa_unit_test_rdm_rma.c */
+void test_efa_rdm_rma_should_write_using_rdma_remote_cq_data_multiple_iovs_returns_false();
+void test_efa_rdm_rma_should_write_using_rdma_remote_cq_data_multiple_rma_iovs_returns_false();
+void test_efa_rdm_rma_should_write_using_rdma_use_device_rdma_false_returns_false();
+void test_efa_rdm_rma_should_write_using_rdma_peer_no_rdma_write_support_returns_false();
+void test_efa_rdm_rma_should_write_using_rdma_no_p2p_support_returns_false();
+void test_efa_rdm_rma_should_write_using_rdma_p2p_and_rdma_write_support_returns_true();
+void test_efa_rdm_rma_should_write_using_rdma_remote_cq_data_single_iovs_with_rdma_support();
+void test_efa_rdm_rma_should_write_using_rdma_unsolicited_write_recv_not_match();
+/* end efa_unit_test_rdm_rma.c */
 
 static inline
 int efa_unit_test_get_dlist_length(struct dlist_entry *head)

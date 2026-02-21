@@ -111,8 +111,8 @@ int fi_opx_check_info(const struct fi_info *info)
 		bool  enforce_hmem_caps = true;
 
 		if (fi_param_get_str(NULL, "hmem", &hmem_str) == FI_SUCCESS && hmem_str) {
-			if (strcmp(hmem_str, "system") == 0) {	// if string matches system
-				enforce_hmem_caps = false;	// disable FI_MR_HMEM check
+			if (strcmp(hmem_str, "system") == 0) { // if string matches system
+				enforce_hmem_caps = false;     // disable FI_MR_HMEM check
 			}
 		}
 
@@ -442,7 +442,7 @@ static int fi_opx_fillinfo(struct fi_info *fi, const char *node, const char *ser
 	fi->nic			    = ofi_nic_dup(NULL);
 	fi->nic->bus_attr->bus_type = FI_BUS_PCI;
 
-	return 0;
+	return FI_SUCCESS;
 
 err:
 	if (fi) {
@@ -487,99 +487,184 @@ err:
 	return -errno;
 }
 
-struct fi_opx_global_data fi_opx_global = {.hfi_local_info.type	  = OPX_HFI1_UNDEF,
-					   .pkt_size		  = OPX_HFI1_DEFAULT_PKT_SIZE,
-					   .opx_hfi1_type_strings = {[OPX_HFI1_UNDEF]  = "OPX_HFI1_UNDEF",
-								     [OPX_HFI1_JKR_9B] = "CN5000-mixed",
-								     [OPX_HFI1_WFR]    = "OPA100",
-								     [3]	       = "ERROR",
-								     [OPX_HFI1_JKR]    = "CN5000",
-								     [5]	       = "ERROR",
-								     [6]	       = "ERROR",
-								     [7]	       = "ERROR",
-								     [OPX_HFI1_CYR]    = "CN6000"}};
+/* Be careful not to initialze here AND in OPX_INI */
+struct fi_opx_global_data fi_opx_global = {.opx_hfi1_type_strings = {[OPX_HFI1_UNDEF]	 = "OPX_HFI1_UNDEF",
+								     [OPX_HFI1_MIXED_9B] = "CN5000|CN6000-OPA100-mixed",
+								     [OPX_HFI1_WFR]	 = "OPA100",
+								     [3]		 = "ERROR",
+								     [OPX_HFI1_JKR]	 = "CN5000",
+								     [5]		 = "ERROR",
+								     [6]		 = "ERROR",
+								     [7]		 = "ERROR",
+								     [OPX_HFI1_CYR]	 = "CN6000",
+								     [9]		 = "ERROR",
+								     [10]		 = "ERROR",
+								     [11]		 = "ERROR",
+								     [OPX_HFI1_CNX000]	 = "CN5000|CN6000"}};
+
 /* ROUTE CONTROL table for each packet type */
 int opx_route_control[OPX_HFI1_NUM_PACKET_TYPES];
 
-static int fi_opx_getinfo_hfi(int hfi, uint32_t version, const char *node, const char *service, uint64_t flags,
+static int opx_getinfo_set_domain_name(const int hfi, struct fi_info *info)
+{
+	assert(info);
+	assert(hfi >= 0 && hfi < OPX_MAX_HFIS);
+
+	/* Set the appropriate domain name associated with the HFI.
+	   16 characters following the prefix is more than enough to
+	   accommodate any 4-byte (decimal) value */
+	char domain_name[sizeof(FI_OPX_DOMAIN_NAME_PREFIX) + 16];
+
+	sprintf(domain_name, "%s%d", FI_OPX_DOMAIN_NAME_PREFIX, hfi);
+	free(info->domain_attr->name);
+	if ((info->domain_attr->name = strdup(domain_name)) == NULL) {
+		return -FI_ENOMEM;
+	}
+
+	return FI_SUCCESS;
+}
+
+static int opx_getinfo_dup_global(int hfi, struct fi_info **info, struct fi_info **info_tail)
+{
+	struct fi_info *global_info = fi_opx_global.info;
+	struct fi_info *result_head = NULL;
+	struct fi_info *result_tail = NULL;
+	while (global_info) {
+		struct fi_info *global_dup = fi_dupinfo(global_info);
+		if (!global_dup) {
+			goto err_no_mem;
+		}
+		if (opx_getinfo_set_domain_name(hfi, global_dup) != FI_SUCCESS) {
+			// Free global_dup here because it is not yet in the result list
+			fi_freeinfo(global_dup);
+			goto err_no_mem;
+		}
+
+		if (!result_head) {
+			result_head = global_dup;
+			result_tail = global_dup;
+		} else {
+			result_tail->next = global_dup;
+			result_tail	  = result_tail->next;
+		}
+
+		global_info = global_info->next;
+	}
+
+	(*info)	     = result_head;
+	(*info_tail) = result_tail;
+
+	return FI_SUCCESS;
+
+err_no_mem:
+	while (result_head) {
+		struct fi_info *next = result_head->next;
+		fi_freeinfo(result_head);
+		result_head = next;
+	}
+
+	(*info)	     = NULL;
+	(*info_tail) = NULL;
+
+	return -FI_ENOMEM;
+}
+
+static int opx_getinfo_alloc_and_fill(const int hfi, const char *node, const char *service, const uint64_t flags,
+				      const enum fi_progress progress, const struct fi_info *hints,
+				      struct fi_info **info)
+{
+	struct fi_info *result_info = fi_allocinfo();
+	if (!result_info) {
+		return -FI_ENOMEM;
+	}
+
+	int ret = fi_opx_fillinfo(result_info, node, service, hints, flags, progress);
+	if (ret != FI_SUCCESS) {
+		goto err;
+	}
+
+	ret = opx_getinfo_set_domain_name(hfi, result_info);
+	if (ret != FI_SUCCESS) {
+		goto err;
+	}
+
+	result_info->next = NULL;
+
+	(*info) = result_info;
+
+	return FI_SUCCESS;
+err:
+	fi_freeinfo(result_info);
+	return ret;
+}
+
+static int fi_opx_getinfo_hfi(int hfi, const char *node, const char *service, uint64_t flags,
 			      const struct fi_info *hints, struct fi_info **info, struct fi_info **info_tail)
 {
-	int		ret, ret_auto;
-	struct fi_info *fi	= NULL;
-	struct fi_info *fi_auto = NULL;
+	if (!hints && !node && !service) {
+		return opx_getinfo_dup_global(hfi, info, info_tail);
+	}
 
 	*info	   = NULL;
 	*info_tail = NULL;
 
+	enum fi_progress progress_mode = FI_PROGRESS_UNSPEC;
+
+	int ret = FI_SUCCESS;
+
+	struct fi_info *result_head = NULL;
+	struct fi_info *result_tail = NULL;
+
 	if (hints) {
 		ret = fi_opx_check_info(hints);
 		if (ret) {
-			return ret;
-		}
-		if (!(fi = fi_allocinfo()) || !(fi_auto = fi_allocinfo())) {
-			ret = -FI_ENOMEM;
 			goto err;
 		}
-		ret	 = fi_opx_fillinfo(fi, node, service, hints, flags, FI_PROGRESS_MANUAL);
-		ret_auto = fi_opx_fillinfo(fi_auto, node, service, hints, flags, FI_PROGRESS_AUTO);
+
 		if (hints->domain_attr->data_progress != FI_PROGRESS_UNSPEC) {
+			progress_mode	       = hints->domain_attr->data_progress;
 			fi_opx_global.progress = hints->domain_attr->data_progress;
 			if (hints->domain_attr->data_progress == FI_PROGRESS_AUTO) {
 				FI_INFO(fi_opx_global.prov, FI_LOG_FABRIC, "Locking is forced in FI_PROGRESS_AUTO\n");
 			}
 		}
-		if (ret || ret_auto) {
-			ret = ret ? ret : ret_auto;
+	}
+
+	/* If a progress mode was specified, only return a single fi_info with the requested progress mode.
+	   Otherwise, return two fi_infos, one for manual progress and one for auto progress. Manual should
+	   be first, since it's our preferred/fastest. */
+	if (progress_mode != FI_PROGRESS_UNSPEC) {
+		ret = opx_getinfo_alloc_and_fill(hfi, node, service, flags, progress_mode, hints, &result_head);
+		if (ret != FI_SUCCESS) {
 			goto err;
 		}
-
-	} else if (node || service) {
-		if (!(fi = fi_allocinfo()) || !(fi_auto = fi_allocinfo())) {
-			ret = -FI_ENOMEM;
-			goto err;
-		}
-
-		ret	 = fi_opx_fillinfo(fi, node, service, hints, flags, FI_PROGRESS_MANUAL);
-		ret_auto = fi_opx_fillinfo(fi_auto, node, service, hints, flags, FI_PROGRESS_AUTO);
-		if (ret || ret_auto) {
-			ret = ret ? ret : ret_auto;
-			goto err;
-		}
-
+		result_tail = result_head;
 	} else {
-		if (!(fi = fi_dupinfo(fi_opx_global.info)) ||
-		    !(fi_opx_global.info->next != NULL && (fi_auto = fi_dupinfo(fi_opx_global.info->next)))) {
-			ret = -FI_ENOMEM;
+		ret = opx_getinfo_alloc_and_fill(hfi, node, service, flags, FI_PROGRESS_MANUAL, hints, &result_head);
+		if (ret != FI_SUCCESS) {
 			goto err;
 		}
+
+		ret = opx_getinfo_alloc_and_fill(hfi, node, service, flags, FI_PROGRESS_AUTO, hints, &result_tail);
+		if (ret != FI_SUCCESS) {
+			goto err;
+		}
+		result_head->next = result_tail;
 	}
 
-	/* Set the appropriate domain name associated with the HFI */
-	char domain_name[128];
+	(*info)	     = result_head;
+	(*info_tail) = result_tail;
 
-	sprintf(domain_name, "%s%d", FI_OPX_DOMAIN_NAME_PREFIX, hfi);
-	free(fi->domain_attr->name);
-	fi->domain_attr->name = strdup(domain_name);
-
-	if (fi_auto) {
-		free(fi_auto->domain_attr->name);
-		fi_auto->domain_attr->name = strdup(fi->domain_attr->name);
-	}
-
-	fi->next = fi_auto;
-
-	*info	   = fi;
-	*info_tail = (fi->next) ? fi->next : fi;
-
-	return 0;
+	return FI_SUCCESS;
 
 err:
-	if (fi) {
-		fi_freeinfo(fi);
+	if (result_tail && result_tail != result_head) {
+		fi_freeinfo(result_tail);
 	}
-	if (fi_auto) {
-		fi_freeinfo(fi_auto);
+	if (result_head) {
+		fi_freeinfo(result_head);
 	}
+
 	return ret;
 }
 
@@ -599,7 +684,7 @@ static int fi_opx_getinfo(uint32_t version, const char *node, const char *servic
 	}
 
 	for (i = 0; i < fi_opx_count; i++) {
-		ret = fi_opx_getinfo_hfi(i, version, node, service, flags, hints, &cur, &cur_tail);
+		ret = fi_opx_getinfo_hfi(i, node, service, flags, hints, &cur, &cur_tail);
 		if (ret) {
 			continue;
 		}
@@ -706,6 +791,12 @@ static void do_static_assert_tests()
 
 OPX_INI
 {
+#if HAVE_OPX_DL
+	ofi_mem_init();
+	ofi_hmem_init();
+	ofi_monitors_init();
+#endif
+
 	fi_opx_count	       = 1;
 	fi_opx_global.progress = FI_PROGRESS_MANUAL;
 	fi_opx_set_default_info(); // TODO: fold into fi_opx_set_defaults
@@ -724,6 +815,21 @@ OPX_INI
 
 	memset(&fi_opx_global.hfi_local_info, 0, sizeof(fi_opx_global.hfi_local_info));
 
+	fi_opx_global.hfi_local_info.local_lids_size = 0;
+	fi_opx_global.hfi_local_info.sw_type	     = OPX_HFI1_UNDEF;
+	fi_opx_global.hfi_local_info.hw_type	     = OPX_HFI1_UNDEF;
+	fi_opx_global.hfi_local_info.sim_rctxt_fd    = -1;
+	fi_opx_global.hfi_local_info.sim_sctxt_fd    = -1;
+	fi_opx_global.hfi_local_info.lid	     = (opx_lid_t) 0;
+	fi_opx_global.hfi_local_info.hfi_unit	     = (uint8_t) -1U;
+	fi_opx_global.hfi_local_info.sriov	     = false;
+	fi_opx_global.hfi_local_info.multi_vm	     = false;
+	fi_opx_global.hfi_local_info.multi_lid	     = false;
+	fi_opx_global.hfi_local_info.min_rctxt	     = 0;
+	fi_opx_global.hfi_local_info.max_rctxt	     = INT_MAX;
+
+	fi_opx_global.pkt_size = OPX_HFI1_DEFAULT_PKT_SIZE;
+
 	fi_opx_init = 1;
 
 	fi_param_define(
@@ -735,7 +841,7 @@ OPX_INI
 	fi_param_define(&fi_opx_provider, "reliability_service_usec_max", FI_PARAM_INT,
 			"The number of microseconds between pings for un-acknowledged packets. Defaults to 500 usec.");
 	fi_param_define(
-		&fi_opx_provider, "reliability_service_max_oustanding_bytes", FI_PARAM_INT,
+		&fi_opx_provider, "reliability_service_max_outstanding_bytes", FI_PARAM_INT,
 		"This setting controls the maximum number of bytes allowed to be in-flight (sent but un-ACK'd by receiver) per reliability flow (one-way communication between two endpoints). Valid values are in the range of 8192-150,994,944 (8KB-144MB), inclusive. Default setting is 7,340,032 (7MB).");
 	fi_param_define(
 		&fi_opx_provider, "reliability_max_uncongested_pings", FI_PARAM_INT,
@@ -832,6 +938,9 @@ OPX_INI
 		&fi_opx_provider, "dev_reg_recv_threshold", FI_PARAM_INT,
 		"The individual packet threshold where lengths above do not use a device registered copy when receiving data into GPU. Default is %d.",
 		OPX_HMEM_DEV_REG_RECV_THRESHOLD_DEFAULT);
+	fi_param_define(
+		&fi_opx_provider, "gpu_ipc_intranode", FI_PARAM_BOOL,
+		"Controls whether IPC will be used to facilitate GPU to GPU intranode copies over PCIe, NVLINK, or xGMI. If support is available, it is enabled by default.");
 #endif
 	fi_param_define(
 		&fi_opx_provider, "route_control", FI_PARAM_STRING,
@@ -840,8 +949,8 @@ OPX_INI
 		OPX_RC_IN_ORDER_0, OPX_RC_OUT_OF_ORDER_0, OPX_RC_OUT_OF_ORDER_0, OPX_RC_OUT_OF_ORDER_0,
 		OPX_RC_OUT_OF_ORDER_0, OPX_RC_IN_ORDER_0, OPX_RC_OUT_OF_ORDER_0);
 	fi_param_define(
-		&fi_opx_provider, "mixed_network", FI_PARAM_INT,
-		"Indicates a mixed network of OPA100 and CN5000. Needs to be set to 1 when a mixed network is used. Default is 0.");
+		&fi_opx_provider, "mixed_network", FI_PARAM_BOOL,
+		"Indicates that the network requires OPA100 support. Set to 0 if OPA100 support is not needed. Default is 1.");
 	fi_param_define(&fi_opx_provider, "context_sharing", FI_PARAM_BOOL,
 			"Enables context sharing in OPX. Defaults to FALSE (1 HFI context per endpoint).");
 	fi_param_define(
@@ -864,6 +973,10 @@ OPX_INI
 		&fi_opx_provider, "mmap_guard", FI_PARAM_BOOL,
 		"Enable guards around OPX/HFI mmaps. When enabled, this will cause a segfault when mmapped memory is illegally accessed through buffer overruns or underruns.  Default is false.");
 
+	fi_param_define(&fi_opx_provider, "hfisvc", FI_PARAM_BOOL,
+			"Indicates that HFI Service should be used for bulk transfers if available. Default is %s.",
+			OPX_HFISVC_ENABLED_DEFAULT ? "true" : "false");
+
 	/* Track TID and HMEM domains so caches can be cleared on exit */
 	dlist_init(&fi_opx_global.tid_domain_list);
 #ifdef OPX_HMEM
@@ -872,8 +985,8 @@ OPX_INI
 
 	if (fi_log_enabled(fi_opx_global.prov, FI_LOG_TRACE, FI_LOG_FABRIC)) {
 		Dl_info dl_info;
-		if (dladdr((void *) fi_opx_ini,
-			   &dl_info)) { // Use the OPX_INI function as the symbol to get runtime info
+		if (dladdr((void *) fi_opx_check_info,
+			   &dl_info)) { // Use the fi_opx_check_info function as the symbol to get runtime info
 			FI_TRACE(fi_opx_global.prov, FI_LOG_FABRIC,
 				 "Using opx Provider: Library file location is %s.\n", dl_info.dli_fname);
 		} else {

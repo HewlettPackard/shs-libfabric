@@ -152,6 +152,9 @@ int neuron_hmem_init(void)
 	int ret;
 	uint32_t total_nc_count;
 
+	fi_param_define(NULL, "hmem_neuron_use_dmabuf", FI_PARAM_BOOL,
+			"Use DMABUF for Neuron device memory registration. (Default: true)");
+
 	ret = neuron_dl_init();
 	if (ret)
 		return ret;
@@ -249,6 +252,20 @@ int neuron_get_dmabuf_fd(const void *addr, uint64_t size, int *fd,
 	}
 }
 
+int neuron_put_dmabuf_fd(int fd)
+{
+	close(fd);
+	return FI_SUCCESS;
+}
+
+bool neuron_is_dmabuf_requested(void)
+{
+	int use_dmabuf = 1;
+
+	fi_param_get_bool(NULL, "hmem_neuron_use_dmabuf", &use_dmabuf);
+	return use_dmabuf;
+}
+
 #else
 
 int neuron_copy_to_dev(uint64_t device, void *dev, const void *host, size_t size)
@@ -295,6 +312,16 @@ int neuron_get_dmabuf_fd(const void *addr, uint64_t size, int *fd,
 			 uint64_t *offset)
 {
 	return -FI_ENOSYS;
+}
+
+int neuron_put_dmabuf_fd(int fd)
+{
+	return -FI_ENOSYS;
+}
+
+bool neuron_is_dmabuf_requested(void)
+{
+	return false;
 }
 
 #endif /* HAVE_NEURON */

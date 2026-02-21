@@ -61,9 +61,9 @@
 	_(2,	LOCAL_ERROR_QP_INTERNAL_ERROR,	Internal queue pair error (local))						\
 	_(3,	LOCAL_ERROR_UNSUPPORTED_OP,	Unsupported operation type)							\
 	_(4,	LOCAL_ERROR_INVALID_AH,		Invalid address handle (local))							\
-	_(5,	LOCAL_ERROR_INVALID_LKEY,	Local key (LKEY) invalid or does not match IOVA)				\
+	_(5,	LOCAL_ERROR_INVALID_LKEY,	Local memory registration is invalid, has insufficient access flags or does not match IOVA)				\
 	_(6,	LOCAL_ERROR_BAD_LENGTH,		Message too long)								\
-	_(7,	REMOTE_ERROR_BAD_ADDRESS,	Remote key (RKEY) not registered or does not match remote IOVA)			\
+	_(7,	REMOTE_ERROR_BAD_ADDRESS,	Remote memory registration is invalid, has insufficient access flags or does not match IOVA)				\
 	_(8,	REMOTE_ERROR_ABORT,		Connection was reset by remote peer)						\
 	_(9,	REMOTE_ERROR_BAD_DEST_QPN,	Bad queue pair (QP) number (QP does not exist or is in error state))		\
 	_(10,	REMOTE_ERROR_RNR,		Destination resource not ready (no work queue entries posted on receive queue))	\
@@ -71,7 +71,8 @@
 	_(12,	REMOTE_ERROR_BAD_STATUS,	Unexpected status returned by responder)					\
 	_(13,	LOCAL_ERROR_UNRESP_REMOTE,	Unresponsive remote (was previously responsive))						\
 	_(14,	REMOTE_ERROR_UNKNOWN_PEER,	No valid address handle at remote side (required for RDMA operations))	\
-	_(15,	LOCAL_ERROR_UNREACH_REMOTE,	Unreachable remote (never received a response))
+	_(15,	LOCAL_ERROR_UNREACH_REMOTE,	Unreachable remote - never received a response)					\
+	_(18,	REMOTE_ERROR_FEATURE_MISMATCH,	Remote feature mismatch)							\
 
 /**
  * @brief EFA provider proprietary error codes
@@ -157,6 +158,7 @@ static inline int to_fi_errno(enum efa_errno err) {
 	case EFA_IO_COMP_STATUS_LOCAL_ERROR_INVALID_LKEY:
 	case EFA_IO_COMP_STATUS_LOCAL_ERROR_UNSUPPORTED_OP:
 	case EFA_IO_COMP_STATUS_REMOTE_ERROR_BAD_ADDRESS:
+	case EFA_IO_COMP_STATUS_REMOTE_ERROR_FEATURE_MISMATCH:
 		return FI_EINVAL;
 	case EFA_IO_COMP_STATUS_LOCAL_ERROR_UNREACH_REMOTE:
 		return FI_EHOSTUNREACH;

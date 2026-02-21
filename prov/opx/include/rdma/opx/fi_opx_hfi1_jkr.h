@@ -57,11 +57,9 @@
 
 /* Jackal River has 2+2,
      2 physical ports and 2 loopback ports.
-   Opx will have to know 2 new things to use these ports.
-   The first is which physical port should this packet ingress
-   the fabric on?  The second is, if this is  an SR-iov type of
-   send (a new type of intranode), use the loopback port
-   instead of that physical port to save some fabric traffic
+   The loopback port is the PBC egress port for sr-iov
+   which will be used to loopback to the same lid (self)
+   when not using shm
 
    0 = port 1
    1 = port 2
@@ -81,6 +79,10 @@
 /* Loop back ports are not supported */
 #define OPX_JKR_LOOP_PORT_TO_INDEX(_port)  (_port + 1)
 #define OPX_JKR_INDEX_TO_LOOP_PORT(_index) (_index - 1)
+
+#ifndef OPX_PBC_JKR_PORT_LOOPBACK_MASK
+#define OPX_PBC_JKR_PORT_LOOPBACK_MASK 0b10
+#endif
 
 #define OPX_PBC_JKR_PORT_SHIFT 16
 #define OPX_PBC_JKR_PORT_MASK  0b11
@@ -107,13 +109,18 @@
 
 #define OPX_PBC_JKR_DLID(_dlid) \
 	(((unsigned long long) (_dlid & OPX_PBC_JKR_DLID_MASK) << OPX_PBC_JKR_DLID_SHIFT) << OPX_MSB_SHIFT)
+#define OPX_PBC_JKR_GET_DLID(_dlid) \
+	((((unsigned long long) (_dlid) >> OPX_PBC_JKR_DLID_SHIFT) >> OPX_MSB_SHIFT) & OPX_PBC_JKR_DLID_MASK)
 #define OPX_PBC_JKR_SCTXT(_ctx) \
 	(((unsigned long long) (_ctx & OPX_PBC_JKR_SCTXT_MASK) << OPX_PBC_JKR_SCTXT_SHIFT) << OPX_MSB_SHIFT)
 #define OPX_PBC_JKR_L2COMPRESSED(_c) OPX_PBC_JKR_UNUSED /* unused until 16B headers are optimized */
 #define OPX_PBC_JKR_PORTIDX(_pidx) \
 	(((OPX_JKR_PHYS_PORT_TO_INDEX(_pidx)) & OPX_PBC_JKR_PORT_MASK) << OPX_PBC_JKR_PORT_SHIFT)
-#define OPX_PBC_JKR_DLID_TO_PBC_DLID(_dlid) OPX_PBC_JKR_DLID((uint64_t) _dlid)
-#define OPX_PBC_JKR_INSERT_NON9B_ICRC	    (1 << 24)
+#define OPX_PBC_JKR_LOOPBACK_PORTIDX(_pbc_lid)                                \
+	((_pbc_lid == fi_opx_global.hfi_local_info.pbc_lid) ?                 \
+		 (OPX_PBC_JKR_PORT_LOOPBACK_MASK << OPX_PBC_JKR_PORT_SHIFT) : \
+		 0)
+#define OPX_PBC_JKR_INSERT_NON9B_ICRC (1 << 24)
 
 #ifndef NDEBUG
 __OPX_FORCE_INLINE__
@@ -173,8 +180,8 @@ uint32_t opx_pbc_jkr_l2type(unsigned _type)
 extern int opx_route_control[OPX_HFI1_NUM_PACKET_TYPES];
 
 /* Convert route_control to "in order" if "out of order" is disabled */
-#define OPX_CHECK_OUT_OF_ORDER(ooo_disabled, rc) \
-	(((rc >= OPX_RC_OUT_OF_ORDER_0) && ooo_disabled) ? OPX_RC_IN_ORDER_0 : rc)
+#define OPX_CHECK_OUT_OF_ORDER(_ooo_disabled, _rc) \
+	(((_rc >= OPX_RC_OUT_OF_ORDER_0) && _ooo_disabled) ? OPX_RC_IN_ORDER_0 : _rc)
 
 /* RC (3 bits) route control value for different packet types */
 #ifndef NDEBUG
@@ -184,7 +191,7 @@ extern int opx_route_control[OPX_HFI1_NUM_PACKET_TYPES];
 static inline int opx_route_control_value(const enum opx_hfi1_type hfi1_type, enum opx_hfi1_packet_type pkt_type,
 					  const char *func, const int line)
 {
-	assert(OPX_HFI1_TYPE != OPX_HFI1_UNDEF);
+	assert(OPX_SW_HFI1_TYPE != OPX_HFI1_UNDEF);
 	assert(pkt_type < OPX_HFI1_NUM_PACKET_TYPES);
 	FI_TRACE(fi_opx_global.prov, FI_LOG_EP_DATA, "[%s:%d] Return %s route control %d.\n", func, line,
 		 OPX_HFI1_PACKET_STR[pkt_type], opx_route_control[pkt_type]);
@@ -196,10 +203,10 @@ static inline int opx_route_control_value(const enum opx_hfi1_type hfi1_type, en
 
 static inline void opx_set_route_control_value(const bool disabled)
 {
-	assert(OPX_HFI1_TYPE != OPX_HFI1_UNDEF);
+	assert(OPX_SW_HFI1_TYPE != OPX_HFI1_UNDEF);
 
 	/* HFI specific default (except OPX_HFI1_RZV_CTRL which always defaults to OPX_RC_IN_ORDER_0) */
-	const int default_route_control = ((OPX_HFI1_TYPE & (OPX_HFI1_JKR | OPX_HFI1_JKR_9B)) ?
+	const int default_route_control = ((OPX_SW_HFI1_TYPE & (OPX_HFI1_CNX000 | OPX_HFI1_MIXED_9B)) ?
 						   OPX_CHECK_OUT_OF_ORDER(disabled, OPX_RC_OUT_OF_ORDER_0) :
 						   OPX_RC_IN_ORDER_0);
 	char	 *env_route_control;
@@ -244,7 +251,7 @@ static inline void opx_set_route_control_value(const bool disabled)
 		}
 		FI_TRACE(fi_opx_global.prov, FI_LOG_EP_DATA,
 			 "All packet types using %s default route control values.\n",
-			 OPX_HFI_TYPE_STRING(OPX_HFI1_TYPE));
+			 OPX_HFI1_TYPE_STRING(OPX_SW_HFI1_TYPE));
 	}
 }
 /* The bit shifts here are for the half word indicating the ECN field */
@@ -269,11 +276,11 @@ static inline void opx_set_route_control_value(const bool disabled)
 
 #define OPX_LRH_JKR_ENTROPY_SHIFT_16B (OPX_MSB_SHIFT + 8) // rx is top 8 bits of entropy
 
-/* shift 8 bit bth.subctxt_rx directly into lrh entropy top bits */
-#define OPX_LRH_JKR_BTH_RX_ENTROPY_SHIFT_16B (OPX_BTH_SUBCTXT_RX_SHIFT - OPX_LRH_JKR_ENTROPY_SHIFT_16B)
+/* shift 8 bit bth.subctxt_rx (remove the subctxt fields) directly into lrh entropy top bits */
+#define OPX_LRH_JKR_BTH_RX_ENTROPY_SHIFT_16B ((OPX_BTH_SUBCTXT_RX_SHIFT + 8) - OPX_LRH_JKR_ENTROPY_SHIFT_16B)
 
 /* Full RC (3 bits) is in the 16B header */
-#define OPX_LRH_JKR_16B_RC(_pkt_type) OPX_ROUTE_CONTROL_VALUE(OPX_HFI1_JKR, _pkt_type)
+#define OPX_LRH_JKR_16B_RC(_pkt_type) OPX_ROUTE_CONTROL_VALUE(OPX_HFI1_CYR, _pkt_type)
 
 /* RHF */
 /* JKR
@@ -303,11 +310,11 @@ static inline void opx_set_route_control_value(const bool disabled)
 #define OPX_JKR_RHF_EGRBFR_OFFSET_MASK	 (0x0000000000000FFFul)
 #define OPX_JKR_RHF_EGRBFR_OFFSET_SHIFT	 (32)
 #define OPX_JKR_RHF_EGR_INDEX(_rhf)	 ((_rhf >> OPX_JKR_RHF_EGRBFR_INDEX_SHIFT) & OPX_JKR_RHF_EGRBFR_INDEX_MASK)
-#define OPX_JKR_RHF_EGR_INDEX_UPDATE(_rhf, index)                                      \
-	(((index & OPX_JKR_RHF_EGRBFR_INDEX_MASK) << OPX_JKR_RHF_EGRBFR_INDEX_SHIFT) | \
+#define OPX_JKR_RHF_EGR_INDEX_UPDATE(_rhf, _index)                                      \
+	(((_index & OPX_JKR_RHF_EGRBFR_INDEX_MASK) << OPX_JKR_RHF_EGRBFR_INDEX_SHIFT) | \
 	 (_rhf & ~(OPX_JKR_RHF_EGRBFR_INDEX_MASK << OPX_JKR_RHF_EGRBFR_INDEX_SHIFT)))
-#define OPX_JKR_RHF_EGR_OFFSET_UPDATE(_rhf, offset)                                        \
-	((((offset & OPX_JKR_RHF_EGRBFR_OFFSET_MASK) << OPX_JKR_RHF_EGRBFR_OFFSET_SHIFT) | \
+#define OPX_JKR_RHF_EGR_OFFSET_UPDATE(_rhf, _offset)                                        \
+	((((_offset & OPX_JKR_RHF_EGRBFR_OFFSET_MASK) << OPX_JKR_RHF_EGRBFR_OFFSET_SHIFT) | \
 	  (_rhf & ~(OPX_JKR_RHF_EGRBFR_OFFSET_MASK << OPX_JKR_RHF_EGRBFR_OFFSET_SHIFT))))
 #define OPX_JKR_RHF_EGR_OFFSET(_rhf)  ((_rhf >> OPX_JKR_RHF_EGRBFR_OFFSET_SHIFT) & OPX_JKR_RHF_EGRBFR_OFFSET_MASK)
 #define OPX_JKR_RHF_HDRQ_OFFSET(_rhf) ((_rhf >> (32 + 12)) & 0x01FFul)
@@ -355,7 +362,7 @@ __OPX_FORCE_INLINE__ int opx_jkr_9B_rhf_check_header(const uint64_t			    rhf_rc
 	if (OFI_UNLIKELY(OPX_JKR_IS_ERRORED_RHF(rhf_rcvd, hfi1_type))) {
 		/* Warn later */
 		FI_DBG_TRACE(fi_opx_global.prov, FI_LOG_EP_DATA, "HEADER ERROR %s %#lX\n",
-			     OPX_HFI_TYPE_STRING(hfi1_type), OPX_JKR_IS_ERRORED_RHF(rhf_rcvd, hfi1_type));
+			     OPX_HFI1_TYPE_STRING(hfi1_type), OPX_JKR_IS_ERRORED_RHF(rhf_rcvd, hfi1_type));
 		return 1; /* error */
 	}
 
@@ -364,7 +371,7 @@ __OPX_FORCE_INLINE__ int opx_jkr_9B_rhf_check_header(const uint64_t			    rhf_rc
 			 !(OPX_JKR_RHF_RCV_TYPE_EXPECTED_RCV(rhf_rcvd)))) {
 		/* Warn later */
 		FI_DBG_TRACE(fi_opx_global.prov, FI_LOG_EP_DATA, "HEADER ERROR MISSING PAYLOAD %s %#lX\n",
-			     OPX_HFI_TYPE_STRING(hfi1_type), OPX_JKR_IS_ERRORED_RHF(rhf_rcvd, hfi1_type));
+			     OPX_HFI1_TYPE_STRING(hfi1_type), OPX_JKR_IS_ERRORED_RHF(rhf_rcvd, hfi1_type));
 		return opx_rhf_missing_payload_error_handler(rhf_rcvd, hdr, hfi1_type); /* error */
 	} else {
 		return 0; /* no error*/
@@ -379,7 +386,7 @@ __OPX_FORCE_INLINE__ int opx_jkr_16B_rhf_check_header(const uint64_t			     rhf_
 	if (OFI_UNLIKELY(OPX_JKR_IS_ERRORED_RHF(rhf_rcvd, hfi1_type))) {
 		/* Warn later */
 		FI_DBG_TRACE(fi_opx_global.prov, FI_LOG_EP_DATA, "HEADER ERROR %s %#lX\n",
-			     OPX_HFI_TYPE_STRING(hfi1_type), OPX_JKR_IS_ERRORED_RHF(rhf_rcvd, hfi1_type));
+			     OPX_HFI1_TYPE_STRING(hfi1_type), OPX_JKR_IS_ERRORED_RHF(rhf_rcvd, hfi1_type));
 		return 1; /* error */
 	}
 
@@ -388,16 +395,16 @@ __OPX_FORCE_INLINE__ int opx_jkr_16B_rhf_check_header(const uint64_t			     rhf_
 			 !(OPX_JKR_RHF_RCV_TYPE_EXPECTED_RCV(rhf_rcvd)))) {
 		/* Warn later */
 		FI_DBG_TRACE(fi_opx_global.prov, FI_LOG_EP_DATA, "HEADER ERROR MISSING PAYLOAD %s %#lX\n",
-			     OPX_HFI_TYPE_STRING(hfi1_type), OPX_JKR_IS_ERRORED_RHF(rhf_rcvd, hfi1_type));
+			     OPX_HFI1_TYPE_STRING(hfi1_type), OPX_JKR_IS_ERRORED_RHF(rhf_rcvd, hfi1_type));
 		return opx_rhf_missing_payload_error_handler(rhf_rcvd, hdr, hfi1_type); /* error */
 	} else {
 		return 0; /* no error*/
 	}
 }
 
-#define OPX_JKR_RHF_CHECK_HEADER(_rhf_rcvd, _hdr, _hfi1_type)                                        \
-	((_hfi1_type & OPX_HFI1_JKR_9B) ? opx_jkr_9B_rhf_check_header(_rhf_rcvd, _hdr, _hfi1_type) : \
-					  opx_jkr_16B_rhf_check_header(_rhf_rcvd, _hdr, _hfi1_type))
+#define OPX_JKR_RHF_CHECK_HEADER(_rhf_rcvd, _hdr, _hfi1_type)                                          \
+	((_hfi1_type & OPX_HFI1_MIXED_9B) ? opx_jkr_9B_rhf_check_header(_rhf_rcvd, _hdr, _hfi1_type) : \
+					    opx_jkr_16B_rhf_check_header(_rhf_rcvd, _hdr, _hfi1_type))
 
 union opx_jkr_pbc {
 	uint64_t raw64b;
@@ -429,9 +436,9 @@ union opx_jkr_pbc {
 };
 
 #ifndef NDEBUG
-#define OPX_PRINT_RHF(a) opx_print_rhf((opx_jkr_rhf) (a), __func__, __LINE__)
+#define OPX_PRINT_RHF(_a) opx_print_rhf((opx_jkr_rhf) (_a), __func__, __LINE__)
 #else
-#define OPX_PRINT_RHF(a)
+#define OPX_PRINT_RHF(_a)
 #endif
 
 union opx_jkr_rhf {

@@ -155,6 +155,10 @@ bin_PROGRAMS = \
 	util/fi_strerror \
 	util/fi_pingpong
 
+if HAVE_MONITOR
+bin_PROGRAMS += util/fi_mon_sampler
+endif
+
 bin_SCRIPTS =
 
 util_fi_info_SOURCES = \
@@ -168,6 +172,12 @@ util_fi_strerror_LDADD = $(linkback)
 util_fi_pingpong_SOURCES = \
 	util/pingpong.c
 util_fi_pingpong_LDADD = $(linkback)
+
+if HAVE_MONITOR
+util_fi_mon_sampler_SOURCES = \
+	util/mon_sampler.c
+util_fi_mon_sampler_LDADD = $(linkback)
+endif
 
 nodist_src_libfabric_la_SOURCES =
 src_libfabric_la_SOURCES =			\
@@ -225,7 +235,7 @@ src_libfabric_la_LIBADD =
 src_libfabric_la_DEPENDENCIES = libfabric.map
 
 if !EMBEDDED
-src_libfabric_la_LDFLAGS += -version-info 28:0:27
+src_libfabric_la_LDFLAGS += -version-info 31:0:30
 endif
 src_libfabric_la_LDFLAGS += -export-dynamic \
 			   $(libfabric_version_script)
@@ -304,6 +314,9 @@ real_man_pages = \
         man/man7/fi_provider.7 \
         man/man7/fi_setup.7
 
+if HAVE_MONITOR
+real_man_pages += man/man1/fi_mon_sampler.1
+endif
 
 dummy_man_pages = \
         man/man3/fi_accept.3 \
@@ -489,6 +502,7 @@ include prov/hook/Makefile.include
 include prov/hook/perf/Makefile.include
 include prov/hook/trace/Makefile.include
 include prov/hook/profile/Makefile.include
+include prov/hook/monitor/Makefile.include
 include prov/hook/hook_debug/Makefile.include
 include prov/hook/hook_hmem/Makefile.include
 include prov/hook/dmabuf_peer_mem/Makefile.include

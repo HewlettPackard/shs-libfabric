@@ -66,7 +66,7 @@ void test_info_rdm_attributes()
 		assert_int_equal(info->ep_attr->max_msg_size, UINT64_MAX);
 		assert_int_equal(info->domain_attr->progress, FI_PROGRESS_MANUAL);
 		assert_int_equal(info->domain_attr->control_progress, FI_PROGRESS_MANUAL);
-#if HAVE_CUDA || HAVE_NEURON || HAVE_SYNAPSEAI
+#if EFA_HAVE_NON_SYSTEM_HMEM
 		assert_true(info->caps | FI_HMEM);
 #endif
 	}
@@ -117,11 +117,6 @@ static void test_info_direct_attributes_impl(struct fi_info *hints,
 		assert_int_equal(info->domain_attr->progress, FI_PROGRESS_AUTO);
 		assert_int_equal(info->domain_attr->control_progress, FI_PROGRESS_AUTO);
 		assert_int_equal(
-			g_efa_selected_device_list[0].rdm_info->ep_attr->max_msg_size,
-			(info->caps & FI_RMA) ?
-				g_efa_selected_device_list[0].max_rdma_size :
-				g_efa_selected_device_list[0].ibv_port_attr.max_msg_sz);
-		assert_int_equal(
 			info->ep_attr->max_msg_size,
 			(hints->caps & FI_RMA) ?
 				g_efa_selected_device_list[0].max_rdma_size :
@@ -164,13 +159,14 @@ void test_info_direct_attributes_rma()
 /**
  * @brief Verify that efa direct only supports HMEM with p2p
  */
-#if HAVE_CUDA || HAVE_NEURON || HAVE_SYNAPSEAI
+#if EFA_HAVE_NON_SYSTEM_HMEM
 void test_info_direct_hmem_support_p2p()
 {
 	struct fi_info *info;
 	bool hmem_ops_cuda_init;
 
 	info = fi_allocinfo();
+	info->ep_attr->type = FI_EP_RDM;
 
 	memset(g_efa_hmem_info, 0, OFI_HMEM_MAX * sizeof(struct efa_hmem_info));
 
@@ -190,17 +186,18 @@ void test_info_direct_hmem_support_p2p()
 	g_efa_hmem_info[FI_HMEM_CUDA].initialized = true;
 	g_efa_hmem_info[FI_HMEM_CUDA].p2p_supported_by_device = true;
 
-	efa_prov_info_set_hmem_flags(info, FI_EP_RDM);
+	efa_prov_info_direct_set_hmem_flags(info);
 	assert_true(info->caps & FI_HMEM);
 	assert_true(info->tx_attr->caps & FI_HMEM);
 	assert_true(info->rx_attr->caps & FI_HMEM);
 	fi_freeinfo(info);
 
 	info = fi_allocinfo();
+	info->ep_attr->type = FI_EP_RDM;
 	g_efa_hmem_info[FI_HMEM_CUDA].initialized = true;
 	g_efa_hmem_info[FI_HMEM_CUDA].p2p_supported_by_device = false;
 
-	efa_prov_info_set_hmem_flags(info, FI_EP_RDM);
+	efa_prov_info_direct_set_hmem_flags(info);
 	assert_false(info->caps & FI_HMEM);
 	assert_false(info->tx_attr->caps & FI_HMEM);
 	assert_false(info->rx_attr->caps & FI_HMEM);
@@ -440,8 +437,9 @@ static void test_info_check_shm_info_from_hints(struct fi_info *hints)
 	struct fi_info *info;
 	struct fid_fabric *fabric = NULL;
 	struct fid_domain *domain = NULL;
+	struct fid_ep *ep = NULL;
 	int err;
-	struct efa_domain *efa_domain;
+	struct efa_rdm_ep *efa_rdm_ep;
 
 	err = fi_getinfo(FI_VERSION(1, 14), NULL, NULL, 0ULL, hints, &info);
 	/* Do nothing if the current setup does not support FI_HMEM */
@@ -456,22 +454,27 @@ static void test_info_check_shm_info_from_hints(struct fi_info *hints)
 	err = fi_domain(fabric, info, &domain, NULL);
 	assert_int_equal(err, 0);
 
-	efa_domain = container_of(domain, struct efa_domain, util_domain.domain_fid);
-	if (efa_domain->shm_info) {
+	err = fi_endpoint(domain, info, &ep, NULL);
+	assert_int_equal(err, 0);
+
+	efa_rdm_ep = container_of(ep, struct efa_rdm_ep, base_ep.util_ep.ep_fid.fid);
+	if (efa_rdm_ep->shm_info) {
 		if (hints->caps & FI_HMEM)
-			assert_true(efa_domain->shm_info->caps & FI_HMEM);
+			assert_true(efa_rdm_ep->shm_info->caps & FI_HMEM);
 		else
-			assert_false(efa_domain->shm_info->caps & FI_HMEM);
+			assert_false(efa_rdm_ep->shm_info->caps & FI_HMEM);
 
-		assert_true(efa_domain->shm_info->tx_attr->op_flags == info->tx_attr->op_flags);
+		assert_true(efa_rdm_ep->shm_info->tx_attr->op_flags == info->tx_attr->op_flags);
 
-		assert_true(efa_domain->shm_info->rx_attr->op_flags == info->rx_attr->op_flags);
+		assert_true(efa_rdm_ep->shm_info->rx_attr->op_flags == info->rx_attr->op_flags);
 
 		if (hints->domain_attr->threading) {
 			assert_true(hints->domain_attr->threading == info->domain_attr->threading);
-			assert_true(hints->domain_attr->threading == efa_domain->shm_info->domain_attr->threading);
+			assert_true(hints->domain_attr->threading == efa_rdm_ep->shm_info->domain_attr->threading);
 		}
 	}
+
+	fi_close(&ep->fid);
 
 	fi_close(&domain->fid);
 
@@ -800,4 +803,254 @@ void test_efa_use_device_rdma_env0() {
 void test_efa_use_device_rdma_opt_old() {
 	test_use_device_rdma(1, 1, 1, FI_VERSION(1,17));
 	test_use_device_rdma(0, 0, 0, FI_VERSION(1,17));
+}
+
+typedef void (*setup_hints_func_t)(struct fi_info *hints, struct fid_fabric *fabric, 
+				   struct fid_domain *domain, struct fi_info *info1);
+
+static void test_info_reuse_fabric_domain(setup_hints_func_t setup_func, 
+				   bool expect_fabric_reuse, 
+				   bool expect_domain_reuse)
+{
+	struct fi_info *hints1, *hints2, *info1, *info2;
+	struct fid_fabric *fabric = NULL;
+	struct fid_domain *domain = NULL;
+	struct util_domain *util_domain = NULL;
+	int err;
+
+	hints1 = efa_unit_test_alloc_hints(FI_EP_RDM, EFA_FABRIC_NAME);
+	assert_non_null(hints1);
+	hints1->caps |= FI_MSG | FI_TAGGED | FI_LOCAL_COMM | FI_REMOTE_COMM | FI_DIRECTED_RECV;
+	hints1->domain_attr->mr_mode = FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
+
+	err = fi_getinfo(FI_VERSION(1, 18), NULL, NULL, 0ULL, hints1, &info1);
+	assert_int_equal(err, 0);
+	assert_non_null(info1);
+
+	err = fi_fabric(info1->fabric_attr, &fabric, NULL);
+	assert_int_equal(err, 0);
+	assert_non_null(fabric);
+
+	err = fi_domain(fabric, info1, &domain, NULL);
+	assert_int_equal(err, 0);
+	assert_non_null(domain);
+
+	hints2 = efa_unit_test_alloc_hints(FI_EP_RDM, NULL);
+	assert_non_null(hints2);
+	hints2->caps = FI_MSG | FI_RMA | FI_ATOMIC;
+	setup_func(hints2, fabric, domain, info1);
+	hints2->domain_attr->mr_mode = FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
+
+	err = fi_getinfo(FI_VERSION(1, 18), NULL, NULL, 0ULL, hints2, &info2);
+	assert_int_equal(err, 0);
+	assert_non_null(info2);
+
+	util_domain = container_of(domain, struct util_domain, domain_fid);
+	if (expect_fabric_reuse) {
+		assert_ptr_equal(info2->fabric_attr->fabric, fabric);
+		assert_string_equal(info2->fabric_attr->name, util_domain->fabric->name);
+	} else {
+		assert_null(info2->fabric_attr->fabric);
+	}
+	
+	if (expect_domain_reuse) {
+		assert_ptr_equal(info2->domain_attr->domain, domain);
+		assert_string_equal(info2->fabric_attr->name, util_domain->fabric->name);
+		assert_true((util_domain->info_domain_caps &
+			     (hints1->caps | hints2->caps)) ==
+			    (hints1->caps | hints2->caps));
+		assert_int_equal(util_domain->info_domain_mode, 0);
+		assert_true((util_domain->mr_mode &
+			     (hints1->domain_attr->mr_mode |
+			      hints2->domain_attr->mr_mode)) ==
+			    (hints1->domain_attr->mr_mode |
+			     hints2->domain_attr->mr_mode));
+	} else {
+		assert_null(info2->domain_attr->domain);
+	}
+
+	fi_freeinfo(hints1);
+	fi_freeinfo(hints2);
+	fi_freeinfo(info1);
+	fi_freeinfo(info2);
+
+	err = fi_close(&domain->fid);
+	assert_int_equal(err, 0);
+
+	err = fi_close(&fabric->fid);
+	assert_int_equal(err, 0);
+}
+
+static void setup_fabric_attr_hints(struct fi_info *hints, struct fid_fabric *fabric, 
+				     struct fid_domain *domain, struct fi_info *info1)
+{
+	hints->fabric_attr->fabric = fabric;
+}
+
+static void setup_domain_attr_hints(struct fi_info *hints, struct fid_fabric *fabric, 
+				     struct fid_domain *domain, struct fi_info *info1)
+{
+	hints->domain_attr->domain = domain;
+}
+
+static void setup_fabric_name_hints(struct fi_info *hints, struct fid_fabric *fabric, 
+				     struct fid_domain *domain, struct fi_info *info1)
+{
+	hints->fabric_attr->name = strdup(info1->fabric_attr->name);
+}
+
+static void setup_domain_name_hints(struct fi_info *hints, struct fid_fabric *fabric, 
+				     struct fid_domain *domain, struct fi_info *info1)
+{
+	hints->domain_attr->name = strdup(info1->domain_attr->name);
+}
+
+/**
+ * @brief Test that fi_getinfo can reuse fabric object
+ * when provided in hints via fabric_attr->fabric
+ */
+void test_info_reuse_fabric_via_fabric_attr()
+{
+	test_info_reuse_fabric_domain(setup_fabric_attr_hints, true, false);
+}
+
+/**
+ * @brief Test that fi_getinfo can reuse domain object
+ * when provided in hints via domain_attr->domain
+ */
+void test_info_reuse_domain_via_domain_attr()
+{
+	test_info_reuse_fabric_domain(setup_domain_attr_hints, false, true);
+}
+
+/**
+ * @brief Test that fi_getinfo can reuse fabric
+ * when provided in hints via fabric_attr->name
+ */
+void test_info_reuse_fabric_via_name()
+{
+	test_info_reuse_fabric_domain(setup_fabric_name_hints, true, false);
+}
+
+/**
+ * @brief Test that fi_getinfo can reuse domain
+ * when provided in hints via domain_attr->name
+ */
+void test_info_reuse_domain_via_name()
+{
+	test_info_reuse_fabric_domain(setup_domain_name_hints, true, true);
+}
+
+static void test_info_direct_rma_common(bool mock_unsolicited_write_recv, 
+					bool set_rma, bool set_rx_cq_data,
+					int expected_err, size_t expected_cq_data_size, 
+					bool expect_rx_cq_data_mode, bool expect_rma_caps)
+{
+	struct fi_info *hints, *info;
+	int err;
+
+	/* Mock unsolicited write recv */
+	g_efa_unit_test_mocks.efa_device_support_unsolicited_write_recv = &efa_mock_efa_device_support_unsolicited_write_recv;
+	will_return_uint_maybe(efa_mock_efa_device_support_unsolicited_write_recv, mock_unsolicited_write_recv);
+
+	hints = efa_unit_test_alloc_hints(FI_EP_RDM, EFA_DIRECT_FABRIC_NAME);
+	assert_non_null(hints);
+
+	if (set_rma)
+		hints->caps |= FI_RMA;
+	if (set_rx_cq_data)
+		hints->mode |= FI_RX_CQ_DATA;
+
+	err = fi_getinfo(FI_VERSION(1, 18), NULL, NULL, 0ULL, hints, &info);
+	fi_freeinfo(hints);
+
+	if ((efa_device_support_rdma_read() && efa_device_support_rdma_write()) ||
+	    (!set_rma && !set_rx_cq_data)) {
+		assert_int_equal(err, expected_err);
+		if (expected_err == 0) {
+			assert_non_null(info);
+			assert_int_equal(info->domain_attr->cq_data_size, expected_cq_data_size);
+			if (expect_rx_cq_data_mode) {
+				assert_true(info->mode & FI_RX_CQ_DATA);
+				assert_true(info->rx_attr->mode & FI_RX_CQ_DATA);
+			} else {
+				assert_false(info->mode & FI_RX_CQ_DATA);
+				assert_false(info->rx_attr->mode & FI_RX_CQ_DATA);
+			}
+			if (expect_rma_caps) {
+				assert_true(info->caps & FI_RMA);
+				assert_true(info->tx_attr->caps & OFI_TX_RMA_CAPS);
+				assert_true(info->rx_attr->caps & OFI_RX_RMA_CAPS);
+			} else {
+				assert_false(info->caps & FI_RMA);
+				assert_false(info->tx_attr->caps & OFI_TX_RMA_CAPS);
+				assert_false(info->rx_attr->caps & OFI_RX_RMA_CAPS);
+			}
+			fi_freeinfo(info);
+		} else {
+			assert_null(info);
+		}
+	} else {
+		assert_int_equal(err, -FI_ENODATA);
+		assert_null(info);
+	}
+}
+
+/**
+ * @brief Test NULL hints return efa-direct info object with FI_RMA and FI_RX_CQ_DATA
+ */
+void test_info_direct_null_hints_return_rma_and_rx_cq_data()
+{
+	struct fi_info *info;
+	int err;
+
+	err = fi_getinfo(FI_VERSION(1, 18), NULL, NULL, 0ULL, NULL, &info);
+
+	if (efa_device_support_rdma_read() && efa_device_support_rdma_write()) {
+		assert_int_equal(err, 0);
+		assert_non_null(info);
+		assert_int_equal(info->domain_attr->cq_data_size, 4);
+		assert_true(info->mode & FI_RX_CQ_DATA);
+		assert_true(info->rx_attr->mode & FI_RX_CQ_DATA);
+		assert_true(info->caps & FI_RMA);
+		assert_true(info->tx_attr->caps & OFI_TX_RMA_CAPS);
+		assert_true(info->rx_attr->caps & OFI_RX_RMA_CAPS);
+		fi_freeinfo(info);
+	}
+}
+
+/**
+ * @brief Test hints requesting FI_RMA with FI_RX_CQ_DATA when unsolicited write recv is not supported
+ * Should succeed and return info with both FI_RMA and FI_RX_CQ_DATA
+ */
+void test_info_direct_rma_with_rx_cq_data_when_no_unsolicited_write_recv()
+{
+	test_info_direct_rma_common(false, true, true, 0, 4, true, true);
+}
+
+/**
+ * @brief Test hints requesting FI_RMA without FI_RX_CQ_DATA when unsolicited write recv is not supported
+ * Should fail with -FI_ENODATA
+ */
+void test_info_direct_rma_without_rx_cq_data_when_no_unsolicited_write_recv()
+{
+	test_info_direct_rma_common(false, true, false, -FI_ENODATA, 0, false, false);
+}
+
+/**
+ * @brief Test hints not requesting FI_RMA and FI_RX_CQ_DATA when unsolicited write recv is not supported
+ * Should succeed without FI_RMA capabilities
+ */
+void test_info_direct_no_rma_no_rx_cq_data_when_no_unsolicited_write_recv()
+{
+	test_info_direct_rma_common(false, false, false, 0, 4, false, false);
+}
+
+/**
+ * @brief Test hints requesting FI_RMA without FI_RX_CQ_DATA when unsolicited write recv is supported
+ * Should succeed with FI_RMA but no FI_RX_CQ_DATA
+ */
+void test_info_direct_rma_without_rx_cq_data_when_unsolicited_write_recv_supported()
+{
+	test_info_direct_rma_common(true, true, false, 0, 4, false, true);
 }

@@ -85,10 +85,20 @@ struct ofi_common_locks common_locks = {
 	.util_fabric_lock = PTHREAD_MUTEX_INITIALIZER,
 };
 
+int ofi_fork_unsafe;
 size_t ofi_universe_size = 1024;
 int ofi_av_remove_cleanup;
 char *ofi_offload_coll_prov_name = NULL;
 
+
+void ofi_params_init(void)
+{
+	fi_param_get_bool(NULL, "fork_unsafe", &ofi_fork_unsafe);
+	fi_param_get_size_t(NULL, "universe_size", &ofi_universe_size);
+	fi_param_get_bool(NULL, "av_remove_cleanup", &ofi_av_remove_cleanup);
+	fi_param_get_str(NULL, "offload_coll_provider",
+			 &ofi_offload_coll_prov_name);
+}
 
 int ofi_genlock_init(struct ofi_genlock *lock,
 		     enum ofi_lock_type lock_type)
@@ -354,6 +364,7 @@ uint16_t ofi_get_sa_family(const struct fi_info *info)
 	case FI_SOCKADDR_IB:
 		return AF_IB;
 	case FI_SOCKADDR:
+	case FI_SOCKADDR_IP:
 	case FI_FORMAT_UNSPEC:
 		if (info->src_addr)
 			return ((struct sockaddr *) info->src_addr)->sa_family;
@@ -381,6 +392,19 @@ const char *ofi_straddr(char *buf, size_t *len,
 
 	switch (addr_format) {
 	case FI_SOCKADDR:
+		sock_addr = addr;
+		switch (sock_addr->sa_family) {
+		case AF_INET:
+			goto sa_sin;
+		case AF_INET6:
+			goto sa_sin6;
+		case AF_IB:
+			goto sa_ib;
+		default:
+			return NULL;
+		}
+		break;
+	case FI_SOCKADDR_IP:
 		sock_addr = addr;
 		switch (sock_addr->sa_family) {
 		case AF_INET:
@@ -419,6 +443,7 @@ sa_sin6:
 				str, *((uint16_t *)addr + 8), *((uint32_t *)addr + 5));
 		break;
 	case FI_SOCKADDR_IB:
+sa_ib:
 		sib = addr;
 		memset(str, 0, sizeof(str));
 		if (!inet_ntop(AF_INET6, sib->sib_addr, str, INET6_ADDRSTRLEN))
@@ -445,7 +470,7 @@ sa_sin6:
 			     *((uint64_t *)addr + 2), *((uint64_t *)addr + 3));
 		break;
 	case FI_ADDR_OPX:
-		size = snprintf(buf, *len, "fi_addr_opx://%016lx", *(uint64_t *)addr);
+		size = snprintf(buf, *len, "fi_addr_opx://%016" PRIx64, *(uint64_t *)addr);
 		break;
 	case FI_ADDR_MLX:
 		size = snprintf(buf, *len, "fi_addr_mlx://%p", addr);
@@ -990,6 +1015,7 @@ bool ofi_is_wildcard_listen_addr(const char *node, const char *service,
 
 	if (hints && hints->addr_format != FI_FORMAT_UNSPEC &&
 	    hints->addr_format != FI_SOCKADDR &&
+	    hints->addr_format != FI_SOCKADDR_IP &&
 	    hints->addr_format != FI_SOCKADDR_IN &&
 	    hints->addr_format != FI_SOCKADDR_IN6)
 		return false;
@@ -2092,31 +2118,18 @@ void ofi_get_list_of_addr(const struct fi_provider *prov, const char *env_name,
 	if (ret)
 		goto insert_lo;
 
-	if (iface) {
-		for (ifa = ifaddrs; ifa != NULL; ifa = ifa->ifa_next) {
-			if (!strncmp(iface, ifa->ifa_name, strlen(iface) + 1))
-				break;
-		}
-		if (ifa == NULL) {
-			FI_INFO(prov, FI_LOG_CORE,
-				"Can't set filter to unknown interface: (%s)\n",
-				iface);
-			iface = NULL;
-		}
-	}
 	for (ifa = ifaddrs; ifa != NULL; ifa = ifa->ifa_next) {
-		if (ifa->ifa_addr == NULL ||
-			!(ifa->ifa_flags & IFF_UP) ||
-			!(ifa->ifa_flags & IFF_RUNNING) ||
-			(ifa->ifa_flags & IFF_LOOPBACK) ||
-			((ifa->ifa_addr->sa_family != AF_INET) &&
-			(ifa->ifa_addr->sa_family != AF_INET6)))
-			continue;
 		if (iface && strncmp(iface, ifa->ifa_name, strlen(iface) + 1)) {
 			FI_DBG(prov, FI_LOG_CORE,
 				"Skip (%s) interface\n", ifa->ifa_name);
 			continue;
 		}
+		if (ifa->ifa_addr == NULL || !(ifa->ifa_flags & IFF_UP) ||
+		    !(ifa->ifa_flags & IFF_RUNNING) ||
+		    (ifa->ifa_flags & IFF_LOOPBACK) ||
+		    ((ifa->ifa_addr->sa_family != AF_INET) &&
+		    (ifa->ifa_addr->sa_family != AF_INET6)))
+			continue;
 
 		addr_entry = calloc(1, sizeof(*addr_entry));
 		if (!addr_entry)

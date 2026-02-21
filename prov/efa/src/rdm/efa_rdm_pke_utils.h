@@ -4,11 +4,18 @@
 #ifndef _EFA_RDM_PKE_UTILS_H
 #define _EFA_RDM_PKE_UTILS_H
 
+#include "efa_rdm_ep.h"
 #include "efa_rdm_pke.h"
 #include "efa_rdm_protocol.h"
 #include "efa_rdm_pkt_type.h"
 #include "efa_rdm_pke_rtm.h"
 #include "efa_mr.h"
+
+static inline
+bool efa_rdm_pke_has_base_hdr(struct efa_rdm_pke *pke)
+{
+	return !(pke->flags & EFA_RDM_PKE_HAS_NO_BASE_HDR);
+}
 
 /**
  * @brief get the base header of an pke
@@ -20,6 +27,61 @@ static inline
 struct efa_rdm_base_hdr *efa_rdm_pke_get_base_hdr(struct efa_rdm_pke *pke)
 {
 	return (struct efa_rdm_base_hdr *)pke->wiredata;
+}
+
+#define efa_rdm_pkt_type_of(obj) _Generic((obj), \
+		struct efa_rdm_pke *: efa_rdm_pkt_type_of_pke, \
+		default: efa_rdm_pkt_type_of_base_hdr)(obj)
+
+static inline
+int efa_rdm_pkt_type_of_base_hdr(struct efa_rdm_base_hdr *base_hdr)
+{
+	return base_hdr->type;
+}
+
+static inline
+int efa_rdm_pkt_type_of_pke(struct efa_rdm_pke *pke)
+{
+	if (efa_rdm_pke_has_base_hdr(pke)) {
+		return efa_rdm_pkt_type_of_base_hdr(efa_rdm_pke_get_base_hdr(pke));
+	}
+	return EFA_RDM_HEADERLESS_PKT;
+}
+
+/**
+ * @brief Get the packet type from a queued operation entry
+ *
+ * This function determines the packet type for control packets (like RECEIPT, EOR)
+ * that are queued in an operation entry. For RNR-queued operations, it examines
+ * the first packet in the queued_pkts list. For CTRL-queued operations, it
+ * returns the stored queued_ctrl_type.
+ *
+ * @param[in] ope Operation entry with queued packets
+ * @return Packet type constant (e.g., EFA_RDM_RECEIPT_PKT, EFA_RDM_EOR_PKT),
+ *         or 0 if no valid packet type is found
+ */
+static inline
+int efa_rdm_pke_get_ctrl_pkt_type_from_queued_ope(struct efa_rdm_ope *ope)
+{
+	struct efa_rdm_pke *pke;
+
+	if (ope->internal_flags & EFA_RDM_OPE_QUEUED_RNR) {
+		assert(!dlist_empty(&ope->queued_pkts));
+		/**
+		 * It should be safe to check the first
+		 * pke in the queued_pkts, as for the
+		 * ctrl pkt we care about,
+		 * they are the only tx pkt posted
+		 * from the ope
+		 */
+		pke = container_of(ope->queued_pkts.next, struct efa_rdm_pke,
+				   entry);
+		return efa_rdm_pkt_type_of_pke(pke);
+	} else if (ope->internal_flags & EFA_RDM_OPE_QUEUED_CTRL) {
+		return ope->queued_ctrl_type;
+	} else { /* No valid ctrl pkt type */
+		return 0;
+	}
 }
 
 /**
@@ -88,7 +150,7 @@ efa_rdm_pke_copy_from_hmem_iov(struct efa_mr *iov_mr, struct efa_rdm_pke *pke,
 		copied = ofi_copy_from_hmem_iov(pke->wiredata + payload_offset,
 		                                data_size,
 		                                iov_mr ? iov_mr->peer.iface : FI_HMEM_SYSTEM,
-		                                iov_mr ? iov_mr->peer.device.reserved : 0,
+		                                iov_mr ? iov_mr->peer.device : 0,
 		                                ope->iov, ope->iov_count, segment_offset);
 	}
 
@@ -99,16 +161,16 @@ efa_rdm_pke_copy_from_hmem_iov(struct efa_mr *iov_mr, struct efa_rdm_pke *pke,
  * @brief This function either posts RDMA read, or sends a NACK packet when p2p
  * is not available or memory registration limit was reached on the receiver.
  *
- * @param[in]    ep         endpoint
- * @param[in]    pkt_entry  packet entry
- * @param[in]    rxe        RX entry
+ * @param[in]	ep		endpoint
+ * @param[in]	pkt_entry	packet entry
+ * @param[in]	rxe		RX entry
  *
  * @return 0 on success, or a negative error code.
  */
 static inline int
-efa_rdm_pke_post_remote_read_or_nack(struct efa_rdm_ep  *ep,
-                                     struct efa_rdm_pke *pkt_entry,
-                                     struct efa_rdm_ope *rxe)
+efa_rdm_pke_post_remote_read_or_nack(struct efa_rdm_ep *ep,
+				     struct efa_rdm_pke *pkt_entry,
+				     struct efa_rdm_ope *rxe)
 {
 	int err = 0;
 	int pkt_type;
@@ -161,7 +223,7 @@ send_nack:
 	}
 
 	if (efa_rdm_pkt_type_is_rtm(pkt_type)) {
-		efa_rdm_rxe_map_insert(&ep->rxe_map, efa_rdm_pke_get_rtm_msg_id(pkt_entry), pkt_entry->addr, rxe);
+		efa_rdm_rxe_map_insert(&pkt_entry->peer->rxe_map, efa_rdm_pke_get_rtm_msg_id(pkt_entry), rxe);
 	}
 
 	return efa_rdm_ope_post_send_or_queue(rxe, EFA_RDM_READ_NACK_PKT);
@@ -185,5 +247,7 @@ int efa_rdm_pke_get_available_copy_methods(struct efa_rdm_ep *ep,
 					   bool *restrict local_read_available,
 					   bool *restrict cuda_memcpy_available,
 					   bool *restrict gdrcopy_available);
+
+struct efa_rdm_pke *efa_rdm_pke_get_ooo_pke(struct efa_rdm_pke *pkt_entry);
 
 #endif

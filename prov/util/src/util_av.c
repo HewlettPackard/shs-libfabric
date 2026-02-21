@@ -56,7 +56,8 @@ enum {
 };
 
 static int fi_get_src_sockaddr(const struct sockaddr *dest_addr, size_t dest_addrlen,
-			       struct sockaddr **src_addr, size_t *src_addrlen)
+			       struct sockaddr **src_addr, size_t *src_addrlen,
+			       uint32_t *addr_format)
 {
 	socklen_t len; /* needed for OS compatability */
 	int sock, ret;
@@ -86,9 +87,11 @@ static int fi_get_src_sockaddr(const struct sockaddr *dest_addr, size_t dest_add
 	switch ((*src_addr)->sa_family) {
 	case AF_INET:
 		((struct sockaddr_in *) (*src_addr))->sin_port = 0;
+		*addr_format = FI_SOCKADDR_IN;
 		break;
 	case AF_INET6:
 		((struct sockaddr_in6 *) (*src_addr))->sin6_port = 0;
+		*addr_format = FI_SOCKADDR_IN6;
 		break;
 	default:
 		ret = -FI_ENOSYS;
@@ -152,17 +155,18 @@ void ofi_getnodename(uint16_t sa_family, char *buf, int buflen)
 	buf[buflen - 1] = '\0';
 }
 
-int ofi_get_src_addr(uint32_t addr_format,
+int ofi_get_src_addr(uint32_t *addr_format,
 		    const void *dest_addr, size_t dest_addrlen,
 		    void **src_addr, size_t *src_addrlen)
 {
-	switch (addr_format) {
+	switch (*addr_format) {
 	case FI_SOCKADDR:
+	case FI_SOCKADDR_IP:
 	case FI_SOCKADDR_IN:
 	case FI_SOCKADDR_IN6:
 		return fi_get_src_sockaddr(dest_addr, dest_addrlen,
 					   (struct sockaddr **) src_addr,
-					   src_addrlen);
+					   src_addrlen, addr_format);
 	default:
 		return -FI_ENOSYS;
 	}
@@ -216,6 +220,7 @@ int ofi_get_addr(uint32_t *addr_format, uint64_t flags,
 
 	switch (*addr_format) {
 	case FI_SOCKADDR:
+	case FI_SOCKADDR_IP:
 		sa_family = 0;
 		ret = fi_get_sockaddr(&sa_family, flags, node, service,
 				      (struct sockaddr **) addr, addrlen);
@@ -244,6 +249,9 @@ void *ofi_av_get_addr(struct util_av *av, fi_addr_t fi_addr)
 {
 	struct util_av_entry *entry;
 
+	if (!ofi_bufpool_ibuf_is_valid(av->av_entry_pool, fi_addr))
+		return NULL;
+
 	entry = ofi_bufpool_get_ibuf(av->av_entry_pool, fi_addr);
 	return entry->data;
 }
@@ -258,7 +266,7 @@ void *ofi_av_addr_context(struct util_av *av, fi_addr_t fi_addr)
 
 int ofi_verify_av_insert(struct util_av *av, uint64_t flags, void *context)
 {
-	if (flags & ~(FI_MORE | FI_SYNC_ERR | FI_FIREWALL_ADDR)) {
+	if (flags & ~(FI_MORE | FI_SYNC_ERR | FI_FIREWALL_ADDR | FI_AV_USER_ID)) {
 		FI_WARN(av->prov, FI_LOG_AV, "unsupported flags\n");
 		return -FI_EBADFLAGS;
 	}
@@ -293,7 +301,7 @@ int ofi_av_insert_addr_at(struct util_av *av, const void *addr, fi_addr_t fi_add
 	memcpy(entry->data, addr, av->addrlen);
 	ofi_atomic_initialize32(&entry->use_cnt, 1);
 	HASH_ADD(hh, av->hash, data, av->addrlen, entry);
-	FI_INFO(av->prov, FI_LOG_AV, "fi_addr: %" PRIu64 "\n",
+	FI_INFO(av->prov, FI_LOG_AV, "fi_addr: %zu\n",
 		ofi_buf_index(entry));
 	return 0;
 }
@@ -324,7 +332,7 @@ int ofi_av_insert_addr(struct util_av *av, const void *addr, fi_addr_t *fi_addr)
 		memcpy(entry->data, addr, av->addrlen);
 		ofi_atomic_initialize32(&entry->use_cnt, 1);
 		HASH_ADD(hh, av->hash, data, av->addrlen, entry);
-		FI_INFO(av->prov, FI_LOG_AV, "fi_addr: %" PRIu64 "\n",
+		FI_INFO(av->prov, FI_LOG_AV, "fi_addr: %zu\n",
 			ofi_buf_index(entry));
 	}
 	return 0;
@@ -335,10 +343,10 @@ int ofi_av_remove_addr(struct util_av *av, fi_addr_t fi_addr)
 	struct util_av_entry *av_entry;
 
 	assert(ofi_genlock_held(&av->lock));
-	av_entry = ofi_bufpool_get_ibuf(av->av_entry_pool, fi_addr);
-	if (!av_entry)
-		return -FI_ENOENT;
+	if (!ofi_bufpool_ibuf_is_valid(av->av_entry_pool, fi_addr))
+		return -FI_EINVAL;
 
+	av_entry = ofi_bufpool_get_ibuf(av->av_entry_pool, fi_addr);
 	if (ofi_atomic_dec32(&av_entry->use_cnt))
 		return FI_SUCCESS;
 
@@ -876,7 +884,7 @@ int ofi_ip_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr,
 {
 	struct util_av *av;
 	ssize_t i;
-	int ret;
+	int ret, err;
 
 	av = container_of(av_fid, struct util_av, av_fid);
 	if (flags) {
@@ -890,6 +898,7 @@ int ofi_ip_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr,
 	 * added -- i.e. fi_addr passed in here was also passed into insert.
 	 * Thus, we walk through the array backwards.
 	 */
+	err = FI_SUCCESS;
 	for (i = count - 1; i >= 0; i--) {
 		ofi_genlock_lock(&av->lock);
 		ret = ofi_av_remove_addr(av, fi_addr[i]);
@@ -898,9 +907,10 @@ int ofi_ip_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr,
 			FI_WARN(av->prov, FI_LOG_AV,
 				"removal of fi_addr %"PRIu64" failed\n",
 				fi_addr[i]);
+			err = ret;
 		}
 	}
-	return 0;
+	return err;
 }
 
 bool ofi_ip_av_is_valid(struct fid_av *av_fid, fi_addr_t fi_addr)
@@ -914,10 +924,13 @@ bool ofi_ip_av_is_valid(struct fid_av *av_fid, fi_addr_t fi_addr)
 int ofi_ip_av_lookup(struct fid_av *av_fid, fi_addr_t fi_addr,
 		     void *addr, size_t *addrlen)
 {
-	struct util_av *av =
-		container_of(av_fid, struct util_av, av_fid);
+	struct util_av *av = container_of(av_fid, struct util_av, av_fid);
 	size_t av_addrlen;
-	void *av_addr = ofi_av_lookup_addr(av, fi_addr, &av_addrlen);
+	void *av_addr;
+
+	av_addr = ofi_av_lookup_addr(av, fi_addr, &av_addrlen);
+	if (!av_addr)
+		return -FI_EINVAL;
 
 	memcpy(addr, av_addr, MIN(*addrlen, av_addrlen));
 	*addrlen = av->addrlen;

@@ -81,7 +81,8 @@
 #define EFA_DEF_POOL_ALIGNMENT (8)
 #define EFA_MEM_ALIGNMENT (64)
 
-#define EFA_DEF_CQ_SIZE 1024
+/* 4k tx_attr.size + 8k rx_attr.size */
+#define EFA_DEF_CQ_SIZE 12288
 
 
 #define EFA_DEFAULT_RUNT_SIZE (307200)
@@ -110,6 +111,12 @@
  * Set alignment to x86 cache line size.
  */
 #define EFA_RDM_BUFPOOL_ALIGNMENT	(64)
+
+/*
+ * Define bitmask to compare packet generation
+ */
+#define EFA_RDM_PACKET_GEN_MASK (EFA_RDM_BUFPOOL_ALIGNMENT - 1)
+
 
 struct efa_fabric {
 	struct util_fabric	util_fabric;

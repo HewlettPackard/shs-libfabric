@@ -125,12 +125,14 @@ typedef uint32_t opx_lid_t; /* only 3 bytes of lid is used */
 
 /* hfi1 type for bit logic */
 enum opx_hfi1_type {
-	OPX_HFI1_UNDEF	= 0, // undefined
-	OPX_HFI1_JKR_9B = 1, // CN5000 built for mixed network. Internal use
-	OPX_HFI1_WFR	= 2, // Omni-path (all generations)
-	OPX_HFI1_JKR	= 4, // CN5000 (initial generation)
-	OPX_HFI1_CYR	= 8  // CN6000 (initial generation)
+	OPX_HFI1_UNDEF	  = 0, // undefined
+	OPX_HFI1_MIXED_9B = 1, // CN5000+ built for mixed network. Internal use
+	OPX_HFI1_WFR	  = 2, // Omni-path (all generations)
+	OPX_HFI1_JKR	  = 4, // CN5000 (initial generation)
+	OPX_HFI1_CYR	  = 8  // CN6000 (initial generation)
 };
+/* Post WFR 16B support - CN5000, CN6000 - unless they need to be differentiated */
+#define OPX_HFI1_CNX000 (OPX_HFI1_JKR | OPX_HFI1_CYR)
 
 /* Arbitrary packet "types" that can be differentiated as needed (route control) */
 enum opx_hfi1_packet_type {
@@ -149,24 +151,24 @@ static const char *const OPX_HFI1_PACKET_STR[] = {
 	[OPX_HFI1_RZV_CTRL] = "OPX_HFI1_RZV_CTRL", [OPX_HFI1_RZV_DATA] = "OPX_HFI1_RZV_DATA"};
 
 /* Will remove after 16B SDMA support is finished */
-#define OPX_NO_9B_SUPPORT(_hfi1_type)                                                                            \
-	do {                                                                                                     \
-		if (!(_hfi1_type & OPX_HFI1_JKR)) {                                                              \
-			fprintf(stderr, "%s NO 9B SUPPORT for %s\n", __func__, OPX_HFI_TYPE_STRING(_hfi1_type)); \
-			if (getenv("OPX_9B_ABORT"))                                                              \
-				abort();                                                                         \
-		}                                                                                                \
-		assert(_hfi1_type != OPX_HFI1_UNDEF);                                                            \
-	} while (0)
-
-#define OPX_NO_16B_SUPPORT(_hfi1_type)                                                                            \
+#define OPX_NO_9B_SUPPORT(_hfi1_type)                                                                             \
 	do {                                                                                                      \
-		if (!(_hfi1_type & (OPX_HFI1_WFR | OPX_HFI1_JKR_9B))) {                                           \
-			fprintf(stderr, "%s NO 16B SUPPORT for %s\n", __func__, OPX_HFI_TYPE_STRING(_hfi1_type)); \
-			if (getenv("OPX_16B_ABORT"))                                                              \
+		if (!(_hfi1_type & OPX_HFI1_CNX000)) {                                                            \
+			fprintf(stderr, "%s NO 9B SUPPORT for %s\n", __func__, OPX_HFI1_TYPE_STRING(_hfi1_type)); \
+			if (getenv("OPX_9B_ABORT"))                                                               \
 				abort();                                                                          \
 		}                                                                                                 \
 		assert(_hfi1_type != OPX_HFI1_UNDEF);                                                             \
+	} while (0)
+
+#define OPX_NO_16B_SUPPORT(_hfi1_type)                                                                             \
+	do {                                                                                                       \
+		if (!(_hfi1_type & (OPX_HFI1_WFR | OPX_HFI1_MIXED_9B))) {                                          \
+			fprintf(stderr, "%s NO 16B SUPPORT for %s\n", __func__, OPX_HFI1_TYPE_STRING(_hfi1_type)); \
+			if (getenv("OPX_16B_ABORT"))                                                               \
+				abort();                                                                           \
+		}                                                                                                  \
+		assert(_hfi1_type != OPX_HFI1_UNDEF);                                                              \
 	} while (0)
 
 #define OPX_MAX_HFIS (16)
@@ -181,23 +183,33 @@ struct opx_hfi_local_entry {
 struct opx_hfi_local_info {
 	/* == CACHE LINE 0 == */
 	uint32_t	   local_lids_size;
-	enum opx_hfi1_type type;
-	int		   sim_fd; // simulator fd
+	enum opx_hfi1_type sw_type;	 // SW defined hfi1 type, including "mixed networks"
+	int		   sim_sctxt_fd; // simulator send context BAR resource fd
+	int		   sim_rctxt_fd; // simulator recv context BAR resource fd
+	uint64_t	   pbc_lid;
 	opx_lid_t	   lid;
 	uint8_t		   hfi_unit;
-	uint8_t		   unused_bytes[7];
-	uint64_t	   unused_qws[5];
+	bool		   sriov;
+	bool		   multi_vm;  // self lid is used across VMs
+	bool		   multi_lid; // job has multiple lids
+	int32_t		   min_rctxt;
+	int32_t		   max_rctxt;
+	enum opx_hfi1_type hw_type; // HW hfi1 type before "mixed_network" changes
+	uint32_t	   unused_dws[1];
+	uint64_t	   unused_qws[2];
 
 	/* == CACHE LINE 1 == */
 	opx_lid_t local_lid_ids[OPX_MAX_HFIS];
 
-	/* == CACHE LINE 2 == */
+	/* == CACHE LINE 2 & 3 == */
 	struct opx_hfi_local_entry local_lid_entries[OPX_MAX_HFIS];
 } __attribute__((__packed__)) __attribute__((aligned(64)));
 OPX_COMPILE_TIME_ASSERT(offsetof(struct opx_hfi_local_info, local_lid_ids) == (FI_OPX_CACHE_LINE_SIZE * 1),
 			"Offset of opx_hfi_local_info->local_lid_ids should start at cacheline 1!");
 OPX_COMPILE_TIME_ASSERT(offsetof(struct opx_hfi_local_info, local_lid_entries) == (FI_OPX_CACHE_LINE_SIZE * 2),
 			"Offset of opx_hfi_local_info->local_lid_entries should start at cacheline 2!");
+OPX_COMPILE_TIME_ASSERT(sizeof(struct opx_hfi_local_info) == (FI_OPX_CACHE_LINE_SIZE * 4),
+			"Size of opx_hfi_local_info should be 4 cachelines!");
 
 #ifdef OPX_SIM
 /* Build L8SIM support */
@@ -209,9 +221,21 @@ OPX_COMPILE_TIME_ASSERT(offsetof(struct opx_hfi_local_info, local_lid_entries) =
 #undef OPX_SIM_ENABLED
 #endif
 
-#define OPX_HFI1_TYPE fi_opx_global.hfi_local_info.type
+// HFI1 type from SW/logical point of view
+#define OPX_SW_HFI1_TYPE fi_opx_global.hfi_local_info.sw_type
+
+// HFI1 HW type independent of SW
+#define OPX_HW_HFI1_TYPE fi_opx_global.hfi_local_info.hw_type
 
 #define OPX_IS_CTX_SHARING_ENABLED fi_opx_global.ctx_sharing_enabled
+
+// This is constant for all (macro magic) _hfi1_type except OPX_HFI1_MIXED_9B which additionally checks a variable
+// OPX_HW_HFI1_TYPE
+#define OPX_IS_EXTENDED_RX(_hfi1_type) \
+	((_hfi1_type & OPX_HFI1_CYR) || ((_hfi1_type & OPX_HFI1_MIXED_9B) && (OPX_HW_HFI1_TYPE & OPX_HFI1_CYR)))
+
+// Alternative - this only checks the variable OPX_HW_HFI1_TYPE
+// define OPX_IS_EXTENDED_RX(_ignored) (OPX_HW_HFI1_TYPE & OPX_HFI1_CYR)
 
 struct fi_opx_global_data {
 	/* == CACHE LINE 0 == */
@@ -230,7 +254,9 @@ struct fi_opx_global_data {
 	bool			     ctx_sharing_enabled;
 	uint16_t		     pkt_size;
 	uint8_t			     unused[1];
-	uint64_t		     unused_qw[4];
+	uint32_t		     rcvhdrq_entry_dws;
+	uint32_t		     unused_dw;
+	uint64_t		     unused_qw[3];
 
 	/* == CACHE LINE 2+ == */
 	struct opx_hfi_local_info hfi_local_info;
@@ -242,10 +268,10 @@ OPX_COMPILE_TIME_ASSERT(offsetof(struct fi_opx_global_data, hmem_domain_list) ==
 OPX_COMPILE_TIME_ASSERT(offsetof(struct fi_opx_global_data, hfi_local_info) == (FI_OPX_CACHE_LINE_SIZE * 2),
 			"Offset of fi_opx_global_data->hfi_local_info should start at cacheline 2!");
 
-#define OPX_HFI_TYPE_STRING(_hfi_type)                                   \
-	({                                                               \
-		assert((_hfi_type >= 0) && (_hfi_type <= OPX_HFI1_CYR)); \
-		fi_opx_global.opx_hfi1_type_strings[_hfi_type];          \
+#define OPX_HFI1_TYPE_STRING(_hfi1_type)                                   \
+	({                                                                 \
+		assert((_hfi1_type >= 0) && (_hfi1_type <= OPX_HFI1_CYR)); \
+		fi_opx_global.opx_hfi1_type_strings[_hfi1_type];           \
 	})
 
 extern struct fi_opx_global_data fi_opx_global;
@@ -282,13 +308,11 @@ static const uint64_t FI_OPX_HDRQ_MASK_8192    = 0X000000000003FFE0UL;
 #define FI_OPX_RXONLY_CAPS (FI_RECV | FI_DIRECTED_RECV | FI_MULTI_RECV | FI_REMOTE_READ)
 
 #ifdef OPX_HMEM
-#define FI_OPX_BASE_CAPS                                                                                          \
-	(FI_MSG | FI_TAGGED | FI_LOCAL_COMM | FI_REMOTE_COMM | FI_SOURCE | FI_NAMED_RX_CTX | FI_RMA | FI_ATOMIC | \
-	 FI_HMEM)
+#define FI_OPX_BASE_CAPS \
+	(FI_MSG | FI_TAGGED | FI_LOCAL_COMM | FI_REMOTE_COMM | FI_SOURCE | FI_RMA | FI_ATOMIC | FI_HMEM)
 #define FI_OPX_BASE_MR_MODE (OPX_MR | FI_MR_HMEM)
 #else
-#define FI_OPX_BASE_CAPS \
-	(FI_MSG | FI_TAGGED | FI_LOCAL_COMM | FI_REMOTE_COMM | FI_SOURCE | FI_NAMED_RX_CTX | FI_RMA | FI_ATOMIC)
+#define FI_OPX_BASE_CAPS    (FI_MSG | FI_TAGGED | FI_LOCAL_COMM | FI_REMOTE_COMM | FI_SOURCE | FI_RMA | FI_ATOMIC)
 #define FI_OPX_BASE_MR_MODE (OPX_MR)
 #endif
 

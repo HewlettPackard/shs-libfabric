@@ -14,7 +14,7 @@
 . ftr VB CB
 . ftr VBI CBI
 .\}
-.TH "fi_efa" "7" "2025\-05\-15" "Libfabric Programmer\[cq]s Manual" "#VERSION#"
+.TH "fi_efa" "7" "2025\-12\-26" "Libfabric Programmer\[cq]s Manual" "#VERSION#"
 .hy
 .SH NAME
 .PP
@@ -36,6 +36,8 @@ supports fewer capabilities and has more mode requirements for
 applications.
 But it provides a fast path to hand off application requests to the
 device.
+To use \f[V]efa-direct\f[R], set the name field in
+\f[V]fi_fabric_attr\f[R] to \f[V]efa-direct\f[R].
 More details and difference between the two fabrics will be presented
 below.
 .SH SUPPORTED FEATURES
@@ -90,7 +92,12 @@ The provider supports \f[I]FI_CQ_FORMAT_CONTEXT\f[R],
 \f[I]FI_CQ_FORMAT_MSG\f[R], and \f[I]FI_CQ_FORMAT_DATA\f[R].
 \f[I]FI_CQ_FORMAT_TAGGED\f[R] is supported on the \f[V]efa\f[R] fabric
 of RDM endpoint.
-Wait objects are not currently supported.
+.PP
+The \f[V]efa\f[R] and \f[V]efa-direct\f[R] fabrics for RDM endpoints
+support \f[I]FI_WAIT_UNSPEC\f[R] and \f[I]FI_WAIT_FD\f[R] wait objects
+for blocking CQ operations (\f[I]fi_cq_sread\f[R]).
+.PP
+DGRAM endpoints do not support wait objects.
 .TP
 \f[I]Modes\f[R]
 The provider requires the use of \f[I]FI_MSG_PREFIX\f[R] when running
@@ -125,9 +132,17 @@ Both RDM and DGRAM endpoints supports \f[I]FI_THREAD_SAFE\f[R].
 .SH LIMITATIONS
 .SS Completion events
 .IP \[bu] 2
-Synchronous CQ read is not supported.
+DGRAM endpoints do not support synchronous CQ reads
+(\f[I]fi_cq_sread\f[R]) or wait objects.
 .IP \[bu] 2
-Wait objects are not currently supported.
+\f[I]FI_WAIT_FD\f[R] is not supported for RDM endpoints with SHM
+transfers enabled.
+Valid wait objects are \f[I]FI_WAIT_NONE\f[R] or
+\f[I]FI_WAIT_UNSPEC\f[R].
+Blocking read via \f[I]fi_cq_sread()\f[R] is supported and will wait on
+SHM completions.
+When SHM transfers are disabled, \f[I]FI_WAIT_FD\f[R] wait objects are
+supported.
 .SS RMA operations
 .IP \[bu] 2
 Completion events for RMA targets (\f[I]FI_RMA_EVENT\f[R]) is not
@@ -228,6 +243,15 @@ When set to true, the target side of a RMA operation must insert the
 initiator side\[cq]s address into AV before the RMA operation is kicked
 off, due to a current device limitation.
 The default value is false.
+.TP
+\f[I]FI_OPT_EFA_USE_UNSOLICITED_WRITE_RECV - bool\f[R]
+This option only applies to the fi_setopt() call.
+It is used to disable unsolicited write recv for this endpoint, which
+can reduce the likelihood of CQ overflow.
+The default value is true.
+For efa-direct, FI_RX_CQ_DATA is required when
+FI_OPT_EFA_USE_UNSOLICITED_WRITE_RECV is false, or it will return
+-FI_EOPNOTSUPP for the call to fi_setopt().
 .SH PROVIDER SPECIFIC DOMAIN OPS
 .PP
 The efa provider exports extensions for operations that are not provided
@@ -246,9 +270,9 @@ int fi_open_ops(struct fid *domain, const char *name, uint64_t flags,
 \f[R]
 .fi
 .PP
-and requesting \f[V]FI_EFA_DOMAIN_OPS\f[R] in \f[V]name\f[R].
-\f[V]fi_open_ops\f[R] returns \f[V]ops\f[R] as the pointer to the
-function table \f[V]fi_efa_ops_domain\f[R] defined as follows:
+Requesting \f[V]FI_EFA_DOMAIN_OPS\f[R] in \f[V]name\f[R] returns
+\f[V]ops\f[R] as the pointer to the function table
+\f[V]fi_efa_ops_domain\f[R] defined as follows:
 .IP
 .nf
 \f[C]
@@ -257,12 +281,10 @@ struct fi_efa_ops_domain {
 };
 \f[R]
 .fi
-.PP
-It contains the following operations
 .SS query_mr
 .PP
-This op query an existing memory registration as input, and outputs the
-efa specific mr attribute which is defined as follows
+This op queries an existing memory registration as input, and outputs
+the efa specific mr attribute which is defined as follows
 .IP
 .nf
 \f[C]
@@ -308,6 +330,171 @@ It is only valid when \f[V]ic_id_validity\f[R] has the
 .PP
 \f[B]query_mr()\f[R] returns 0 on success, or the value of errno on
 failure (which indicates the failure reason).
+.PP
+To enable GPU Direct Async (GDA), which allows the GPU to interact
+directly with the NIC, request \f[V]FI_EFA_GDA_OPS\f[R] in the
+\f[V]name\f[R] parameter with efa-direct fabirc.
+This returns \f[V]ops\f[R] as a pointer to the function table
+\f[V]fi_efa_ops_gda\f[R] defined as follows:
+.IP
+.nf
+\f[C]
+struct fi_efa_ops_gda {
+    int (*query_addr)(struct fid_ep *ep_fid, fi_addr_t addr, uint16_t *ahn,
+              uint16_t *remote_qpn, uint32_t *remote_qkey);
+    int (*query_qp_wqs)(struct fid_ep *ep_fid, struct fi_efa_wq_attr *sq_attr, struct fi_efa_wq_attr *rq_attr);
+    int (*query_cq)(struct fid_cq *cq_fid, struct fi_efa_cq_attr *cq_attr);
+    int (*cq_open_ext)(struct fid_domain *domain_fid,
+               struct fi_cq_attr *attr,
+               struct fi_efa_cq_init_attr *efa_cq_init_attr,
+               struct fid_cq **cq_fid, void *context);
+    uint64_t (*get_mr_lkey)(struct fid_mr *mr);
+};
+\f[R]
+.fi
+.SS query_addr
+.PP
+This op queries the following address information for a given endpoint
+and destination address.
+.TP
+\f[I]ahn\f[R]
+Address handle number.
+.TP
+\f[I]remote_qpn\f[R]
+Remote queue pair Number.
+.TP
+\f[I]remote_qkey\f[R]
+qkey for the remote queue pair.
+.SS Return value
+.PP
+\f[B]query_addr()\f[R] returns FI_SUCCESS on success, or -FI_EINVAL on
+failure.
+.SS query_qp_wqs
+.PP
+This op queries EFA specific Queue Pair work queue attributes for a
+given endpoint.
+It retrieves the send queue attributes in sq_attr and receive queue
+attributes in rq_attr, which is defined as follows.
+.IP
+.nf
+\f[C]
+struct fi_efa_wq_attr {
+    uint8_t *buffer;
+    uint32_t entry_size;
+    uint32_t num_entries;
+    uint32_t *doorbell;
+    uint32_t max_batch;
+};
+\f[R]
+.fi
+.TP
+\f[I]buffer\f[R]
+Queue buffer.
+.TP
+\f[I]entry_size\f[R]
+Size of each entry in the queue.
+.TP
+\f[I]num_entries\f[R]
+Maximal number of entries in the queue.
+.TP
+\f[I]doorbell\f[R]
+Queue doorbell.
+.TP
+\f[I]max_batch\f[R]
+Maximum batch size for queue submissions.
+.SS Return value
+.PP
+\f[B]query_qp_wqs()\f[R] returns 0 on success, or the value of errno on
+failure (which indicates the failure reason).
+.SS query_cq
+.PP
+This op queries EFA specific Completion Queue attributes for a given cq.
+.IP
+.nf
+\f[C]
+struct fi_efa_cq_attr {
+    uint8_t *buffer;
+    uint32_t entry_size;
+    uint32_t num_entries;
+};
+\f[R]
+.fi
+.TP
+\f[I]buffer\f[R]
+Completion queue buffer.
+.TP
+\f[I]entry_size\f[R]
+Size of each completion queue entry.
+.TP
+\f[I]num_entries\f[R]
+Maximal number of entries in the completion queue.
+.SS Return value
+.PP
+\f[B]query_cq()\f[R] returns 0 on success, or the value of errno on
+failure (which indicates the failure reason).
+.SS cq_open_ext
+.PP
+This op creates a completion queue with external memory provided via
+dmabuf.
+The memory can be passed by supplying the following struct.
+.IP
+.nf
+\f[C]
+struct fi_efa_cq_init_attr {
+    uint64_t flags;
+    struct {
+        uint8_t *buffer;
+        uint64_t length;
+        uint64_t offset;
+        uint32_t fd;
+    } ext_mem_dmabuf;
+};
+\f[R]
+.fi
+.TP
+\f[I]flags\f[R]
+A bitwise OR of the various values described below.
+.RS
+.PP
+FI_EFA_CQ_INIT_FLAGS_EXT_MEM_DMABUF: create CQ with external memory
+provided via dmabuf.
+.RE
+.TP
+\f[I]ext_mem_dmabuf\f[R]
+Structure containing information about external memory when using
+FI_EFA_CQ_INIT_FLAGS_EXT_MEM_DMABUF flag.
+.RS
+.TP
+\f[I]buffer\f[R]
+Pointer to the memory mapped in the process\[cq]s virtual address space.
+The field is optional, but if not provided, the use of CQ poll
+interfaces should be avoided.
+.TP
+\f[I]length\f[R]
+Length of the memory region to use.
+.TP
+\f[I]offset\f[R]
+Offset within the dmabuf.
+.TP
+\f[I]fd\f[R]
+File descriptor of the dmabuf.
+.RE
+.SS Return value
+.PP
+\f[B]cq_open_ext()\f[R] returns 0 on success, or the value of errno on
+failure (which indicates the failure reason).
+.SS get_mr_lkey
+.PP
+Returns the local memory translation key associated with a MR.
+The memory registration must have completed successfully before invoking
+this.
+.TP
+\f[I]lkey\f[R]
+local memory translation key used by TX/RX buffer descriptor.
+.SS Return value
+.PP
+\f[B]get_mr_lkey()\f[R] returns lkey on success, or FI_KEY_NOTAVAIL if
+the registration has not completed.
 .SH Traffic Class (tclass) in EFA
 .PP
 To prioritize the messages from a given endpoint, user can specify
@@ -493,6 +680,12 @@ The threshold that EFA provider will refill the internal rx pkt pool.
 (Default: 8).
 When the number of internal rx pkts to post is lower than this
 threshold, the refill will be skipped.
+.TP
+\f[I]FI_EFA_USE_DATA_PATH_DIRECT\f[R]
+Use the direct data path implementation that bypasses rdma-core on data
+path, including the CQ polling and TX/RX submissions, when it\[cq]s
+available.
+Setting this variable as 0 will disable this feature (Default: true).
 .SH SEE ALSO
 .PP
 \f[V]fabric\f[R](7), \f[V]fi_provider\f[R](7), \f[V]fi_getinfo\f[R](3)

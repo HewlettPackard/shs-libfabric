@@ -390,8 +390,8 @@ static void txc_cleanup(struct cxip_txc *txc)
 	while (cxip_txc_otx_reqs_get(txc)) {
 		sched_yield();
 
-		cxip_evtq_progress(&txc->tx_evtq);
-		cxip_ep_ctrl_progress_locked(txc->ep_obj);
+		cxip_evtq_progress(&txc->tx_evtq, false);
+		cxip_ep_ctrl_progress_locked(txc->ep_obj, false);
 
 		if (ofi_gettime_ms() - start > CXIP_REQ_CLEANUP_TO) {
 			CXIP_WARN("Timeout waiting for outstanding requests.\n");
@@ -449,6 +449,10 @@ void cxip_txc_flush_msg_trig_reqs(struct cxip_txc *txc)
 			cxip_txc_otx_reqs_dec(txc);
 			dlist_remove(&req->send.txc_entry);
 			cxip_unmap(req->send.send_md);
+
+			if (req->send.cntr)
+				cxip_cntr_progress_dec(req->send.cntr);
+
 			cxip_evtq_req_free(req);
 		}
 	}

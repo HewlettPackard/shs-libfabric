@@ -16,6 +16,7 @@
 
 #define CXIP_DBG(...) _CXIP_DBG(FI_LOG_EP_CTRL, __VA_ARGS__)
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_EP_CTRL, __VA_ARGS__)
+#define	TRACE(fmt, ...)	CXIP_COLL_TRACE(CXIP_TRC_ZBCOLL, fmt, ##__VA_ARGS__)
 
 /*
  * cxip_ctrl_msg_cb() - Process control message target events.
@@ -30,7 +31,18 @@ int cxip_ctrl_msg_cb(struct cxip_ctrl_req *req, const union c_event *event)
 	};
 	uint64_t data = event->tgt_long.header_data;
 	uint32_t init = event->tgt_long.initiator.initiator.process;
-	int ret;
+	int ret, mcast_id;
+	struct cxip_coll_mc *mc_obj;
+
+	/*
+	 * If an access was cancelled during an LE invalidate operaiton for
+	 * a standard MR, then it is possible a C_RC_MST_CANCELLED status
+	 * could be returned for PtlTE condifugred with an EQ.
+	 */
+	if (cxi_event_rc(event) == C_RC_MST_CANCELLED) {
+		CXIP_WARN("C_RC_MST_CANCELLED received, ignoring\n");
+		return FI_SUCCESS;
+	}
 
 	/* Check to see if event processing is implemented or overridden
 	 * int the protocol. A return of -FI_ENOSYS indicated the event
@@ -50,7 +62,27 @@ int cxip_ctrl_msg_cb(struct cxip_ctrl_req *req, const union c_event *event)
 		pid = CXI_MATCH_ID_PID(pid_bits, init);
 
 		/* Messages not handled by the protocol */
-		if (mb.ctrl_msg_type == CXIP_CTRL_MSG_ZB_DATA) {
+		if (mb.ctrl_msg_type == CXIP_CTRL_MSG_ZB_DATA_RDMA_LAC) {
+			mcast_id = (0x00000000ffffffff & mb.raw);
+			TRACE("%s - ctrl msg is CXIP_CTRL_MSG_ZB_DATA_RDMA_LAC\n", __func__);
+			TRACE("%s - leaf rdma mcast_id %x\n", __func__, mcast_id);
+			TRACE("%s - leaf rdma lac %016lx\n", __func__, data);
+			/* get the mc_obj based on the inbound mcast_id */
+			mc_obj = ofi_idm_lookup(&req->ep_obj->coll.mcast_map, mcast_id);
+			if(mc_obj) {
+				if(mc_obj->mcast_addr == mcast_id) {
+					TRACE("%s - leaf rdma mc_obj found %x\n",
+						__func__, mc_obj->mcast_addr);
+					mc_obj->rdma_get_lac_va_rx = data;
+				} else
+					TRACE("%s - leaf rdma mcast_id mismatch %x %x\n",
+						__func__, mc_obj->mcast_addr, mcast_id);
+			} else
+				TRACE("%s - mc_obj not found\n", __func__);
+
+			goto done;
+		}
+		else if (mb.ctrl_msg_type == CXIP_CTRL_MSG_ZB_DATA) {
 			ret = cxip_zbcoll_recv_cb(req->ep_obj, nic_addr, pid,
 						  mb.raw, data);
 			assert(ret == FI_SUCCESS);
@@ -324,8 +356,8 @@ static void cxip_ep_return_ctrl_tx_credits(struct cxip_ep_obj *ep_obj,
 }
 
 void cxip_ep_ctrl_eq_progress(struct cxip_ep_obj *ep_obj,
-			      struct cxi_eq *ctrl_evtq, bool tx_evtq,
-			      bool ep_obj_locked)
+			      struct cxi_eq *ctrl_evtq, bool internal,
+			      bool tx_evtq, bool ep_obj_locked)
 {
 	const union c_event *event;
 	struct cxip_ctrl_req *req;
@@ -337,6 +369,14 @@ void cxip_ep_ctrl_eq_progress(struct cxip_ep_obj *ep_obj,
 
 	if (!ep_obj_locked)
 		ofi_genlock_lock(&ep_obj->lock);
+
+	/* If a EP supports wait object and progress is driven
+	 * by application CQ processing, disable interrupts if
+	 * enabled.
+	 */
+	if (ep_obj->priv_wait && !internal &&
+	    !ctrl_evtq->sw_state.event_int_disable)
+		cxi_eq_int_disable(ctrl_evtq);
 
 	while ((event = cxi_eq_peek_event(ctrl_evtq))) {
 		req = cxip_ep_ctrl_event_req(ep_obj, event);
@@ -363,49 +403,56 @@ void cxip_ep_ctrl_eq_progress(struct cxip_ep_obj *ep_obj,
 		ofi_genlock_unlock(&ep_obj->lock);
 }
 
-void cxip_ep_tx_ctrl_progress(struct cxip_ep_obj *ep_obj)
+void cxip_ep_tx_ctrl_progress(struct cxip_ep_obj *ep_obj, bool internal)
 {
-	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tx_evtq, true, false);
+	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tx_evtq,
+				 internal, true, false);
 }
 
-void cxip_ep_tx_ctrl_progress_locked(struct cxip_ep_obj *ep_obj)
+void cxip_ep_tx_ctrl_progress_locked(struct cxip_ep_obj *ep_obj, bool internal)
 {
-	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tx_evtq, true, true);
+	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tx_evtq,
+				 internal, true, true);
 }
 
 /*
  * cxip_ep_ctrl_progress() - Progress operations using the control EQ.
  */
-void cxip_ep_ctrl_progress(struct cxip_ep_obj *ep_obj)
+void cxip_ep_ctrl_progress(struct cxip_ep_obj *ep_obj, bool internal)
 {
-	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tgt_evtq, false, false);
-	cxip_ep_tx_ctrl_progress(ep_obj);
+	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tgt_evtq,
+				 internal, false, false);
+	cxip_ep_tx_ctrl_progress(ep_obj, internal);
 }
 
 /*
  * cxip_ep_ctrl_progress_locked() - Progress operations using the control EQ.
  */
-void cxip_ep_ctrl_progress_locked(struct cxip_ep_obj *ep_obj)
+void cxip_ep_ctrl_progress_locked(struct cxip_ep_obj *ep_obj, bool internal)
 {
-	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tgt_evtq, false, true);
-	cxip_ep_tx_ctrl_progress_locked(ep_obj);
+	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tgt_evtq,
+				 internal, false, true);
+	cxip_ep_tx_ctrl_progress_locked(ep_obj, internal);
 }
 
 /*
  * cxip_ep_tgt_ctrl_progress() - Progress TGT operations using the control EQ.
  */
-void cxip_ep_tgt_ctrl_progress(struct cxip_ep_obj *ep_obj)
+void cxip_ep_tgt_ctrl_progress(struct cxip_ep_obj *ep_obj, bool internal)
 {
-	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tgt_evtq, false, false);
+	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tgt_evtq,
+				 internal, false, false);
 }
 
 /*
  * cxip_ep_tgt_ctrl_progress_locked() - Progress operations using the control
  * EQ.
  */
-void cxip_ep_tgt_ctrl_progress_locked(struct cxip_ep_obj *ep_obj)
+void cxip_ep_tgt_ctrl_progress_locked(struct cxip_ep_obj *ep_obj,
+				      bool internal)
 {
-	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tgt_evtq, false, true);
+	cxip_ep_ctrl_eq_progress(ep_obj, ep_obj->ctrl.tgt_evtq,
+				 internal, false, true);
 }
 
 static void cxip_eq_ctrl_eq_free(void *eq_buf, struct cxi_md *eq_md,

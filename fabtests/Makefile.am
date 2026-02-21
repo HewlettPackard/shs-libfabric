@@ -54,6 +54,7 @@ bin_PROGRAMS = \
 	benchmarks/fi_rdm_bw \
 	benchmarks/fi_rdm_bw_mt \
 	benchmarks/fi_rdm_tagged_bw \
+	benchmarks/fi_rma_tx_completion \
 	unit/fi_eq_test \
 	unit/fi_cq_test \
 	unit/fi_mr_test \
@@ -63,12 +64,13 @@ bin_PROGRAMS = \
 	unit/fi_dom_test \
 	unit/fi_getinfo_test \
 	unit/fi_setopt_test \
+	unit/fi_check_hmem \
 	ubertest/fi_ubertest	\
 	multinode/fi_multinode	\
 	multinode/fi_multinode_coll \
 	component/sock_test \
-	regression/sighandler_test \
-	common/check_hmem
+	component/dmabuf-rdma/cuda_check_dmabuf \
+	regression/sighandler_test
 
 if HAVE_ZE_DEVEL
 if HAVE_VERBS_DEVEL
@@ -143,6 +145,8 @@ nobase_dist_config_DATA = \
 	test_configs/ucx/all.test \
 	test_configs/ucx/quick.test \
 	test_configs/ucx/ucx.exclude \
+	test_configs/lnx/lnx.exclude \
+	test_configs/lnx/all.test \
 	pytest/pytest.ini \
 	pytest/options.yaml \
 	pytest/conftest.py \
@@ -193,6 +197,9 @@ nobase_dist_config_DATA = \
 	pytest/efa/test_efa_shm_addr.py \
 	pytest/efa/test_env.py \
 	pytest/efa/test_multi_ep.py \
+	pytest/efa/test_gda.py \
+	pytest/efa/test_multi_ep_stress.py \
+	pytest/efa/test_efa_mmap.py \
 	pytest/shm/conftest.py \
 	pytest/shm/shm_common.py \
 	pytest/shm/test_av.py \
@@ -429,6 +436,11 @@ benchmarks_fi_rdm_bw_mt_SOURCES = \
 	$(benchmarks_srcs)
 benchmarks_fi_rdm_bw_mt_LDADD = libfabtests.la
 
+benchmarks_fi_rma_tx_completion_SOURCES = \
+	benchmarks/rma_tx_completion.c \
+	$(benchmarks_srcs)
+benchmarks_fi_rma_tx_completion_LDADD = libfabtests.la
+
 
 unit_fi_eq_test_SOURCES = \
 	unit/eq_test.c \
@@ -474,6 +486,14 @@ unit_fi_setopt_test_SOURCES = \
 	unit/setopt_test.c \
 	$(unit_srcs)
 unit_fi_setopt_test_LDADD = libfabtests.la
+
+unit_fi_check_hmem_SOURCES = \
+	unit/check_hmem.c
+
+unit_fi_check_hmem_LDADD = libfabtests.la
+
+unit_fi_check_hmem_CFLAGS = \
+	$(AM_CFLAGS)
 
 ubertest_fi_ubertest_SOURCES = \
 	ubertest/fabtest.h \
@@ -521,6 +541,14 @@ component_sock_test_SOURCES = \
 component_sock_test_LDADD = libfabtests.la
 
 component_sock_test_CFLAGS = \
+	$(AM_CFLAGS)
+
+component_dmabuf_rdma_cuda_check_dmabuf_SOURCES = \
+	component/dmabuf-rdma/check_cuda_dmabuf.c
+
+component_dmabuf_rdma_cuda_check_dmabuf_LDADD = libfabtests.la
+
+component_dmabuf_rdma_cuda_check_dmabuf_CFLAGS = \
 	$(AM_CFLAGS)
 
 if HAVE_ZE_DEVEL
@@ -604,14 +632,6 @@ regression_sighandler_test_LDADD = libfabtests.la
 regression_sighandler_test_CFLAGS = \
 	$(AM_CFLAGS)
 
-common_check_hmem_SOURCES = \
-	common/check_hmem.c
-
-common_check_hmem_LDADD = libfabtests.la
-
-common_checK_hmem_CFLAGS = \
-	$(AM_CFLAGS)
-
 real_man_pages = \
 	 man/man7/fabtests.7
 
@@ -669,6 +689,10 @@ nroff:
             perl $(top_srcdir)/config/md2nroff.pl --source=$(top_srcdir)/$$source.md; \
         done
 
+SUBDIRS =
+DIST_SUBDIRS =
+EXTRA_DIST =
+
 include prov/efa/Makefile.include
 if !MACOS
 include prov/lpp/Makefile.include
@@ -676,7 +700,7 @@ endif
 
 man_MANS = $(real_man_pages) $(dummy_man_pages)
 
-EXTRA_DIST = \
+EXTRA_DIST += \
 	fabtests.spec.in $(real_man_pages) $(dummy_man_pages)
 
 dist-hook: fabtests.spec

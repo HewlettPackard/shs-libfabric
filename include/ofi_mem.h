@@ -278,9 +278,9 @@ static inline void smr_freestack_init(struct smr_freestack *fs, size_t elem_coun
 	fs->entry_base_offset =
 		((char*) &fs->entry_next[0] - (char*) fs) +
 		fs->size * sizeof(fs->top);
-	next_aligned_addr = ofi_get_aligned_size((( (uint64_t) fs) +
+	next_aligned_addr = ofi_get_aligned_size((( (uintptr_t) fs) +
 			fs->entry_base_offset), SMR_ALIGN_BOUNDARY);
-	fs->entry_base_offset = next_aligned_addr - ((uint64_t) fs);
+	fs->entry_base_offset = next_aligned_addr - ((uintptr_t) fs);
 	for (i = elem_count - 1; i >= 0; i--)
 		smr_freestack_push_by_index(fs, i);
 }
@@ -444,7 +444,8 @@ static inline bool ofi_bufpool_ibuf_is_valid(struct ofi_bufpool *pool, size_t in
 	void *buf;
 	size_t region_index = index / pool->attr.chunk_cnt;
 
-	assert(region_index < pool->region_cnt);
+	if (region_index >= pool->region_cnt)
+		return false;
 
 	buf = pool->region_table[region_index]->mem_region +
 		(index % pool->attr.chunk_cnt) * pool->entry_size;

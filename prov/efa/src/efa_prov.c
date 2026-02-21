@@ -109,6 +109,9 @@ static int efa_util_prov_initialize()
 			continue;
 		}
 
+		/* This function must be called after efa_hmem_info_initialize() */
+		efa_prov_info_direct_set_hmem_flags(prov_info_direct);
+
 		if (!head) {
 			head = prov_info_direct;
 		} else {
@@ -189,6 +192,7 @@ EFA_INI
 	ofi_mem_init();
 	ofi_hmem_init();
 	ofi_monitors_init();
+	ofi_params_init();
 #endif
 	int err;
 

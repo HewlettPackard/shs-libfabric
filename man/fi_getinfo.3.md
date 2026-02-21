@@ -252,13 +252,17 @@ struct fi_info {
 # CAPABILITIES
 
 Interface capabilities are obtained by OR-ing the following flags
-together.  If capabilities in the hint parameter are set to 0, the
-underlying provider will return the set of capabilities which are
-supported.  Otherwise, providers will return data matching the
-specified set of capabilities.  Providers may indicate support for
-additional capabilities beyond those requested when the use of
-expanded capabilities will not adversely affect performance or expose
-the application to communication beyond that which was requested.
+together. If a NULL hints structure is provided, the underlying
+provider will return the set of capabilities which are supported.
+If a hints structure is provided but the capabilities in the hints
+structure are set to 0, the underlying provider will only return the
+set of capabilities that the provider can support with the mode bits
+set by the application in the hints structure. Otherwise, if
+capabilities are specified with non-zero values, providers will return
+data matching the specified set of capabilities. Providers may indicate
+support for additional capabilities beyond those requested when the use
+of expanded capabilities will not adversely affect performance or
+expose the application to communication beyond that which was requested.
 Applications may use this feature to request a minimal set of
 requirements, then check the returned capabilities to enable
 additional optimizations.
@@ -665,6 +669,13 @@ address_format[://[node][:[service][/[field3]...][?[key=value][&k2=v2]...]]]
 
 *FI_SOCKADDR_IN6*
 : Address is of type sockaddr_in6 (IPv6).
+
+*FI_SOCKADDR_IP*
+: Address is of type sockaddr_in (IPv4) or sockaddr_in6 (IPv6).  The specific
+  socket address format will be determined at run time by interfaces
+  examining the sa_family field.  This format is different from FI_SOCKADDR
+  in that the address can only be IPv4 or IPv6, not any other socket address
+  such as sockaddr_ib.
 
 # FLAGS
 

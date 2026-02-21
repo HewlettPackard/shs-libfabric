@@ -21,6 +21,12 @@ struct fi_fabric_attr cxip_fabric_attr = {
 	.name = cxip_prov_name,
 };
 
+#ifdef CXI_HAVE_SVC_GET_VNI_RANGE
+#define MAX_VNIS (32768)
+#else
+#define MAX_VNIS (4)
+#endif
+
 /* No ODP, provider specified MR keys */
 struct fi_domain_attr cxip_prov_key_domain_attr = {
 	.name = NULL,
@@ -155,7 +161,7 @@ struct fi_domain_attr cxip_prov_key_multi_auth_key_domain_attr = {
 	.auth_key_size = sizeof(struct cxi_auth_key),
 
 	/* Set to the number of VNIs supported by a single CXI service. */
-	.max_ep_auth_key = 4,
+	.max_ep_auth_key = MAX_VNIS,
 };
 
 /* ODP, provider specified MR keys */
@@ -184,7 +190,7 @@ struct fi_domain_attr cxip_odp_prov_key_multi_auth_key_domain_attr = {
 	.auth_key_size = sizeof(struct cxi_auth_key),
 
 	/* Set to the number of VNIs supported by a single CXI service. */
-	.max_ep_auth_key = 4,
+	.max_ep_auth_key = MAX_VNIS,
 };
 
 /* No ODP, client specified MR keys */
@@ -213,7 +219,7 @@ struct fi_domain_attr cxip_client_key_multi_auth_key_domain_attr = {
 	.auth_key_size = sizeof(struct cxi_auth_key),
 
 	/* Set to the number of VNIs supported by a single CXI service. */
-	.max_ep_auth_key = 4,
+	.max_ep_auth_key = MAX_VNIS,
 };
 
 /* ODP, client specified MR keys */
@@ -242,7 +248,7 @@ struct fi_domain_attr cxip_odp_client_key_multi_auth_key_domain_attr = {
 	.auth_key_size = sizeof(struct cxi_auth_key),
 
 	/* Set to the number of VNIs supported by a single CXI service. */
-	.max_ep_auth_key = 4,
+	.max_ep_auth_key = MAX_VNIS,
 };
 
 struct fi_ep_attr cxip_ep_attr = {
@@ -614,10 +620,12 @@ struct cxip_environment cxip_env = {
 	.rx_match_mode = CXIP_PTLTE_DEFAULT_MODE,
 	.rdzv_threshold = CXIP_RDZV_THRESHOLD,
 	.rdzv_get_min = 2049, /* Avoid single packet Gets */
-	.rdzv_eager_size = CXIP_RDZV_THRESHOLD,
+	.rdzv_eager_size = 2048,
 	.rdzv_aligned_sw_rget = 1,
 	.rnr_max_timeout_us = CXIP_RNR_TIMEOUT_US,
 	.disable_non_inject_msg_idc = 0,
+	.disable_non_inject_rma_idc = 0,
+	.disable_non_inject_amo_idc = 0,
 	.disable_host_register = 0,
 	.oflow_buf_size = CXIP_OFLOW_BUF_SIZE,
 	.oflow_buf_min_posted = CXIP_OFLOW_BUF_MIN_POSTED,
@@ -642,6 +650,7 @@ struct cxip_environment cxip_env = {
 	.hybrid_posted_recv_preemptive = 0,
 	.hybrid_unexpected_msg_preemptive = 0,
 	.fc_retry_usec_delay = 1000,
+	.cntr_spin_before_yield = 1000,
 	.ctrl_rx_eq_max_size = 67108864,
 	.default_cq_size = CXIP_CQ_DEF_SZ,
 	.default_tx_size = CXIP_DEFAULT_TX_SIZE,
@@ -659,12 +668,13 @@ struct cxip_environment cxip_env = {
 	.coll_fabric_mgr_url = NULL,
 	.coll_retry_usec = CXIP_COLL_MAX_RETRY_USEC,
 	.coll_timeout_usec = CXIP_COLL_MAX_TIMEOUT_USEC,
-	.coll_fm_timeout_msec = CXIP_COLL_DFL_FM_TIMEOUT_MSEC,
 	.coll_use_dma_put = false,
 	.telemetry_rgid = -1,
 	.disable_hmem_dev_register = 0,
 	.ze_hmem_supported = 0,
 	.rdzv_proto = CXIP_RDZV_PROTO_DEFAULT,
+	.disable_alt_read_cmdq = false,
+	.cntr_trig_cmdq = false,
 	.enable_trig_op_limit = false,
 	.mr_cache_events_disable_poll_nsecs =
 		CXIP_MR_CACHE_EVENTS_DISABLE_POLL_NSECS,
@@ -672,6 +682,8 @@ struct cxip_environment cxip_env = {
 		CXIP_MR_CACHE_EVENTS_DISABLE_LE_POLL_NSECS,
 	.force_dev_reg_copy = false,
 	.mr_target_ordering = MR_ORDER_DEFAULT,
+	.disable_cuda_sync_memops = false,
+	.enable_writedata = false,
 };
 
 static void cxip_env_init(void)
@@ -738,6 +750,18 @@ static void cxip_env_init(void)
 	fi_param_get_bool(&cxip_prov, "disable_non_inject_msg_idc",
 			  &cxip_env.disable_non_inject_msg_idc);
 
+	fi_param_define(&cxip_prov, "disable_non_inject_rma_idc", FI_PARAM_BOOL,
+			"Disables IDC for non-inject RMA (default: %d).",
+			cxip_env.disable_non_inject_rma_idc);
+	fi_param_get_bool(&cxip_prov, "disable_non_inject_rma_idc",
+			  &cxip_env.disable_non_inject_rma_idc);
+
+	fi_param_define(&cxip_prov, "disable_non_inject_amo_idc", FI_PARAM_BOOL,
+			"Disables IDC for non-inject atomics (default: %d).",
+			cxip_env.disable_non_inject_amo_idc);
+	fi_param_get_bool(&cxip_prov, "disable_non_inject_amo_idc",
+			  &cxip_env.disable_non_inject_amo_idc);
+
 	fi_param_define(&cxip_prov, "disable_host_register", FI_PARAM_BOOL,
 			"Disables host buffer GPU registration (default: %d).",
 			cxip_env.disable_host_register);
@@ -771,10 +795,10 @@ static void cxip_env_init(void)
 		CXIP_INFO("Could not enable FI_HMEM_ROCR_USE_DMABUF ret:%d %s\n",
 			  ret, fi_strerror(errno));
 
-	/* Disable cuda DMABUF by default - honors the env if already set */
-	ret = setenv("FI_HMEM_CUDA_USE_DMABUF", "0", 0);
+	/* Use cuda DMABUF by default - honors the env if already set */
+	ret = setenv("FI_HMEM_CUDA_USE_DMABUF", "1", 0);
 	if (ret)
-		CXIP_INFO("Could not disable FI_HMEM_CUDA_USE_DMABUF ret:%d %s\n",
+		CXIP_INFO("Could not enable FI_HMEM_CUDA_USE_DMABUF ret:%d %s\n",
 			  ret, fi_strerror(errno));
 
 	fi_param_define(&cxip_prov, "ats_mlock_mode", FI_PARAM_STRING,
@@ -833,7 +857,8 @@ static void cxip_env_init(void)
 	cxip_set_env_rx_match_mode();
 
 	fi_param_define(&cxip_prov, "rdzv_threshold", FI_PARAM_SIZE_T,
-			"Message size threshold for rendezvous protocol.");
+			"Message size threshold for rendezvous protocol (default %lu).",
+			cxip_env.rdzv_threshold);
 	fi_param_get_size_t(&cxip_prov, "rdzv_threshold",
 			    &cxip_env.rdzv_threshold);
 
@@ -873,7 +898,8 @@ static void cxip_env_init(void)
 	}
 
 	fi_param_define(&cxip_prov, "oflow_buf_size", FI_PARAM_SIZE_T,
-			"Overflow buffer size.");
+			"Overflow buffer size (default %lu).",
+			cxip_env.oflow_buf_size);
 	fi_param_get_size_t(&cxip_prov, "oflow_buf_size",
 			    &cxip_env.oflow_buf_size);
 
@@ -892,11 +918,13 @@ static void cxip_env_init(void)
 
 	/* Allow either FI_CXI_OFLOW_BUF_COUNT or FI_CXI_FLOW_BUF_MIN_POSTED */
 	fi_param_define(&cxip_prov, "oflow_buf_count", FI_PARAM_SIZE_T,
-			"Overflow buffer count/min posted.");
+			"Overflow buffer count/min posted (default %lu).",
+			cxip_env.oflow_buf_min_posted);
 	fi_param_get_size_t(&cxip_prov, "oflow_buf_count",
 			    &cxip_env.oflow_buf_min_posted);
 	fi_param_define(&cxip_prov, "oflow_buf_min_posted", FI_PARAM_SIZE_T,
-			"Overflow buffer count/min posted.");
+			"Overflow buffer count/min posted (default %lu).",
+			cxip_env.oflow_buf_min_posted);
 	fi_param_get_size_t(&cxip_prov, "oflow_buf_min_posted",
 			    &cxip_env.oflow_buf_min_posted);
 	cxip_env.oflow_buf_max_cached = cxip_env.oflow_buf_min_posted * 3;
@@ -929,6 +957,12 @@ static void cxip_env_init(void)
 			&cxip_env.mr_match_events);
 	fi_param_get_bool(&cxip_prov, "mr_match_events",
 			  &cxip_env.mr_match_events);
+
+	fi_param_define(&cxip_prov, "enable_writedata", FI_PARAM_BOOL,
+			"Enable dual MR entries for FI_WRITEDATA support (default %d).",
+			cxip_env.enable_writedata);
+	fi_param_get_bool(&cxip_prov, "enable_writedata",
+			  &cxip_env.enable_writedata);
 
 	fi_param_define(&cxip_prov, "prov_key_cache", FI_PARAM_BOOL,
 			"Disable caching of FI_MR_PROV_KEY (default %lu).",
@@ -1000,11 +1034,13 @@ static void cxip_env_init(void)
 	fi_param_get_bool(&cxip_prov, "msg_lossless", &cxip_env.msg_lossless);
 
 	fi_param_define(&cxip_prov, "req_buf_size", FI_PARAM_SIZE_T,
-			"Size of request buffer.");
+			"Size of request buffer (default %lu).",
+			cxip_env.req_buf_size);
 	fi_param_get_size_t(&cxip_prov, "req_buf_size", &cxip_env.req_buf_size);
 
 	fi_param_define(&cxip_prov, "req_buf_min_posted", FI_PARAM_SIZE_T,
-			"Minimum number of request buffer posted.");
+			"Minimum number of request buffer posted (default %lu).",
+			cxip_env.req_buf_min_posted);
 	fi_param_get_size_t(&cxip_prov, "req_buf_min_posted",
 			    &cxip_env.req_buf_min_posted);
 
@@ -1018,7 +1054,7 @@ static void cxip_env_init(void)
 	fi_param_get_size_t(&cxip_prov, "req_buf_max_cached",
 			    &cxip_env.req_buf_max_cached);
 
-	if (cxip_software_pte_allowed()) {
+	if (cxip_software_pte_allowed(cxip_env.rx_match_mode)) {
 		min_free = CXIP_REQ_BUF_HEADER_MAX_SIZE +
 			cxip_env.rdzv_threshold + cxip_env.rdzv_get_min;
 
@@ -1054,6 +1090,12 @@ static void cxip_env_init(void)
 		CXIP_WARN("FC retry delay invalid. Setting to %d usecs\n",
 			  cxip_env.fc_retry_usec_delay);
 	}
+
+	fi_param_define(&cxip_prov, "cntr_spin_before_yield", FI_PARAM_INT,
+			"Number of times to spin in counter operations before yielding. Default: %d",
+			cxip_env.cntr_spin_before_yield);
+	fi_param_get_int(&cxip_prov, "cntr_spin_before_yield",
+			 &cxip_env.cntr_spin_before_yield);
 
 	fi_param_define(&cxip_prov, "sw_rx_tx_init_max", FI_PARAM_INT,
 			"Max TX S/W RX processing will initiate. Default: %d",
@@ -1180,17 +1222,6 @@ static void cxip_env_init(void)
 	if (cxip_env.coll_timeout_usec > CXIP_COLL_MAX_TIMEOUT_USEC)
 		cxip_env.coll_timeout_usec = CXIP_COLL_MAX_TIMEOUT_USEC;
 
-	fi_param_define(&cxip_prov, "coll_fm_timeout_msec", FI_PARAM_SIZE_T,
-		"FM API timeout (msec) (default %d, min %d, max %d).",
-		cxip_env.coll_fm_timeout_msec, CXIP_COLL_MIN_FM_TIMEOUT_MSEC,
-		CXIP_COLL_MAX_FM_TIMEOUT_MSEC);
-	fi_param_get_size_t(&cxip_prov, "coll_fm_timeout_msec",
-			    &cxip_env.coll_fm_timeout_msec);
-	if (cxip_env.coll_fm_timeout_msec < CXIP_COLL_MIN_FM_TIMEOUT_MSEC)
-		cxip_env.coll_fm_timeout_msec = CXIP_COLL_MIN_FM_TIMEOUT_MSEC;
-	if (cxip_env.coll_fm_timeout_msec > CXIP_COLL_MAX_FM_TIMEOUT_MSEC)
-		cxip_env.coll_fm_timeout_msec = CXIP_COLL_MAX_FM_TIMEOUT_MSEC;
-
 	fi_param_define(&cxip_prov, "default_tx_size", FI_PARAM_SIZE_T,
 			"Default provider tx_attr.size (default: %lu).",
 			cxip_env.default_tx_size);
@@ -1273,6 +1304,18 @@ static void cxip_env_init(void)
 		param_str = NULL;
 	}
 
+	fi_param_define(&cxip_prov, "disable_alt_read_cmdq", FI_PARAM_BOOL,
+			"Disables use of alt_read dedicated cmdq (%d).",
+			cxip_env.disable_alt_read_cmdq);
+	fi_param_get_bool(&cxip_prov, "disable_alt_read_cmdq",
+			  &cxip_env.disable_alt_read_cmdq);
+
+	fi_param_define(&cxip_prov, "cntr_trig_cmdq", FI_PARAM_BOOL,
+			"Enables dedicated cmdq for counters (default %d).",
+			cxip_env.cntr_trig_cmdq);
+	fi_param_get_bool(&cxip_prov, "cntr_trig_cmdq",
+			  &cxip_env.cntr_trig_cmdq);
+
 	fi_param_define(&cxip_prov, "mr_cache_events_disable_poll_nsecs", FI_PARAM_SIZE_T,
 			"Max amount of time to poll when disabling an MR configured with MR match events (default: %lu).",
 			cxip_env.mr_cache_events_disable_poll_nsecs);
@@ -1308,6 +1351,12 @@ static void cxip_env_init(void)
 
 		param_str = NULL;
 	}
+
+	fi_param_define(&cxip_prov, "disable_cuda_sync_memops", FI_PARAM_BOOL,
+			"Disable CUDA sync of memory operations. Default: %d",
+			cxip_env.disable_cuda_sync_memops);
+	fi_param_get_bool(&cxip_prov, "disable_cuda_sync_memops",
+			  &cxip_env.disable_cuda_sync_memops);
 
 	set_system_page_size();
 }

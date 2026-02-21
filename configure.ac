@@ -10,7 +10,7 @@ dnl
 dnl Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.60])
-AC_INIT([libfabric], [2.2.0a1], [ofiwg@lists.openfabrics.org])
+AC_INIT([libfabric], [2.5.0a1], [ofiwg@lists.openfabrics.org])
 AC_CONFIG_SRCDIR([src/fabric.c])
 AC_CONFIG_AUX_DIR(config)
 AC_CONFIG_MACRO_DIR(config)
@@ -175,7 +175,18 @@ AC_DEFUN([FI_ARG_ENABLE_SANITIZER],[
                       [],
                       [enable_$1=no])
         AS_IF([test x"$enable_$1" != x"no"],
-              [CFLAGS="-fsanitize=$2 $CFLAGS"])
+              [save_CFLAGS="$CFLAGS"
+               save_LDFLAGS="$LDFLAGS"
+               CFLAGS="-fsanitize=$2 $CFLAGS"
+               LDFLAGS="-fsanitize=$2 $LDFLAGS"
+               AC_MSG_CHECKING([for $3Sanitizer support])
+               AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[return 0;]])],
+                              [AC_MSG_RESULT([yes])],
+                              [AC_MSG_RESULT([no])
+                               CFLAGS="$save_CFLAGS"
+                               LDFLAGS="$save_LDFLAGS"
+                               AC_MSG_ERROR([$3Sanitizer requested but compiler/linker support not found.])])
+              ])
 ])
 
 m4_map([FI_ARG_ENABLE_SANITIZER],[
@@ -607,7 +618,7 @@ dnl restricted DL open
 restricted_dl=0
 AC_ARG_ENABLE([restricted_dl],
               [AC_HELP_STRING([--enable-restricted-dl],
-                              [only look for dl providers under default location if FI_PROVIDER_PATH is not set])],
+                              [only look for dl providers under default location if FI_PROVIDER_PATH is not set.  Enable this for large systems to reduce dlopen() traffic during job startup.])],
               [restricted_dl=1],
               [])
 AC_DEFINE_UNQUOTED([HAVE_RESTRICTED_DL], [$restricted_dl],
@@ -755,6 +766,9 @@ AS_IF([test x"$with_cuda" != x"no"],
 				 [have_cuda=1])
 	      ])
 
+	AS_IF([test "$have_cuda" = "1" && test x"$with_cuda" != x"yes"],
+	      [CPPFLAGS="$CPPFLAGS $cuda_CPPFLAGS"
+	       LDFLAGS="$LDFLAGS $cuda_LDFLAGS"])
 	have_cuda_dmabuf=1
 	AC_CHECK_DECL([cuMemGetHandleForAddressRange],
 			[],
@@ -770,7 +784,7 @@ AS_IF([test x"$with_cuda" != x"no"],
 			[],
 			[have_cuda_dmabuf=0],
 			[[#include <cuda.h>]])
-	
+
 	have_cuda_dmabuf_mapping_type_pcie=1
 	AC_CHECK_DECL([CU_MEM_RANGE_FLAG_DMA_BUF_MAPPING_TYPE_PCIE],
 			[],
@@ -790,9 +804,6 @@ AC_DEFINE_UNQUOTED([HAVE_CUDA_DMABUF], [$have_cuda_dmabuf], [CUDA dmabuf support
 AC_DEFINE_UNQUOTED([HAVE_CUDA_DMABUF_MAPPING_TYPE_PCIE], [$have_cuda_dmabuf_mapping_type_pcie], [CUDA dmabuf PCIe BAR1 support])
 
 AS_IF([test "$cuda_dlopen" != "1"], [LIBS="$LIBS $cuda_LIBS"])
-AS_IF([test "$have_cuda" = "1" && test x"$with_cuda" != x"yes"],
-      [CPPFLAGS="$CPPFLAGS $cuda_CPPFLAGS"
-       LDFLAGS="$LDFLAGS $cuda_LDFLAGS"])
 
 AC_ARG_WITH([ze],
 	[AS_HELP_STRING([--with-ze=DIR], [Enable ZE build and fail if not found.
@@ -1117,7 +1128,7 @@ dnl patching ${archive_cmds} to affect generation of file "libtool" to fix linki
 dnl allows for building with clang lto and fast linking with non gnu ld
 dnl --> checking if the linker (clang) is GNU ld... no
 AS_CASE(["$LD"],
-    [*clang*],
+    [*clang[^/]*],
         [AS_CASE(["${host_os}"],
             [*linux*],
             [archive_cmds='$CC -shared $pic_flag $libobjs $deplibs $compiler_flags $wl-soname $wl$soname $wl-version-script $wl$libname.map -o $lib'])])
@@ -1145,6 +1156,7 @@ FI_PROVIDER_SETUP([lpp])
 FI_PROVIDER_SETUP([perf])
 FI_PROVIDER_SETUP([trace])
 FI_PROVIDER_SETUP([profile])
+FI_PROVIDER_SETUP([monitor])
 FI_PROVIDER_SETUP([hook_debug])
 FI_PROVIDER_SETUP([hook_hmem])
 FI_PROVIDER_SETUP([dmabuf_peer_mem])

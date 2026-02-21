@@ -51,6 +51,14 @@
 
 #include "ofi_atomic.h"
 
+#ifdef __GNUC__
+    #define FT_LIKELY(x)   __builtin_expect(!!(x), 1)
+    #define FT_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+    #define FT_LIKELY(x)   (x)
+    #define FT_UNLIKELY(x) (x)
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -78,13 +86,6 @@ extern "C" {
  */
 #define OFI_MR_DEPRECATED	(0x3) /* FI_MR_BASIC | FI_MR_SCALABLE */
 #define OFI_MR_BASIC_MAP (FI_MR_ALLOCATED | FI_MR_PROV_KEY | FI_MR_VIRT_ADDR)
-
-/* exit codes must be 0-255 */
-static inline int ft_exit_code(int ret)
-{
-	int absret = ret < 0 ? -ret : ret;
-	return absret > 255 ? EXIT_FAILURE : absret;
-}
 
 #define ft_sa_family(addr) (((struct sockaddr *)(addr))->sa_family)
 
@@ -221,6 +222,7 @@ struct ft_opts {
 	enum fi_hmem_iface iface;
 	uint64_t device;
 	enum fi_threading threading;
+	int expect_error;
 
 	char **argv;
 };
@@ -250,6 +252,7 @@ extern char **tx_mr_bufs, **rx_mr_bufs;
 extern size_t buf_size, tx_size, rx_size, tx_mr_size, rx_mr_size;
 extern int tx_fd, rx_fd;
 extern int timeout;
+extern bool allow_rx_cq_data;
 
 extern struct fi_context2 tx_ctx, rx_ctx;
 extern uint64_t remote_cq_data;
@@ -331,7 +334,8 @@ extern char default_port[8];
 		.device = 0, \
 		.argc = argc, .argv = argv, \
 		.address_format = FI_FORMAT_UNSPEC, \
-		.threading = FI_THREAD_DOMAIN \
+		.threading = FI_THREAD_DOMAIN, \
+		.expect_error = 0, \
 	}
 
 #define FT_STR_LEN 32
@@ -374,6 +378,8 @@ static inline int ft_use_size(int index, int enable_flags)
 		errno = saved_errno;					\
 	} while (0)
 
+
+#define FT_INFO(fmt, ...) FT_LOG("info", fmt, ##__VA_ARGS__)
 #define FT_ERR(fmt, ...) FT_LOG("error", fmt, ##__VA_ARGS__)
 #define FT_WARN(fmt, ...) FT_LOG("warn", fmt, ##__VA_ARGS__)
 
@@ -473,6 +479,8 @@ int ft_av_insert(struct fid_av *av, void *addr, size_t count, fi_addr_t *fi_addr
 		uint64_t flags, void *context);
 int ft_init_av(void);
 int ft_join_mc(void);
+int ft_send_addr_oob(struct fid_ep *ep_ptr);
+int ft_recv_addr_oob(struct fid_av *av_ptr, fi_addr_t *remote_addr);
 int ft_init_av_dst_addr(struct fid_av *av_ptr, struct fid_ep *ep_ptr,
 		fi_addr_t *remote_addr);
 int ft_init_av_addr(struct fid_av *av, struct fid_ep *ep,
@@ -584,7 +592,7 @@ size_t ft_tx_prefix_size(void);
 void ft_force_progress(void);
 int ft_progress(struct fid_cq *cq, uint64_t total, uint64_t *cq_cntr);
 ssize_t ft_post_rx(struct fid_ep *ep, size_t size, void *ctx);
-ssize_t ft_post_rx_buf(struct fid_ep *ep, size_t size, void *ctx,
+ssize_t ft_post_rx_buf(struct fid_ep *ep, fi_addr_t fi_addr, size_t size, void *ctx,
 		       void *op_buf, void *op_mr_desc, uint64_t op_tag);
 ssize_t ft_post_tx(struct fid_ep *ep, fi_addr_t fi_addr, size_t size,
 		uint64_t data, void *ctx);
@@ -673,6 +681,8 @@ enum {
 	LONG_OPT_MAX_MSG_SIZE,
 	LONG_OPT_USE_FI_MORE,
 	LONG_OPT_THREADING,
+	LONG_OPT_NO_RX_CQ_DATA,
+	LONG_OPT_EXPECT_ERROR,
 };
 
 extern int debug_assert;
@@ -846,5 +856,17 @@ static inline void *ft_get_page_end(const void *addr, size_t page_size)
 	default: return -FI_EOPNOTSUPP;				\
 	}
 
+/* exit codes must be 0-255 */
+static inline int ft_exit_code(int ret)
+{
+	int absret = ret < 0 ? -ret : ret;
+	if (opts.expect_error) {
+		if (absret == opts.expect_error)
+			return EXIT_SUCCESS;
+		else if (absret == 0)
+			return EXIT_FAILURE;
+	}
+	return absret > 255 ? EXIT_FAILURE : absret;
+}
 
 #endif /* _SHARED_H_ */

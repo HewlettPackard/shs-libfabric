@@ -40,6 +40,40 @@
 #define OFI_RMA_DIRECTION_CAPS	(FI_READ | FI_WRITE | \
 				 FI_REMOTE_READ | FI_REMOTE_WRITE)
 
+static inline bool is_sockaddr(uint32_t format)
+{
+	return format == FI_SOCKADDR || format == FI_SOCKADDR_IP ||
+	       format == FI_SOCKADDR_IN || format == FI_SOCKADDR_IN6 ||
+	       format == FI_SOCKADDR_IB;
+}
+
+static inline bool is_ipaddr(uint32_t format)
+{
+	return format == FI_SOCKADDR || format == FI_SOCKADDR_IP ||
+	       format == FI_SOCKADDR_IN || format == FI_SOCKADDR_IN6;
+}
+
+static inline bool is_ipv4addr(uint32_t format)
+{
+	return format == FI_SOCKADDR || format == FI_SOCKADDR_IP ||
+	       format == FI_SOCKADDR_IN;
+}
+
+static inline bool is_ipv6addr(uint32_t format)
+{
+	return format == FI_SOCKADDR || format == FI_SOCKADDR_IP ||
+	       format == FI_SOCKADDR_IN6;
+}
+
+static inline bool is_ibaddr(uint32_t format)
+{
+	return format == FI_SOCKADDR || format == FI_SOCKADDR_IB;
+}
+
+/*
+ * Used for filtering provider instances based on the address format. Expect
+ * exact match for formats that are not FI_SOCKADDR or FI_SOCKADDR_IP.
+ */
 int ofi_match_addr_format(uint32_t if_format, uint32_t user_format)
 {
 	if (user_format == FI_FORMAT_UNSPEC || if_format == FI_FORMAT_UNSPEC)
@@ -47,8 +81,9 @@ int ofi_match_addr_format(uint32_t if_format, uint32_t user_format)
 
 	switch (user_format) {
 	case FI_SOCKADDR:
-		/* Provider supports INET and INET6 */
-		return if_format <= FI_SOCKADDR_IN6;
+		return is_sockaddr(if_format);
+	case FI_SOCKADDR_IP:
+		return is_ipaddr(if_format);
 	default:
 		return if_format == user_format;
 	}
@@ -61,17 +96,15 @@ int ofi_valid_addr_format(uint32_t prov_format, uint32_t user_format)
 
 	switch (prov_format) {
 	case FI_SOCKADDR:
-		/* Provider supports INET and INET6 */
-		return user_format <= FI_SOCKADDR_IN6;
+		return is_sockaddr(user_format);
+	case FI_SOCKADDR_IP:
+		return is_ipaddr(user_format);
 	case FI_SOCKADDR_IN:
-		/* Provider supports INET only */
-		return user_format <= FI_SOCKADDR_IN;
+		return is_ipv4addr(user_format);
 	case FI_SOCKADDR_IN6:
-		/* Provider supports INET6 only */
-		return user_format <= FI_SOCKADDR_IN6;
+		return is_ipv6addr(user_format);
 	case FI_SOCKADDR_IB:
-		/* Provider must support IB, INET, and INET6 */
-		return user_format <= FI_SOCKADDR_IB;
+		return is_ibaddr(user_format);
 	default:
 		return prov_format == user_format;
 	}
@@ -694,6 +727,23 @@ int ofi_check_domain_attr(const struct fi_provider *prov, uint32_t api_version,
 		return -FI_ENODATA;
 	}
 
+	if (FI_VERSION_GE(api_version, FI_VERSION(2, 5))) {
+		if (prov_attr->max_cntr_value &&
+		    user_attr->max_cntr_value > prov_attr->max_cntr_value) {
+			OFI_INFO_CHECK_SIZE(prov, prov_attr, user_attr,
+					    max_cntr_value);
+			return -FI_ENODATA;
+		}
+
+		if (prov_attr->max_err_cntr_value &&
+		    user_attr->max_err_cntr_value >
+			    prov_attr->max_err_cntr_value) {
+			OFI_INFO_CHECK_SIZE(prov, prov_attr, user_attr,
+					    max_err_cntr_value);
+			return -FI_ENODATA;
+		}
+	}
+
 	return 0;
 }
 
@@ -1019,19 +1069,25 @@ int ofi_prov_check_info(const struct util_prov *util_prov,
 			uint32_t api_version,
 			const struct fi_info *user_info)
 {
-	const struct fi_info *prov_info = util_prov->info;
+	const struct fi_info *prov_info;
 	size_t success_info = 0;
 	int ret;
 
 	if (!user_info)
 		return FI_SUCCESS;
 
-	for ( ; prov_info; prov_info = prov_info->next) {
+	if (util_prov->info_lock)
+	    ofi_mutex_lock(util_prov->info_lock);
+
+	for (prov_info = util_prov->info; prov_info; prov_info = prov_info->next) {
 		ret = ofi_check_info(util_prov, prov_info,
 				     api_version, user_info);
 		if (!ret)
 			success_info++;
 	}
+
+	if (util_prov->info_lock)
+	    ofi_mutex_unlock(util_prov->info_lock);
 
 	return (!success_info ? -FI_ENODATA : FI_SUCCESS);
 }
@@ -1043,7 +1099,7 @@ int ofi_prov_check_dup_info(const struct util_prov *util_prov,
 			    const struct fi_info *user_info,
 			    struct fi_info **info)
 {
-	const struct fi_info *prov_info = util_prov->info;
+	const struct fi_info *prov_info;
 	const struct fi_provider *prov = util_prov->prov;
 	struct fi_info *fi, *tail;
 	int ret;
@@ -1051,9 +1107,12 @@ int ofi_prov_check_dup_info(const struct util_prov *util_prov,
 	if (!info)
 		return -FI_EINVAL;
 
+	if (util_prov->info_lock)
+	    ofi_mutex_lock(util_prov->info_lock);
+
 	*info = tail = NULL;
 
-	for ( ; prov_info; prov_info = prov_info->next) {
+	for (prov_info = util_prov->info; prov_info; prov_info = prov_info->next) {
 		ret = ofi_check_info(util_prov, prov_info,
 				     api_version, user_info);
 	    	if (ret)
@@ -1077,8 +1136,13 @@ int ofi_prov_check_dup_info(const struct util_prov *util_prov,
 		tail = fi;
 	}
 
+	if (util_prov->info_lock)
+	    ofi_mutex_unlock(util_prov->info_lock);
+
 	return !*info ? -FI_ENODATA : FI_SUCCESS;
 err:
+	if (util_prov->info_lock)
+	    ofi_mutex_unlock(util_prov->info_lock);
 	fi_freeinfo(*info);
 	FI_INFO(prov, FI_LOG_CORE,
 		"cannot copy info\n");
@@ -1212,13 +1276,21 @@ static void fi_alter_domain_attr(struct fi_domain_attr *attr,
 	}
 
 	attr->caps = ofi_get_caps(info_caps, hints ? hints->caps : 0, attr->caps);
+
+	if (attr->max_cntr_value == 0)
+		attr->max_cntr_value = UINT64_MAX;
+	if (attr->max_err_cntr_value == 0)
+		attr->max_err_cntr_value = UINT64_MAX;
+
 	if (!hints)
 		return;
 
 	if (hints->threading)
 		attr->threading = hints->threading;
-	if (hints->progress)
+	if (hints->progress) {
 		attr->progress = hints->progress;
+		attr->control_progress = hints->progress;
+	}
 	if (hints->av_type)
 		attr->av_type = hints->av_type;
 	if (hints->max_ep_auth_key)

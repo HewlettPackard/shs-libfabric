@@ -46,6 +46,7 @@ ssize_t efa_rdm_pke_init_payload_from_ope(struct efa_rdm_pke *pke,
 	struct efa_mr *iov_mr;
 
 	pke->ope = ope;
+	pke->peer = ope->peer;
 	if (data_size == 0) {
 		pke->pkt_size = payload_offset;
 		return 0;
@@ -148,7 +149,7 @@ int efa_rdm_ep_flush_queued_blocking_copy_to_hmem(struct efa_rdm_ep *ep)
 								data, pkt_entry->payload_size);
 		} else {
 			bytes_copied[i] = ofi_copy_to_hmem_iov(desc->peer.iface,
-			                                       desc->peer.device.reserved,
+			                                       desc->peer.device,
 			                                       rxe->iov, rxe->iov_count,
 			                                       segment_offset + ep->msg_prefix_size,
 			                                       data, pkt_entry->payload_size);
@@ -593,4 +594,34 @@ uint32_t *efa_rdm_pke_connid_ptr(struct efa_rdm_pke *pkt_entry)
 	}
 
 	return NULL;
+}
+
+struct efa_rdm_pke *efa_rdm_pke_get_ooo_pke(struct efa_rdm_pke *pkt_entry)
+{
+	struct efa_rdm_pke *ooo_entry;
+
+	if (OFI_UNLIKELY(!efa_env.rx_copy_ooo))
+		return pkt_entry;
+
+	assert(pkt_entry->alloc_type == EFA_RDM_PKE_FROM_EFA_RX_POOL);
+	ooo_entry = efa_rdm_pke_clone(pkt_entry, pkt_entry->ep->rx_ooo_pkt_pool,
+				      EFA_RDM_PKE_FROM_OOO_POOL);
+
+	if (OFI_UNLIKELY(!ooo_entry)) {
+		EFA_WARN(FI_LOG_EP_CTRL,
+			 "Unable to allocate rx_pkt_entry for OOO msg\n");
+		efa_base_ep_write_eq_error(
+			&(pkt_entry->ep->base_ep),
+			FI_ENOBUFS, FI_EFA_ERR_OOM);
+		return NULL;
+	}
+
+#if ENABLE_DEBUG
+	/* ooo pkt is also rx pkt, insert it to rx pkt list so we can track it
+	 * and clean up during ep close */
+	dlist_insert_tail(&ooo_entry->dbg_entry, &ooo_entry->ep->rx_pkt_list);
+#endif
+
+	efa_rdm_pke_release_rx(pkt_entry);
+	return ooo_entry;
 }

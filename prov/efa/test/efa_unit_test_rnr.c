@@ -12,8 +12,11 @@ void test_efa_rnr_queue_and_resend_impl(struct efa_resource **state, uint32_t op
 	struct efa_rdm_ep *efa_rdm_ep;
 	struct efa_rdm_ope *txe;
 	struct efa_rdm_pke *pkt_entry;
+	struct efa_rdm_cq *efa_rdm_cq;
+	struct efa_ibv_cq *ibv_cq;
 	size_t raw_addr_len = sizeof(raw_addr);
 	fi_addr_t peer_addr;
+	uint64_t wr_id;
 	int ret;
 
 	/* disable shm to force using efa device to send */
@@ -29,11 +32,9 @@ void test_efa_rnr_queue_and_resend_impl(struct efa_resource **state, uint32_t op
 	assert_int_equal(ret, 1);
 
 	efa_rdm_ep = container_of(resource->ep, struct efa_rdm_ep, base_ep.util_ep.ep_fid);
-	efa_rdm_ep->base_ep.qp->ibv_qp_ex->wr_start = &efa_mock_ibv_wr_start_no_op;
-	efa_rdm_ep->base_ep.qp->ibv_qp_ex->wr_send = &efa_mock_ibv_wr_send_save_wr;
-	efa_rdm_ep->base_ep.qp->ibv_qp_ex->wr_set_ud_addr = &efa_mock_ibv_wr_set_ud_addr_no_op;
-	efa_rdm_ep->base_ep.qp->ibv_qp_ex->wr_set_sge_list = &efa_mock_ibv_wr_set_sge_list_no_op;
-	efa_rdm_ep->base_ep.qp->ibv_qp_ex->wr_complete = &efa_mock_ibv_wr_complete_no_op;
+	/* Add mock for efa_qp_post_send */
+	g_efa_unit_test_mocks.efa_qp_post_send = &efa_mock_efa_qp_post_send_return_mock;
+	will_return_int_maybe(efa_mock_efa_qp_post_send_return_mock, 0);
 	assert_true(dlist_empty(&efa_rdm_ep->txe_list));
 
 	if (op == ofi_op_msg)
@@ -45,10 +46,19 @@ void test_efa_rnr_queue_and_resend_impl(struct efa_resource **state, uint32_t op
 	assert_int_equal(g_ibv_submitted_wr_id_cnt, 1);
 
 	txe = container_of(efa_rdm_ep->txe_list.next, struct efa_rdm_ope, ep_entry);
-	pkt_entry = (struct efa_rdm_pke *)g_ibv_submitted_wr_id_vec[0];
+
+	efa_rdm_cq = container_of(resource->cq, struct efa_rdm_cq, efa_cq.util_cq.cq_fid.fid);
+	ibv_cq = &efa_rdm_cq->efa_cq.ibv_cq;
+
+	wr_id = (uint64_t) g_ibv_submitted_wr_id_vec[0];
+
+	pkt_entry = efa_rdm_cq_get_pke_from_wr_id(ibv_cq, wr_id);
+
+	pkt_entry->ope = txe;
 
 	efa_rdm_ep_record_tx_op_completed(efa_rdm_ep, pkt_entry);
-	efa_rdm_ep_queue_rnr_pkt(efa_rdm_ep, &txe->queued_pkts, pkt_entry);
+
+	efa_rdm_ep_queue_rnr_pkt(efa_rdm_ep, pkt_entry);
 	assert_int_equal(pkt_entry->flags & EFA_RDM_PKE_RNR_RETRANSMIT, EFA_RDM_PKE_RNR_RETRANSMIT);
 	assert_int_equal(efa_rdm_ep->efa_rnr_queued_pkt_cnt, 1);
 	assert_int_equal(efa_rdm_ep_get_peer(efa_rdm_ep, peer_addr)->rnr_queued_pkt_cnt, 1);

@@ -10,7 +10,9 @@
 
 #include "ofi.h"
 #include "ofi_util.h"
+#include "efa_av.h"
 #include "rdm/efa_rdm_protocol.h"
+#include "efa_data_path_direct_structs.h"
 
 #define EFA_QP_DEFAULT_SERVICE_LEVEL 0
 #define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
@@ -45,19 +47,12 @@ struct efa_qp {
 	struct efa_base_ep *base_ep;
 	uint32_t qp_num;
 	uint32_t qkey;
+	bool data_path_direct_enabled;
+#if HAVE_EFA_DATA_PATH_DIRECT
+	struct efa_data_path_direct_qp data_path_direct_qp;
+#endif
+	bool unsolicited_write_recv_enabled;
 };
-
-#define EFA_GID_LEN	16
-
-struct efa_ep_addr {
-	uint8_t			raw[EFA_GID_LEN];
-	uint16_t		qpn;
-	uint16_t		pad;
-	uint32_t		qkey;
-	struct efa_ep_addr	*next;
-};
-
-#define EFA_EP_ADDR_LEN sizeof(struct efa_ep_addr)
 
 struct efa_av;
 
@@ -81,7 +76,6 @@ struct efa_base_ep {
 	struct fi_info *info;
 	size_t rnr_retry;
 	struct efa_ep_addr src_addr;
-	struct efa_ah *self_ah;
 
 	bool util_ep_initialized;
 	bool efa_qp_enabled;
@@ -98,6 +92,7 @@ struct efa_base_ep {
 	/* Only used by RDM ep type */
 	struct efa_qp *user_recv_qp; /* Separate qp to receive pkts posted by users */
 	struct efa_recv_wr *user_recv_wr_vec;
+	bool use_unsolicited_write_recv;
 };
 
 int efa_base_ep_bind_av(struct efa_base_ep *base_ep, struct efa_av *av);
@@ -117,16 +112,16 @@ int efa_base_ep_getname(fid_t fid, void *addr, size_t *addrlen);
 int efa_ep_open(struct fid_domain *domain_fid, struct fi_info *user_info,
 		struct fid_ep **ep_fid, void *context);
 
-int efa_qp_create(struct efa_qp **qp, struct ibv_qp_init_attr_ex *init_attr_ex, uint32_t tclass);
+int efa_qp_create(struct efa_qp **qp, struct ibv_qp_init_attr_ex *init_attr_ex,
+		   uint32_t tclass, bool enable_unsolicited_write_recv);
 
 void efa_qp_destruct(struct efa_qp *qp);
-
-int efa_base_ep_create_qp(struct efa_base_ep *base_ep,
-			  struct ibv_qp_init_attr_ex *init_attr_ex);
 
 void efa_base_ep_close_util_ep(struct efa_base_ep *base_ep);
 
 int efa_base_ep_destruct_qp(struct efa_base_ep *base_ep);
+
+int efa_base_ep_destruct_qp_unsafe(struct efa_base_ep *base_ep);
 
 bool efa_qp_support_op_in_order_aligned_128_bytes(struct efa_qp *qp,
 						       enum ibv_wr_opcode op);
@@ -157,5 +152,9 @@ int efa_base_ep_insert_cntr_ibv_cq_poll_list(struct efa_base_ep *ep);
 void efa_base_ep_remove_cntr_ibv_cq_poll_list(struct efa_base_ep *ep);
 
 int efa_base_ep_create_and_enable_qp(struct efa_base_ep *ep, bool create_user_recv_qp);
+
+#if ENABLE_DEBUG
+void efa_ep_addr_print(char *prefix, struct efa_ep_addr *addr);
+#endif
 
 #endif

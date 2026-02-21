@@ -18,7 +18,7 @@ static void efa_rdm_atomic_init_shm_msg(struct efa_rdm_ep *ep, struct fi_msg_ato
 
 	assert(msg->rma_iov_count <= EFA_RDM_IOV_LIMIT);
 	memcpy(shm_msg, msg, sizeof(*msg));
-	if (!(efa_rdm_ep_domain(ep)->shm_info->domain_attr->mr_mode & FI_MR_VIRT_ADDR)) {
+	if (!(ep->shm_info->domain_attr->mr_mode & FI_MR_VIRT_ADDR)) {
 		memcpy(rma_iov, msg->rma_iov,
 		       sizeof(*msg->rma_iov) * msg->rma_iov_count);
 		for (i = 0; i < msg->rma_iov_count; i++)
@@ -206,10 +206,10 @@ efa_rdm_atomic_inject(struct fid_ep *ep,
 	peer = efa_rdm_ep_get_peer(efa_rdm_ep, dest_addr);
 	assert(peer);
 	if (peer->is_local && efa_rdm_ep->shm_ep) {
-		if (!(efa_rdm_ep_domain(efa_rdm_ep)->shm_info->domain_attr->mr_mode & FI_MR_VIRT_ADDR))
+		if (!(efa_rdm_ep->shm_info->domain_attr->mr_mode & FI_MR_VIRT_ADDR))
 			remote_addr = 0;
 
-		return fi_inject_atomic(efa_rdm_ep->shm_ep, buf, count, peer->shm_fiaddr,
+		return fi_inject_atomic(efa_rdm_ep->shm_ep, buf, count, peer->conn->shm_fi_addr,
 					remote_addr, remote_key, datatype, op);
 	}
 
@@ -263,7 +263,7 @@ efa_rdm_atomic_writemsg(struct fid_ep *ep,
 	assert(peer);
 	if (peer->is_local && efa_rdm_ep->shm_ep) {
 		efa_rdm_atomic_init_shm_msg(efa_rdm_ep, &shm_msg, msg, rma_iov, shm_desc);
-		shm_msg.addr = peer->shm_fiaddr;
+		shm_msg.addr = peer->conn->shm_fi_addr;
 		return fi_atomicmsg(efa_rdm_ep->shm_ep, &shm_msg, flags);
 	}
 
@@ -358,7 +358,7 @@ efa_rdm_atomic_readwritemsg(struct fid_ep *ep,
 	assert(peer);
 	if (peer->is_local && efa_rdm_ep->shm_ep) {
 		efa_rdm_atomic_init_shm_msg(efa_rdm_ep, &shm_msg, msg, shm_rma_iov, shm_desc);
-		shm_msg.addr = peer->shm_fiaddr;
+		shm_msg.addr = peer->conn->shm_fi_addr;
 		efa_rdm_get_desc_for_shm(result_count, result_desc, shm_res_desc);
 		return fi_fetch_atomicmsg(efa_rdm_ep->shm_ep, &shm_msg,
 					  resultv, shm_res_desc, result_count,
@@ -436,7 +436,7 @@ efa_rdm_atomic_compwritemsg(struct fid_ep *ep,
 	struct efa_rdm_atomic_ex atomic_ex = {
 		.resp_iov_count = result_count,
 		.comp_iov_count = compare_count,
-		.compare_desc = compare_desc,
+		
 	};
 	size_t datatype_size;
 	int err;
@@ -470,7 +470,7 @@ efa_rdm_atomic_compwritemsg(struct fid_ep *ep,
 	assert(peer);
 	if (peer->is_local && efa_rdm_ep->shm_ep) {
 		efa_rdm_atomic_init_shm_msg(efa_rdm_ep, &shm_msg, msg, shm_rma_iov, shm_desc);
-		shm_msg.addr = peer->shm_fiaddr;
+		shm_msg.addr = peer->conn->shm_fi_addr;
 		efa_rdm_get_desc_for_shm(result_count, result_desc, shm_res_desc);
 		efa_rdm_get_desc_for_shm(compare_count, compare_desc, shm_comp_desc);
 		return fi_compare_atomicmsg(efa_rdm_ep->shm_ep, &shm_msg,
@@ -481,6 +481,9 @@ efa_rdm_atomic_compwritemsg(struct fid_ep *ep,
 
 	ofi_ioc_to_iov(resultv, atomic_ex.resp_iov, result_count, datatype_size);
 	ofi_ioc_to_iov(comparev, atomic_ex.comp_iov, compare_count, datatype_size);
+	memset(atomic_ex.compare_desc, 0, sizeof(atomic_ex.compare_desc));
+	if (compare_desc)
+		memcpy(atomic_ex.compare_desc, compare_desc, sizeof(void*) * compare_count);
 	memcpy(atomic_ex.result_desc, result_desc, sizeof(void*) * result_count);
 
 	return efa_rdm_atomic_generic_efa(efa_rdm_ep, msg, peer, &atomic_ex, ofi_op_atomic_compare, flags);

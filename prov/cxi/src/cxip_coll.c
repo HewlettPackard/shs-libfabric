@@ -36,17 +36,24 @@
 #define	TRACE_DEBUG(fmt, ...)	CXIP_COLL_TRACE(CXIP_TRC_COLL_DEBUG, fmt, \
 					   ##__VA_ARGS__)
 
-// TODO regularize usage of these
 #define CXIP_DBG(...) _CXIP_DBG(FI_LOG_EP_CTRL, __VA_ARGS__)
 #define CXIP_INFO(...) _CXIP_INFO(FI_LOG_EP_CTRL, __VA_ARGS__)
 #define CXIP_WARN(...) _CXIP_WARN(FI_LOG_EP_CTRL, __VA_ARGS__)
 
-/* must all be 0 in production code */
+#if ENABLE_DEBUG
 #define __chk_pkts	1
 #define __trc_pkts	1
 #define __trc_data	1
+#else
+#define __chk_pkts	0
+#define __trc_pkts	0
+#define __trc_data	0
+#endif
 
 #define	MAGIC		0x677d
+#define	TIMER_UNSET	-1
+
+static inline void _set_arm_expires(struct cxip_coll_reduction *reduction);
 
 /****************************************************************************
  * Metrics for evaluating collectives
@@ -96,6 +103,31 @@ static inline void _measure_completions(int red_cnt, size_t total)
 		ofi_atomic_inc64(&_coll_metrics.red_count_unreduced);
 	else
 		ofi_atomic_inc64(&_coll_metrics.red_count_bad);
+}
+
+
+void dump_reduction_table(int red_id, struct cxip_coll_reduction *r)
+{
+#if ENABLE_DEBUG
+	int i;
+	char idx[4];
+
+	TRACE_DEBUG("+----------------------------------------------------------------+\n");
+	TRACE_DEBUG("| red_id | seqno | resno | in_use | pktsent | completed | red_rc |\n");
+
+	for (i = 0; i < CXIP_COLL_MAX_CONCUR; i++) {
+		if (i == red_id)
+			snprintf(idx, sizeof(idx), "*%d*", i);
+		else
+			snprintf(idx, sizeof(idx), " %d ", i);
+		TRACE_DEBUG(
+		"|----------------------------------------------------------------|\n");
+		TRACE_DEBUG("|   %s  | %5d | %5d | %6d | %7d | %9d | %6d |\n",
+		idx, r[i].seqno, r[i].resno, r[i].in_use, r[i].pktsent, r[i].completed,
+		r[i].red_rc);
+	}
+	TRACE_DEBUG("+----------------------------------------------------------------+\n");
+#endif
 }
 
 /****************************************************************************
@@ -192,6 +224,10 @@ struct red_pkt {
 	uint8_t data[32];		/* size 32b offset 17b */
 } __attribute__((__packed__));		/* size 49b */
 
+struct red_pkt_64 {
+	struct red_pkt pkt;
+} __attribute__((aligned(64)));
+
 /* Swap byte order in an object of any size. Works for even or odd counts */
 static inline
 void _swapbyteorder(void *ptr, int count)
@@ -207,7 +243,7 @@ void _swapbyteorder(void *ptr, int count)
 		p2--;
 	}
 }
-
+static int _leaf_rdma_get(struct cxip_coll_reduction *reduction);
 /**
  * Reformat the packet to accommodate network-ordering (big-endian) Rosetta
  * expectations, versus little-endian Intel processing.
@@ -322,7 +358,7 @@ void check_red_pkt(void)
 }
 
 __attribute__((unused)) static inline
-void _dump_red_pkt(struct red_pkt *pkt, char *dir)
+void _dump_red_pkt(struct red_pkt *pkt, char *dir, char *tag)
 {
 #if __trc_pkts
 	__attribute__((__unused__)) const uint64_t *data
@@ -331,21 +367,21 @@ void _dump_red_pkt(struct red_pkt *pkt, char *dir)
 
 	TRACE_PKT("---------------\n");
 	TRACE_PKT("Reduction packet (%s):\n", dir);
-	TRACE_PKT("  seqno        = %d\n", pkt->hdr.seqno);
-	TRACE_PKT("  retry        = %d\n", pkt->hdr.retry);
-	TRACE_PKT("  arm          = %d\n", pkt->hdr.arm);
-	TRACE_PKT("  op           = %d\n", pkt->hdr.op);
-	TRACE_PKT("  redcnt       = %d\n", pkt->hdr.redcnt);
-	TRACE_PKT("  resno        = %d\n", pkt->hdr.resno);
-	TRACE_PKT("  red_rc       = %d\n", pkt->hdr.red_rc);
-	TRACE_PKT("  repsum_m     = %d\n", pkt->hdr.repsum_m);
-	TRACE_PKT("  repsum_ovflid= %d\n", pkt->hdr.repsum_ovflid);
-	TRACE_PKT("  cookie --\n");
-	TRACE_PKT("   .mcast_id   = %08x\n", pkt->hdr.cookie.mcast_id);
-	TRACE_PKT("   .red_id     = %08x\n", pkt->hdr.cookie.red_id);
-	TRACE_PKT("   .magic      = %08x\n", pkt->hdr.cookie.magic);
+	TRACE_PKT("%s - seqno        = %d\n", tag, pkt->hdr.seqno);
+	TRACE_PKT("%s - retry        = %d\n", tag, pkt->hdr.retry);
+	TRACE_PKT("%s - arm          = %d\n", tag, pkt->hdr.arm);
+	TRACE_PKT("%s - op           = %d\n", tag, pkt->hdr.op);
+	TRACE_PKT("%s - redcnt       = %d\n", tag, pkt->hdr.redcnt);
+	TRACE_PKT("%s - resno        = %d\n", tag, pkt->hdr.resno);
+	TRACE_PKT("%s - red_rc       = %d\n", tag, pkt->hdr.red_rc);
+	TRACE_PKT("%s - repsum_m     = %d\n", tag, pkt->hdr.repsum_m);
+	TRACE_PKT("%s - repsum_ovflid= %d\n", tag, pkt->hdr.repsum_ovflid);
+	TRACE_PKT("%s - cookie --\n", tag);
+	TRACE_PKT("%s - .mcast_id   = %08x\n", tag, pkt->hdr.cookie.mcast_id);
+	TRACE_PKT("%s - .red_id     = %08x\n", tag, pkt->hdr.cookie.red_id);
+	TRACE_PKT("%s - .magic      = %08x\n", tag, pkt->hdr.cookie.magic);
 	for (i = 0; i < 4; i++)
-		TRACE_PKT("  ival[%d]     = %016lx\n", i, data[i]);
+		TRACE_PKT("%s - ival[%d]     = %016lx\n", tag, i, data[i]);
 	TRACE_PKT("---------------\n");
 #endif
 }
@@ -360,9 +396,11 @@ void _dump_red_pkt(struct red_pkt *pkt, char *dir)
 #define COLL_OPCODE_BIT_AND		0x01
 #define COLL_OPCODE_BIT_OR		0x02
 #define COLL_OPCODE_BIT_XOR		0x03
+#if 0 /* keep for future use */
 #define COLL_OPCODE_LOG_AND		0x04
 #define COLL_OPCODE_LOG_OR		0x05
 #define COLL_OPCODE_LOG_XOR		0x06
+#endif
 #define COLL_OPCODE_INT_MIN		0x10
 #define COLL_OPCODE_INT_MAX		0x11
 #define COLL_OPCODE_INT_MINMAXLOC	0x12
@@ -411,17 +449,21 @@ void cxip_coll_populate_opcodes(void)
 	_int8_16_32_op_to_opcode[FI_BOR] = COLL_OPCODE_BIT_OR;
 	_int8_16_32_op_to_opcode[FI_BAND] = COLL_OPCODE_BIT_AND;
 	_int8_16_32_op_to_opcode[FI_BXOR] = COLL_OPCODE_BIT_XOR;
+#if 0 /* keep for future use */	
 	_int8_16_32_op_to_opcode[FI_LOR] = COLL_OPCODE_LOG_OR;
 	_int8_16_32_op_to_opcode[FI_LAND] = COLL_OPCODE_LOG_AND;
 	_int8_16_32_op_to_opcode[FI_LXOR] = COLL_OPCODE_LOG_XOR;
+#endif	
 
 	/* operations supported by 32, 16, and 8 bit unsigned int operands */
 	_uint8_16_32_op_to_opcode[FI_BOR] = COLL_OPCODE_BIT_OR;
 	_uint8_16_32_op_to_opcode[FI_BAND] = COLL_OPCODE_BIT_AND;
 	_uint8_16_32_op_to_opcode[FI_BXOR] = COLL_OPCODE_BIT_XOR;
+#if 0 /* keep for future use */	
 	_uint8_16_32_op_to_opcode[FI_LOR] = COLL_OPCODE_LOG_OR;
 	_uint8_16_32_op_to_opcode[FI_LAND] = COLL_OPCODE_LOG_AND;
 	_uint8_16_32_op_to_opcode[FI_LXOR] = COLL_OPCODE_LOG_XOR;
+#endif
 
 	/* operations supported by 64 bit signed int operands */
 	_int64_op_to_opcode[FI_MIN] = COLL_OPCODE_INT_MIN;
@@ -433,9 +475,11 @@ void cxip_coll_populate_opcodes(void)
 	_uint64_op_to_opcode[FI_BOR] = COLL_OPCODE_BIT_OR;
 	_uint64_op_to_opcode[FI_BAND] = COLL_OPCODE_BIT_AND;
 	_uint64_op_to_opcode[FI_BXOR] = COLL_OPCODE_BIT_XOR;
+#if 0 /* keep for future use */	
 	_uint64_op_to_opcode[FI_LOR] = COLL_OPCODE_LOG_OR;
 	_uint64_op_to_opcode[FI_LAND] = COLL_OPCODE_LOG_AND;
 	_uint64_op_to_opcode[FI_LXOR] = COLL_OPCODE_LOG_XOR;
+#endif
 
 	/* operations supported by 64 bit double operands */
 	_flt_op_to_opcode[FI_MIN] = COLL_OPCODE_FLT_MINNUM;
@@ -448,9 +492,12 @@ void cxip_coll_populate_opcodes(void)
 	_cxi_op_to_redtype[COLL_OPCODE_BIT_OR] = REDTYPE_INT;
 	_cxi_op_to_redtype[COLL_OPCODE_BIT_AND] = REDTYPE_INT;
 	_cxi_op_to_redtype[COLL_OPCODE_BIT_XOR] = REDTYPE_INT;
+#if 0 /* keep for future use */	
 	_cxi_op_to_redtype[COLL_OPCODE_LOG_OR] = REDTYPE_INT;
 	_cxi_op_to_redtype[COLL_OPCODE_LOG_AND] = REDTYPE_INT;
 	_cxi_op_to_redtype[COLL_OPCODE_LOG_XOR] = REDTYPE_INT;
+#endif
+
 	_cxi_op_to_redtype[COLL_OPCODE_INT_MIN] = REDTYPE_INT;
 	_cxi_op_to_redtype[COLL_OPCODE_INT_MAX] = REDTYPE_INT;
 	_cxi_op_to_redtype[COLL_OPCODE_INT_SUM] = REDTYPE_INT;
@@ -694,7 +741,7 @@ static int _gen_tx_dfa(struct cxip_coll_reduction *reduction,
 		*is_mcast = false;
 		break;
 	default:
-		CXIP_WARN("unexpected comm_key type: %d\n",
+		CXIP_WARN("Unexpected comm_key type: %d\n",
 			  av_set_obj->comm_key.keytype);
 		return -FI_EINVAL;
 	}
@@ -723,7 +770,7 @@ int cxip_coll_send(struct cxip_coll_reduction *reduction,
 	int ret;
 
 	if (!buffer) {
-		CXIP_INFO("no buffer\n");
+		CXIP_WARN("No buffer\n");
 		return -FI_EINVAL;
 	}
 
@@ -732,11 +779,15 @@ int cxip_coll_send(struct cxip_coll_reduction *reduction,
 	cmdq = ep_obj->coll.tx_cmdq;
 
 	ret = _gen_tx_dfa(reduction, av_set_idx, &dfa, &index_ext, &is_mcast);
-	if (ret)
+	if (ret) {
+		CXIP_INFO("Failed to generate TX destination fabric address "
+			  "(ret=%d, av_set_idx=%d, red_id=%d)\n",
+			  ret, av_set_idx, reduction->red_id);
 		return ret;
+	}
 
 	if (cxip_evtq_saturated(ep_obj->coll.tx_evtq)) {
-		CXIP_DBG("TX HW EQ saturated\n");
+		CXIP_INFO("TX HW EQ saturated\n");
 		return -FI_EAGAIN;
 	}
 
@@ -960,6 +1011,8 @@ static void _coll_rx_progress(struct cxip_req *req,
 	struct cxip_coll_reduction *reduction;
 	struct red_pkt *pkt;
 
+	TRACE_DEBUG("_coll_rx_progress entry\n");
+
 	/* Raw packet of some sort received */
 	ofi_atomic_inc32(&req->coll.coll_pte->recv_cnt);
 
@@ -974,6 +1027,7 @@ static void _coll_rx_progress(struct cxip_req *req,
 	_swappkt(pkt);
 	if (pkt->hdr.cookie.magic != MAGIC)
 	{
+		TRACE_DEBUG("Bad coll MAGIC: %x\n", pkt->hdr.cookie.magic);
 		CXIP_INFO("Bad coll MAGIC: %x\n", pkt->hdr.cookie.magic);
 		_swappkt(pkt);
 		return;
@@ -988,6 +1042,7 @@ static void _coll_rx_progress(struct cxip_req *req,
 				pkt->hdr.cookie.mcast_id);
 	if (!mc_obj) {
 		TRACE_PKT("Bad coll lookup: %x\n", pkt->hdr.cookie.mcast_id);
+		CXIP_INFO("Bad coll lookup: %x\n", pkt->hdr.cookie.mcast_id);
 		return;
 	}
 	/* This is a valid reduction packet */
@@ -1005,16 +1060,19 @@ static void _coll_rx_progress(struct cxip_req *req,
 #endif
 	// A re-arm of an armed switch port drop this packet
 	if (pkt->hdr.seqno == CXIP_COLL_MOD_SEQNO) {
+		TRACE_PKT("pre-rearm pkt dropped\n");
 		CXIP_INFO("pre-rearm pkt dropped\n");
+		_set_arm_expires(reduction);
 		return;
 	}
 
 	TRACE_PKT("valid reduction packet from rank %u\n", pkt->sender_rank);
 
 	/* Progress the reduction */
-	_dump_red_pkt(pkt, "recv");
+	_dump_red_pkt(pkt, "recv", "");
 	ofi_atomic_inc32(&mc_obj->pkt_cnt);
 	_progress_coll(reduction, pkt);
+	TRACE_DEBUG("_coll_rx_progress return\n");
 }
 
 /* Event-handling callback for posted receive buffers */
@@ -1128,7 +1186,7 @@ static ssize_t _coll_append_buffer(struct cxip_coll_pte *coll_pte,
 	int ret;
 
 	if (buf->bufsiz && !buf->buffer) {
-		CXIP_INFO("no buffer\n");
+		CXIP_WARN("No buffer\n");
 		return -FI_EINVAL;
 	}
 
@@ -1142,6 +1200,9 @@ static ssize_t _coll_append_buffer(struct cxip_coll_pte *coll_pte,
 	 */
 	req = cxip_evtq_req_alloc(coll_pte->ep_obj->coll.rx_evtq, 1, buf);
 	if (!req) {
+		CXIP_WARN("Failed to allocate event queue request for "
+			  "collective buffer (bufsiz=%zu)\n",
+			  buf->bufsiz);
 		ret = -FI_ENOMEM;
 		goto recv_unmap;
 	}
@@ -1252,13 +1313,13 @@ static int _coll_add_buffers(struct cxip_coll_pte *coll_pte, size_t size,
 	int ret, i;
 
 	if (count < CXIP_COLL_MIN_RX_BUFS) {
-		CXIP_INFO("Buffer count %ld < minimum (%d)\n",
+		CXIP_WARN("Buffer count %ld < minimum (%d)\n",
 			  count, CXIP_COLL_MIN_RX_BUFS);
 		return -FI_EINVAL;
 	}
 
 	if (size < CXIP_COLL_MIN_RX_SIZE) {
-		CXIP_INFO("Buffer size %ld < minimum (%d)\n",
+		CXIP_WARN("Buffer size %ld < minimum (%d)\n",
 			  size, CXIP_COLL_MIN_RX_SIZE);
 		return -FI_EINVAL;
 	}
@@ -1267,14 +1328,21 @@ static int _coll_add_buffers(struct cxip_coll_pte *coll_pte, size_t size,
 	for (i = 0; i < count; i++) {
 		buf = calloc(1, sizeof(*buf) + size);
 		if (!buf) {
+			CXIP_WARN("Failed to allocate collective buffer %d of "
+				  "%zu (size=%zu)\n",
+				  i, count, sizeof(*buf) + size);
 			ret = -FI_ENOMEM;
 			goto out;
 		}
 		ret = cxip_ep_obj_map(coll_pte->ep_obj, (void *)buf->buffer,
 				      size, CXI_MAP_READ | CXI_MAP_WRITE, 0,
 				      &buf->cxi_md);
-		if (ret)
+		if (ret) {
+			CXIP_WARN("Failed to map collective buffer %d of %zu "
+				  "(ret=%d, size=%zu)\n",
+				  i, count, ret, size);
 			goto del_msg;
+		}
 		buf->bufsiz = size;
 		dlist_insert_tail(&buf->buf_entry, &coll_pte->buf_list);
 
@@ -1288,7 +1356,7 @@ static int _coll_add_buffers(struct cxip_coll_pte *coll_pte, size_t size,
 	/* Block until PTE completes buffer appends */
 	do {
 		sched_yield();
-		cxip_evtq_progress(coll_pte->ep_obj->coll.rx_evtq);
+		cxip_evtq_progress(coll_pte->ep_obj->coll.rx_evtq, true);
 	} while (ofi_atomic_get32(&coll_pte->buf_cnt) < count);
 	coll_pte->buf_low_water = (int)count;
 
@@ -1414,7 +1482,7 @@ void _dump_coll_data(const char *tag, const struct cxip_coll_data *coll_data)
 	TRACE_PKT("=== Coll data: %s\n", tag);
 	TRACE_PKT("  init    = %d\n", coll_data->initialized);
 	TRACE_PKT("  red_op  = %d\n", coll_data->red_op);
-	TRACE_PKT("  rec_rc  = %d\n", coll_data->red_rc);
+	TRACE_PKT("  red_rc  = %d\n", coll_data->red_rc);
 	TRACE_PKT("  red_cnt = %d\n", coll_data->red_cnt);
 	TRACE_PKT("  data:\n");
 	for (i = 0; i < 4; i++)
@@ -1478,6 +1546,7 @@ static void _init_coll_data(struct cxip_coll_data *coll_data, int opcode,
 		break;
 	}
 	coll_data->initialized = true;
+	TRACE_DEBUG("_init_coll_data: coll_data/accum initialized\n");
 }
 
 /* reduce data into accumulator - can be used on uninitialized accumulator */
@@ -1490,6 +1559,7 @@ static void _reduce(struct cxip_coll_data *accum,
 	TRACE_DEBUG("%s entry\n", __func__);
 	/* Initialize with new data */
 	if (!accum->initialized) {
+		TRACE_DEBUG("%s !accum->initialize\n", __func__);
 		memcpy(accum, coll_data, sizeof(*accum));
 		return;
 	}
@@ -1499,15 +1569,21 @@ static void _reduce(struct cxip_coll_data *accum,
 
 	/* Real reduction (send or receive) must count contributions.
 	 */
-	if (!pre_reduce)
+	if (!pre_reduce) {
+		TRACE_DEBUG("%s counting contribtions %d += %d\n",
+			__func__, accum->red_cnt, coll_data->red_cnt);
 		accum->red_cnt += coll_data->red_cnt;
+	}
 
 	/* ops must always match, else don't apply data */
 	if (accum->red_op != coll_data->red_op) {
+		TRACE_DEBUG("%s OP MISMATCH, %d vs %d\n",
+			__func__, accum->red_op, coll_data->red_op);
 		SET_RED_RC(accum->red_rc, CXIP_COLL_RC_OP_MISMATCH);
 		return;
 	}
 
+	TRACE_DEBUG("%s Performing reduction in sw\n", __func__);
 	/* Perform the reduction in software */
 	switch (accum->red_op) {
 	case COLL_OPCODE_BARRIER:
@@ -1527,6 +1603,7 @@ static void _reduce(struct cxip_coll_data *accum,
 			accum->intval.ival[i] ^= coll_data->intval.ival[i];
 		/* overflow not possible */
 		break;
+#if 0 /* keep for future use */	
 	case COLL_OPCODE_LOG_AND:
 		for (i = 0; i < 4; i++)
 			accum->intval.ival[i] =	(accum->intval.ival[i] &&
@@ -1547,6 +1624,7 @@ static void _reduce(struct cxip_coll_data *accum,
                                                   coll_data->intval.ival[i]));
 		/* overflow not possible */
 		break;
+#endif		
 	case COLL_OPCODE_INT_MIN:
 		for (i = 0; i < 4; i++)
 			if (accum->intval.ival[i] > coll_data->intval.ival[i])
@@ -1784,10 +1862,14 @@ ssize_t _send_pkt(struct cxip_coll_reduction *reduction)
 /* prepare and issue the reduction packet */
 int cxip_coll_send_red_pkt(struct cxip_coll_reduction *reduction,
 			   const struct cxip_coll_data *coll_data,
-			   bool arm, bool retry)
+			   bool arm, bool retry, bool root_result_pkt)
 {
 	struct red_pkt *pkt;
 	int ret = FI_SUCCESS;
+	struct cxip_coll_mc *mc_obj = reduction->mc_obj;
+	struct red_pkt_64 *rdma_get_pkt_p;
+	uint8_t *copy_pntr;
+	int red_id = reduction->red_id;
 
 	pkt = (struct red_pkt *)reduction->tx_msg;
 
@@ -1819,14 +1901,30 @@ int cxip_coll_send_red_pkt(struct cxip_coll_reduction *reduction,
 		pkt->hdr.repsum_ovflid = 0;
 		memset(pkt->data, 0, CXIP_COLL_MAX_DATA_SIZE);
 	}
-
+	if(root_result_pkt) {
+		if(mc_obj->root_rdma_get_data_p) {
+			rdma_get_pkt_p = ((struct red_pkt_64 *)mc_obj->root_rdma_get_data_p);
+			/* index into the base buffer */
+			copy_pntr = (uint8_t *)&rdma_get_pkt_p[red_id].pkt;
+			TRACE_JOIN("%s: rdma copy pkt red_id %d op %d resno %d seqno %d\n",
+				   __func__, red_id, pkt->hdr.op, pkt->hdr.resno,
+				   pkt->hdr.seqno);
+			/* save a copy for the leaf in the rdma_get buffer */
+			memcpy(copy_pntr,pkt,sizeof(struct red_pkt));
+			_dump_red_pkt(pkt, "root rdma copy packet", "rdma");
+		} else
+			TRACE_JOIN("%s: root NULL rdma get data pointer!\n",
+				__func__);
+	}
 	// A re-arm of an armed switch port send clearing packet
 	if (arm && retry) {
 		int save_seqno = pkt->hdr.seqno;
 
 		// A re-arm of an armed switch port skip illegal value
 		pkt->hdr.seqno = CXIP_COLL_MOD_SEQNO;
-		_dump_red_pkt(pkt, "retry");
+		_dump_red_pkt(pkt, "retry", "");
+		TRACE_DEBUG("arm/retry send op = %d seqno = %d red_id = %d\n",
+			pkt->hdr.op, reduction->seqno, reduction->red_id);
 		_swappkt(pkt);
 		do {
 			/* -FI_EAGAIN means HW queue is full, self-clears */
@@ -1837,7 +1935,9 @@ int cxip_coll_send_red_pkt(struct cxip_coll_reduction *reduction,
 	}
 
 	if (ret == FI_SUCCESS) {
-		_dump_red_pkt(pkt, "send");
+		_dump_red_pkt(pkt, "send", "");
+		TRACE_DEBUG("normal send op = %d seqno = %d red_id = %d\n",
+			pkt->hdr.op, reduction->seqno, reduction->red_id);
 		_swappkt(pkt);
 		do {
 			/* -FI_EAGAIN means HW queue is full, self-clears */
@@ -1847,8 +1947,10 @@ int cxip_coll_send_red_pkt(struct cxip_coll_reduction *reduction,
 	}
 
 	/* any other error is a serious config/hardware issue */
-	if (ret)
+	if (ret) {
+		TRACE_DEBUG("Fatal send error = %d\n", ret);
 		CXIP_WARN("Fatal send error = %d\n", ret);
+	}
 
 	return ret;
 }
@@ -1859,10 +1961,14 @@ static void _post_coll_complete(struct cxip_coll_reduction *reduction)
 	struct cxip_req *req;
 	int ret, prov;
 
+	TRACE_DEBUG("%s Entering\n", __func__);
+
 	/* Indicates collective completion by writing to the endpoint TX CQ */
 	req = reduction->op_inject_req;
-	if (!req)
+	if (!req) {
+		TRACE_DEBUG("!req\n");
 		return;
+	}
 
 	/* convert Rosetta return codes to CXIP return codes */
 	if (reduction->accum.red_rc == CXIP_COLL_RC_SUCCESS ||
@@ -1871,13 +1977,13 @@ static void _post_coll_complete(struct cxip_coll_reduction *reduction)
 	    reduction->accum.red_rc == CXIP_COLL_RC_FLT_OVERFLOW) {
 		switch (reduction->accum.red_rc) {
 		case CXIP_COLL_RC_FLT_INEXACT:
-			CXIP_WARN("coll reduce FLT result was rounded\n");
+			CXIP_WARN("Coll reduce FLT result was rounded\n");
 			break;
 		case CXIP_COLL_RC_FLT_INVALID:
-			CXIP_WARN("coll reduce FLT invalid\n");
+			CXIP_WARN("Coll reduce FLT invalid\n");
 			break;
 		case CXIP_COLL_RC_FLT_OVERFLOW:
-			CXIP_WARN("coll reduce FLT overflow\n");
+			CXIP_WARN("Coll reduce FLT overflow\n");
 			break;
 		default:
 			break;
@@ -1894,6 +2000,12 @@ static void _post_coll_complete(struct cxip_coll_reduction *reduction)
 		case CXIP_COLL_RC_OP_MISMATCH:
 			prov = FI_CXI_ERRNO_RED_OP_MISMATCH;
 			break;
+		case CXIP_COLL_RC_RDMA_FAILURE:
+			prov = FI_CXI_COLL_RC_RDMA_FAILURE;
+			break;
+		case CXIP_COLL_RC_RDMA_DATA_FAILURE:
+			prov = FI_CXI_COLL_RC_RDMA_DATA_FAILURE;
+			break;
 		default:
 			prov = FI_CXI_ERRNO_RED_OTHER;
 			break;
@@ -1901,21 +2013,28 @@ static void _post_coll_complete(struct cxip_coll_reduction *reduction)
 		ret = cxip_cq_req_error(req, 0, -FI_EOTHER, prov,
 					NULL, 0, FI_ADDR_UNSPEC);
 	}
-	if (ret)
+	if (ret) {
+		TRACE_DEBUG("Attempt to post completion failed %s\n",
+			   fi_strerror(-ret));
 		CXIP_FATAL("Attempt to post completion failed %s\n",
 			   fi_strerror(-ret));
+	}
 
 	/* req structure no longer needed */
 	cxip_evtq_req_free(req);
 
 	/* restore reduction object to usable state */
-	reduction->accum.initialized = false;
+	dlist_init(&reduction->tmout_link);
+	memset(&reduction->backup, 0, sizeof(reduction->backup));
+	memset(&reduction->accum, 0, sizeof(reduction->accum));
 	reduction->in_use = false;
 	reduction->completed = false;
 	reduction->pktsent = false;
-	reduction->accum.initialized = false;
-	reduction->accum.red_rc = CXIP_COLL_RC_SUCCESS;
 	reduction->op_inject_req = NULL;
+	reduction->rdma_get_sent = false;
+	reduction->rdma_get_completed = false;
+	reduction->leaf_contrib_start_us = 0;
+	reduction->rdma_get_cb_rc = 0;
 }
 
 /* unpack reduction data from a reduction packet */
@@ -2025,9 +2144,8 @@ bool _tsexp(struct timespec *ts)
 	struct timespec tsnow;
 
 	_tsget(&tsnow);
-	TRACE_JOIN("now=%ld.%ld exp=%ld.%ld\n",
-		   tsnow.tv_sec, tsnow.tv_nsec,
-		   ts->tv_sec, ts->tv_nsec);
+	if (ts->tv_sec == TIMER_UNSET)
+		return false;
 	if (tsnow.tv_sec < ts->tv_sec)
 		return false;
 	if (tsnow.tv_sec > ts->tv_sec)
@@ -2035,70 +2153,116 @@ bool _tsexp(struct timespec *ts)
 	return (tsnow.tv_nsec >= ts->tv_nsec);
 }
 
-/* test for {0,0} timestamp */
+/* Clear reduction expiration time */
 static inline
-bool _tsnul(struct timespec *ts)
+void _ts_red_clr(struct cxip_coll_reduction *reduction)
 {
-	return !(ts->tv_sec | ts->tv_nsec);
+	TRACE_DEBUG("clearing timer on red_id %d, seqno %d\n",
+		    reduction->red_id, reduction->seqno);
+	dlist_remove(&reduction->tmout_link);
+	reduction->tv_expires.tv_sec = TIMER_UNSET;
+	reduction->tv_expires.tv_nsec = TIMER_UNSET;
 }
 
 /* Set reduction expiration time (future) */
 static inline
-void _ts_red_set(struct cxip_coll_reduction *reduction)
+void _ts_red_set(struct cxip_coll_reduction *reduction,
+		 struct timespec *expires, struct dlist_entry *retry_list)
 {
-	_tsset(&reduction->tv_expires, &reduction->mc_obj->timeout);
+	TRACE_DEBUG("setting timer on red_id %d, seqno %d\n",
+		    reduction->red_id, reduction->seqno);
+	_tsset(&reduction->tv_expires, expires);
+	dlist_insert_tail(&reduction->tmout_link, retry_list);
 }
 
-/* Used to prevent first-use incast */
 static inline
-bool _is_red_first_time(struct cxip_coll_reduction *reduction)
-{
-	return _tsnul(&reduction->tv_expires);
+void _set_arm_expires(struct cxip_coll_reduction *reduction) {
+	struct timespec arm_expires;
+
+	arm_expires.tv_sec = cxip_env.coll_timeout_usec / 1000000;
+	arm_expires.tv_nsec = cxip_env.coll_timeout_usec % 1000000;
+
+	/* Re-arm half-way through the timeout period to ensure we
+	 * re-arm before it expires. */
+	arm_expires.tv_sec /= 2;
+	arm_expires.tv_nsec /= 2;
+
+	/* get current time */
+	_tsget(&reduction->arm_expires);
+
+	TRACE_DEBUG("arm_expires: %ld.%ld\n", arm_expires.tv_sec,
+		    arm_expires.tv_nsec);
+	_tsset(&reduction->arm_expires, &arm_expires);
 }
 
-/* Used to reduce incast congestion during run */
+/* Used to prevent incast storm */
 static inline
-bool _is_red_timed_out(struct cxip_coll_reduction *reduction)
+bool _need_to_arm(struct cxip_coll_reduction *reduction)
+{
+	if (_tsexp(&reduction->arm_expires)) {
+		_set_arm_expires(reduction);
+		return true;
+	}
+	return false;
+}
+
+/* Used to reduce incast congestion (_need_to_arm) and
+ * detect the need to retry */
+static inline
+bool _is_red_timed_out(struct cxip_coll_reduction *reduction, struct red_pkt *pkt)
 {
 	if (reduction->mc_obj->retry_disable)
 		return false;
-	if (_is_red_first_time(reduction)) {
-		TRACE_DEBUG("=== root redid=%d first time, retry\n",
+	if (!pkt && _need_to_arm(reduction)) {
+		TRACE_DEBUG("=== root red_id=%d needs (re)arm\n",
 			    reduction->red_id);
 		return true;
 	}
 
-	/* disable timeout logic for now */
-	return false;
+	return _tsexp(&reduction->tv_expires);
 }
-
-/* Root node state machine progress.
- * !pkt means this is progressing from injection call (e.g. fi_reduce())
- *  pkt means this is progressing from event callback (leaf packet)
+/* Root node state machine progress
+ * - force_root_retry indicates retry from cxip_coll_progress_cq_poll(),
+ *   pkt == NULL
+ * - !pkt means this is progressing from injection call (e.g. fi_reduce())
+ *   or from cxip_coll_progress_cq_poll()
+ * - pkt means this is progressing from event callback _coll_recv_cb()
+ *   (incoming leaf packet)
  */
 static void _progress_root(struct cxip_coll_reduction *reduction,
-			   struct red_pkt *pkt)
+			   struct red_pkt *pkt, bool force_root_retry)
 {
 	struct cxip_coll_mc *mc_obj = reduction->mc_obj;
-	struct cxip_coll_data coll_data;
+	struct cxip_coll_data coll_data = {0} ;
 	ssize_t ret;
+	bool timed_out;
 
 	/* State machine disabled for testing */
 	if (reduction->coll_state != CXIP_COLL_STATE_READY)
 		return;
 
-	/* Injection or packet arrival after root timeout initiates a retry */
-	if (_is_red_timed_out(reduction)) {
+	/* Retry preempts partial collective (pkt == NULL) */
+	timed_out = _is_red_timed_out(reduction, pkt);
+	if (force_root_retry || timed_out) {
 		/* reset reduction for retry send */
 		reduction->seqno = mc_obj->seqno;
-		TRACE_PKT("root T/O reduction seqno = %d\n", reduction->seqno);
 		INCMOD(mc_obj->seqno, CXIP_COLL_MOD_SEQNO);
-		TRACE_PKT("root T/O mc_obj seqno = %d\n", mc_obj->seqno);
+		TRACE_PKT("progress_root (retry: %d, timed out: %d) "
+			  "seqno %d red_id %d\n",
+			  force_root_retry, timed_out, reduction->seqno,
+			  reduction->red_id);
 		ofi_atomic_inc32(&mc_obj->tmout_cnt);
 
+		/* restore data for retry */
+		memcpy(&reduction->accum, &reduction->backup,
+		       sizeof(reduction->backup));
+
+		_ts_red_clr(reduction);
+		_ts_red_set(reduction, &reduction->mc_obj->rootexpires,
+			    &mc_obj->ep_obj->coll.root_retry_list);
+
 		ret = cxip_coll_send_red_pkt(reduction, NULL,
-					     !mc_obj->arm_disable, true);
-		_ts_red_set(reduction);
+					     !mc_obj->arm_disable, true, false);
 		if (ret) {
 			SET_RED_RC(reduction->accum.red_rc,
 				   CXIP_COLL_RC_TX_FAILURE);
@@ -2112,11 +2276,14 @@ static void _progress_root(struct cxip_coll_reduction *reduction,
 	if (pkt) {
 		/* Drop out-of-date packets */
 		if (pkt->hdr.resno != reduction->seqno) {
-			TRACE_DEBUG("bad seqno, exp=%d saw=%d\n",
-				reduction->seqno, pkt->hdr.resno);
+			TRACE_DEBUG("bad seqno, exp=%d saw=%d red_id %d\n",
+				reduction->seqno, pkt->hdr.resno,
+				reduction->red_id);
 			ofi_atomic_inc32(&mc_obj->seq_err_cnt);
 			return;
 		}
+
+		reduction->resno = pkt->hdr.resno;
 
 		/* capture packet information */
 		_unpack_red_data(&coll_data, pkt);
@@ -2128,6 +2295,12 @@ static void _progress_root(struct cxip_coll_reduction *reduction,
 		/* perform the reduction */
 		_reduce(&reduction->accum, &coll_data, false);
 		_dump_coll_data("after leaf contrib to root", &reduction->accum);
+	} else {
+		/* After the first 8 sends, we let the leaves lead, but we still need
+		 * to set the timer in case we don't hear from all of them.
+		 */
+		_ts_red_set(reduction, &reduction->mc_obj->rootexpires,
+			    &mc_obj->ep_obj->coll.root_retry_list);
 	}
 
 	/* check for reduction complete */
@@ -2143,17 +2316,27 @@ static void _progress_root(struct cxip_coll_reduction *reduction,
 		reduction->seqno = mc_obj->seqno;
 		INCMOD(mc_obj->seqno, CXIP_COLL_MOD_SEQNO);
 		reduction->completed = true;
+		_ts_red_clr(reduction);
 
-		TRACE_DEBUG("root send seqno = %d\n", reduction->seqno);
+		TRACE_DEBUG("root final result, mc %x seqn %d resno %d red_id %d op %d\n",
+			mc_obj->mcast_addr, reduction->seqno, reduction->resno,
+			reduction->red_id, reduction->accum.red_op);
+
 		ret = cxip_coll_send_red_pkt(reduction, &reduction->accum,
-					     !mc_obj->arm_disable, false);
-		_ts_red_set(reduction);
+					     !mc_obj->arm_disable, false, true);
+
+		_set_arm_expires(reduction);
+
 		if (ret)
 			SET_RED_RC(reduction->accum.red_rc,
 				   CXIP_COLL_RC_TX_FAILURE);
+
 	} else {
-		TRACE_DEBUG("incomplete reduction (recvd: %d, expected: %lu)\n",
-			    reduction->accum.red_cnt, mc_obj->av_set_obj->fi_addr_cnt);
+		if (pkt) {
+			TRACE_DEBUG("incomplete reduction (recvd: %d, expected: %lu)\n",
+				reduction->accum.red_cnt, mc_obj->av_set_obj->fi_addr_cnt);
+			assert(reduction->accum.red_cnt <= mc_obj->av_set_obj->fi_addr_cnt);
+		}
 	}
 
 post_complete:
@@ -2161,7 +2344,9 @@ post_complete:
 	reduction = &mc_obj->reduction[mc_obj->tail_red_id];
 	while (reduction->in_use && reduction->completed) {
 		/* Reduction completed on root */
+		TRACE_DEBUG("posting root completion\n");
 		_post_coll_complete(reduction);
+		dump_reduction_table(mc_obj->tail_red_id,  &mc_obj->reduction[0]);
 
 		/* Advance to the next reduction */
 		INCMOD(mc_obj->tail_red_id, mc_obj->max_red_id);
@@ -2169,55 +2354,209 @@ post_complete:
 	}
 }
 
+static inline
+void _clear_leaf_rget_state(struct cxip_coll_reduction *reduction) {
+
+	reduction->rdma_get_sent = false;
+	reduction->rdma_get_completed = false;
+	reduction->leaf_contrib_start_us = 0;
+	reduction->rdma_get_cb_rc = 0;
+
+} 
 /* Leaf node state machine progress.
  * !pkt means this is progressing from injection call (e.g. fi_reduce())
- *  pkt means this is progressing from event callback (receipt of packet)
+ * pkt means this is progressing from event callback (receipt of packet)
+ * force_rdma_read triggered from cxip_coll_progress_cq_poll
  */
 static void _progress_leaf(struct cxip_coll_reduction *reduction,
-			   struct red_pkt *pkt)
+			   struct red_pkt *pkt, bool force_rdma_read)
 {
 	struct cxip_coll_mc *mc_obj = reduction->mc_obj;
-	struct cxip_coll_data coll_data;
-	int ret;
+	struct cxip_coll_data coll_data = {0};
+	int ret, red_id, rdma_read_stat;
+	struct red_pkt_64 *get_pkt_64_p = NULL;
+	uint64_t leaf_contrib_ts_delta __attribute__((unused));
+	struct red_pkt *root_pkt = NULL;
 
 	/* state machine disabled for testing */
 	if (reduction->coll_state != CXIP_COLL_STATE_READY)
 		return;
 
+	if (force_rdma_read) {
+
+		leaf_contrib_ts_delta = (ofi_gettime_us() - reduction->leaf_contrib_start_us);
+		TRACE_DEBUG("%s force_rdma_read set red_id %d red_op %d ts_delta %016lx\n",
+			__func__, reduction->red_id, reduction->accum.red_op, leaf_contrib_ts_delta);
+		if (!reduction->rdma_get_sent) {
+			TRACE_DEBUG("%s starting rdma get red_id %d red_op %d ts %016lx\n",
+				__func__, reduction->red_id, reduction->accum.red_op, ofi_gettime_us());
+			TRACE_DEBUG("%s rdma get mc_addr: %x\n", __func__, mc_obj->mcast_addr);
+			TRACE_DEBUG("%s rdma get ts delta: %016lx\n", __func__, leaf_contrib_ts_delta);
+			rdma_read_stat = _leaf_rdma_get(reduction);
+			if (rdma_read_stat) {
+				TRACE_DEBUG("%s leaf rdma get start failed! %d red_id %d red_op %d ts %016lx\n",
+					__func__, rdma_read_stat, reduction->red_id, reduction->accum.red_op,
+					ofi_gettime_us());
+				SET_RED_RC(reduction->accum.red_rc, CXIP_COLL_RC_RDMA_FAILURE);
+				reduction->completed = true;
+				/* stop progress call from cxip_coll_progress_cq_poll,
+				 * and prevent leaf hangs
+				 */
+				_ts_red_clr(reduction);
+				goto post_complete;
+			}
+		}
+		if (reduction->rdma_get_completed) {
+			if (reduction->rdma_get_cb_rc == C_RC_OK) {
+				TRACE_DEBUG("%s leaf_rdma_get completed! red_id %d red_op %d seqn %d\n",
+					__func__, reduction->red_id, reduction->accum.red_op, reduction->seqno);
+				/* unpack the the rdma read buffer and go to post_complete */
+				red_id = reduction->red_id;
+				get_pkt_64_p = (struct red_pkt_64 *)mc_obj->leaf_rdma_get_data_p;
+				root_pkt = (struct red_pkt *)&get_pkt_64_p[red_id].pkt;
+				TRACE_DEBUG("%s leaf_rdma_get pkt red_id %d red_op %d seqn %d\n",
+					__func__, root_pkt->hdr.cookie.red_id, root_pkt->hdr.op, root_pkt->hdr.seqno);
+
+				/* verify packet and make sure it is what we expected */
+				if (root_pkt->hdr.resno != reduction->resno) {
+					/* dont touch user data, make sure we have the correct resno
+					 * log event only
+					 */
+					TRACE_DEBUG("%s pkt seqn err! red_id %d red_op %d resno %d seqn %d, expected resno %d\n",
+						__func__, root_pkt->hdr.cookie.red_id, root_pkt->hdr.op,
+						root_pkt->hdr.resno, root_pkt->hdr.seqno, reduction->resno);
+					_clear_leaf_rget_state(reduction);
+					_ts_red_clr(reduction);
+					return;
+				}
+				TRACE_DEBUG("%s leaf_rdma_get received expected resno %d seqno %d\n",
+					    __func__, root_pkt->hdr.resno, root_pkt->hdr.seqno);
+
+				if (reduction->accum.red_op != root_pkt->hdr.op) {
+					/* dont touch user data, make sure we have the correct opcode
+					 * log event only
+					 */
+					TRACE_DEBUG("%s leaf_rdma_get pkt opcode err! red_op %d pkt_op %d pkt_red_id %d\n",
+						__func__, reduction->accum.red_op, root_pkt->hdr.op,
+						root_pkt->hdr.cookie.red_id);
+					_clear_leaf_rget_state(reduction);
+					_ts_red_clr(reduction);
+					return;
+				}
+				if (mc_obj->mcast_addr != root_pkt->hdr.cookie.mcast_id) {
+					/* dont touch user data, make sure we have the correct mcast addr
+					 * log event only
+					 */
+					TRACE_DEBUG("%s leaf_rdma_get pkt mcast err! red_id %d red_op %d emcast %x mcast %x\n",
+						__func__, root_pkt->hdr.cookie.red_id, root_pkt->hdr.op,
+						mc_obj->mcast_addr, root_pkt->hdr.cookie.mcast_id);
+					_clear_leaf_rget_state(reduction);	
+					_ts_red_clr(reduction);
+					return;
+				}
+				/* should not happen, we only save final packet at the root */
+				if (root_pkt->hdr.retry) {
+					/* dont touch user data, log event only */
+					TRACE_DEBUG("%s leaf_rdma_get pkt retry! red_op %d pkt_op %d pkt_red_id %d\n",
+						__func__, reduction->accum.red_op, root_pkt->hdr.op,
+						root_pkt->hdr.cookie.red_id);
+					_clear_leaf_rget_state(reduction);	
+					_ts_red_clr(reduction);
+					return;
+				}
+				if (root_pkt->hdr.cookie.red_id != red_id) {
+					/* dont touch user data, fatal event that indicates corruption */
+					TRACE_DEBUG("%s leaf_rdma_get pkt bad red_id! red_op %d p_op %d p_red_id %d red_id %d\n",
+						__func__, reduction->accum.red_op, root_pkt->hdr.op,
+						root_pkt->hdr.cookie.red_id, red_id);
+					SET_RED_RC(reduction->accum.red_rc, CXIP_COLL_RC_RDMA_DATA_FAILURE);
+					reduction->completed = true;
+					/* stop progress call from cxip_coll_progress_cq_poll, and prevent leaf hangs */
+					_ts_red_clr(reduction);
+					goto post_complete;
+				}
+				/* Capture final reduction data in user-pointer */
+				SET_RED_RC(reduction->accum.red_rc, root_pkt->hdr.red_rc);
+				if (reduction->op_rslt_data) {
+					_unpack_red_data(&coll_data, root_pkt);
+					memcpy(reduction->op_rslt_data,&coll_data.databuf,reduction->op_data_bytcnt);
+				}
+				reduction->completed = true;
+				/* stop progress call from cxip_coll_progress_cq_poll,
+				 * and prevent leaf hangs
+				 */
+				_ts_red_clr(reduction);
+				TRACE_DEBUG("%s leaf ok after rdma! red_id %d red_op %d seqn %d ts %016lx\n",
+					__func__, red_id, reduction->accum.red_op, reduction->seqno, ofi_gettime_us());
+				goto post_complete;
+			} else {
+				TRACE_DEBUG("%s leaf rdma bad status %d red_id %d red_op %d seqn %d ts %016lx\n",
+					__func__, reduction->rdma_get_cb_rc, reduction->red_id,
+					reduction->accum.red_op, reduction->seqno, ofi_gettime_us());
+				/* read attempt failed, we are done. Should we attempt retries? */
+				SET_RED_RC(reduction->accum.red_rc, CXIP_COLL_RC_RDMA_FAILURE);
+				reduction->completed = true;
+				/* stop progress call from cxip_coll_progress_cq_poll, and prevent leaf hangs */
+				_ts_red_clr(reduction);
+				goto post_complete;
+			}
+		}
+		/* continue to progress the timer, once the read completes good or bad the timer is cleared */
+		return;
+	}
+
 	/* if reduction packet, reset timer, seqno, honor retry */
 	if (pkt) {
-		TRACE_DEBUG("%s: packet seen\n", __func__);
-		_ts_red_set(reduction);
+		TRACE_PKT("_progress_leaf: packet seen, seqno %d\n",
+			  pkt->hdr.seqno);
 		reduction->seqno = pkt->hdr.seqno;
 		reduction->resno = pkt->hdr.seqno;
-		if (pkt->hdr.retry)
+		if (pkt->hdr.retry) {
+			TRACE_PKT("%s leaf honoring retry op %d red_id %d seqno %d\n",
+				__func__, reduction->accum.red_op, reduction->red_id,
+				reduction->seqno);
 			reduction->pktsent = false;
-		TRACE_PKT("leaf rcv seqno = %d\n", reduction->seqno);
+		}
 	}
 
 	/* leaves lead with sending a packet */
 	if (!reduction->pktsent) {
-		/* Avoid first-use incast, retry guaranteed */
-		if (_is_red_first_time(reduction)) {
-			TRACE_DEBUG("=== leaf redid=%d first time, wait\n",
-				    reduction->red_id);
+		_ts_red_clr(reduction);
+		if (!pkt && _need_to_arm(reduction)) {
+			TRACE_DEBUG("%s leaf waiting for arm op %d red_id %d seqno %d\n",
+				__func__, reduction->accum.red_op, reduction->red_id, reduction->seqno);
 			return;
 		}
 
 		/* Don't send if nothing to send yet */
-		if (!reduction->accum.initialized)
+		if (!reduction->accum.initialized) {
+			TRACE_DEBUG("%s accum not initialized red_id %d seqno %d\n",
+				__func__, reduction->red_id, reduction->seqno);
 			return;
+		}
+
+		reduction->leaf_contrib_start_us = ofi_gettime_us();
+		_ts_red_set(reduction, &reduction->mc_obj->leafexpires,
+		    &mc_obj->ep_obj->coll.leaf_rdma_get_list);
+
+		TRACE_PKT("%s leaf sending op %d red_id %d seqno %d\n",
+			  __func__, reduction->accum.red_op, reduction->red_id, reduction->seqno);
 
 		/* Send leaf data */
 		ret = cxip_coll_send_red_pkt(reduction, &reduction->accum,
-					     false, false);
+					     false, false, false);
 		if (ret) {
 			SET_RED_RC(reduction->accum.red_rc,
 				   CXIP_COLL_RC_TX_FAILURE);
 			reduction->completed = true;
+			TRACE_DEBUG("%s cxip_coll_send_red_pkt failure %d\n",__func__, ret);
 			goto post_complete;
 		}
 		reduction->pktsent = true;
+		TRACE_DEBUG("%s LEAF sent its contribution op %d red_id %d seqno %d, ts %016lx\n",
+			__func__, reduction->accum.red_op, reduction->red_id,
+			reduction->seqno, ofi_gettime_us());
+		
 	}
 
 	/* If no incoming reduction packet, we are done */
@@ -2236,13 +2575,16 @@ static void _progress_leaf(struct cxip_coll_reduction *reduction,
 			&coll_data.databuf,
 			reduction->op_data_bytcnt);
 	}
-	/* Reduction completed on leaf */
+	TRACE_DEBUG("%s leaf reduction completed normally! red_id %d red_op %d seqno %d ts %016lx\n",
+		__func__, reduction->red_id, reduction->accum.red_op, reduction->seqno, ofi_gettime_us());
+	_ts_red_clr(reduction);
 	reduction->completed = true;
-
 post_complete:
 	/* Post completions in injection order */
 	reduction = &mc_obj->reduction[mc_obj->tail_red_id];
 	while (reduction->in_use && reduction->completed) {
+		TRACE_DEBUG("%s posting leaf completion\n", __func__);
+		dump_reduction_table(mc_obj->tail_red_id,  &mc_obj->reduction[0]);
 		_post_coll_complete(reduction);
 		INCMOD(mc_obj->tail_red_id, mc_obj->max_red_id);
 		reduction = &mc_obj->reduction[mc_obj->tail_red_id];
@@ -2255,9 +2597,41 @@ static void _progress_coll(struct cxip_coll_reduction *reduction,
 			   struct red_pkt *pkt)
 {
 	if (is_hw_root(reduction->mc_obj))
-		_progress_root(reduction, pkt);
+		_progress_root(reduction, pkt, false);
 	else
-		_progress_leaf(reduction, pkt);
+		_progress_leaf(reduction, pkt, false);
+}
+
+/* Root or leaf CQ poll timeout progress state machine.
+ * Called on every CQ poll, so must be fast.
+ * Must be exported, call is in cxip_txc_hpc_progress().
+ */
+void cxip_coll_progress_cq_poll(struct cxip_ep_obj *ep_obj)
+{
+	struct cxip_coll_reduction *reduction;
+
+	if (!ep_obj->coll.enabled)
+		return;
+
+	reduction = dlist_first_entry_or_null(&ep_obj->coll.root_retry_list,
+					      struct cxip_coll_reduction,
+					      tmout_link);
+	if (reduction && _tsexp(&reduction->tv_expires)) {
+		TRACE_DEBUG("progressing root red_id %d seqno %d resno %d from hpc_progress\n",
+			    reduction->red_id, reduction->seqno, reduction->resno);
+		_progress_root(reduction, NULL, true);
+	}
+	reduction = dlist_first_entry_or_null(&ep_obj->coll.leaf_rdma_get_list,
+					      struct cxip_coll_reduction,
+					      tmout_link);
+	if (reduction && _tsexp(&reduction->tv_expires)) {
+
+		TRACE_DEBUG("progressing leaf reduction addr %p\n",reduction);
+		TRACE_DEBUG("progressing leaf red_id %d seqno %d resno %d from hpc_progress\n",
+			    reduction->red_id, reduction->seqno, reduction->resno);
+		_progress_leaf(reduction, NULL, true);
+	}
+
 }
 
 /* Debugging only */
@@ -2273,7 +2647,7 @@ _cxip_coll_prereduce(int cxi_opcode, const void *op_send_data,
 		     void *accum, size_t sendcnt, uint64_t flags)
 {
 	const struct cxip_coll_data *coll_data_ptr;
-	struct cxip_coll_data coll_data;
+	struct cxip_coll_data coll_data = {0};
 
 	/* Convert user data to local coll_data structure */
 	if (flags & FI_CXI_PRE_REDUCED) {
@@ -2311,7 +2685,7 @@ _cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 		  size_t bytcnt, uint64_t flags, void *context)
 {
 	struct cxip_coll_reduction *reduction;
-	struct cxip_coll_data coll_data;
+	struct cxip_coll_data coll_data = {0};
 	struct cxip_req *req;
 	int ret;
 
@@ -2319,12 +2693,17 @@ _cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 	TRACE_DEBUG("%s bytecnt=%ld\n", __func__, bytcnt);
 	ofi_genlock_lock(&mc_obj->ep_obj->lock);
 
+	TRACE_DEBUG("attempting to use red_id %d\n", mc_obj->next_red_id);
+
 	/* must observe strict round-robin across all nodes */
 	reduction = &mc_obj->reduction[mc_obj->next_red_id];
 	if (reduction->in_use) {
+		dump_reduction_table(mc_obj->next_red_id,  &mc_obj->reduction[0]);
 		ret = -FI_EAGAIN;
 		goto quit;
 	}
+
+	TRACE_DEBUG("using red_id %d\n", mc_obj->next_red_id);
 
 	/* acquire a request structure */
 	req = cxip_evtq_req_alloc(mc_obj->ep_obj->coll.tx_evtq, 1, NULL);
@@ -2358,6 +2737,8 @@ _cxip_coll_inject(struct cxip_coll_mc *mc_obj, int cxi_opcode,
 
 	/* reduce data into accumulator */
 	_reduce(&reduction->accum, &coll_data, false);
+	/* make a copy for retries */
+	memcpy(&reduction->backup, &reduction->accum, sizeof(reduction->backup));
 	_dump_coll_data("coll_data initialized inj", &coll_data);
 
 	/* Progress the collective */
@@ -2411,18 +2792,18 @@ ssize_t _get_bytcnt(int cxi_opcode, enum fi_datatype datatype,
 	ssize_t bytcnt;
 
 	if (cxi_opcode < 0) {
-		CXIP_WARN("opcode not supported\n");
+		CXIP_WARN("Opcode not supported\n");
 		return -FI_EINVAL;
 	}
 
 	if (!buf || count <= 0L) {
-		CXIP_WARN("buffer required\n");
+		CXIP_WARN("Buffer required\n");
 		return -FI_EINVAL;
 	}
 
 	bytcnt = _get_cxi_data_bytcnt(cxi_opcode, datatype, count);
 	if (bytcnt < 0)
-		CXIP_WARN("opcode does not support datatype\n");
+		CXIP_WARN("Opcode does not support datatype\n");
 
 	return bytcnt;
 }
@@ -2435,8 +2816,12 @@ ssize_t cxip_barrier(struct fid_ep *ep, fi_addr_t coll_addr, void *context)
 
 	/* barrier requires mc_obj */
 	ret = _get_mc_obj(ep, coll_addr, &mc_obj);
-	if (ret)
+	if (ret) {
+		CXIP_WARN("Failed to get multicast object for barrier "
+			  "(ret=%zd, coll_addr=%lu, ep=%p)\n",
+			  ret, coll_addr, ep);
 		return ret;
+	}
 
 	cxi_opcode = COLL_OPCODE_BARRIER;
 
@@ -2453,19 +2838,30 @@ ssize_t cxip_broadcast(struct fid_ep *ep, void *buf, size_t count,
 	ssize_t ret;
 
 	if (flags & (FI_MORE|FI_CXI_PRE_REDUCED)) {
-		CXIP_WARN("Illegal flags for broadcast\n");
+		CXIP_WARN("Unsupported flags for broadcast operation "
+			  "(flags=0x%lx, FI_MORE=%s, FI_CXI_PRE_REDUCED=%s)\n",
+			  flags, (flags & FI_MORE) ? "true" : "false",
+			  (flags & FI_CXI_PRE_REDUCED) ? "true" : "false");
 		return -FI_EINVAL;
 	}
 
 	cxi_opcode = COLL_OPCODE_BIT_OR;
 	bytcnt = _get_bytcnt(cxi_opcode, datatype, buf, count);
-	if (bytcnt < 0)
+	if (bytcnt < 0) {
+		CXIP_WARN("Invalid byte count for broadcast operation (ret=%d, "
+			  "count=%zu, datatype=%d, cxi_opcode=%d)\n",
+			  bytcnt, count, datatype, cxi_opcode);
 		return -FI_EINVAL;
+	}
 
 	/* broadcast requires mc_obj */
 	ret = _get_mc_obj(ep, coll_addr, &mc_obj);
-	if (ret)
+	if (ret) {
+		CXIP_WARN("Failed to get multicast object for broadcast "
+			  "(ret=%zd, coll_addr=%lu, ep=%p)\n",
+			  ret, coll_addr, ep);
 		return ret;
+	}
 
 	/* only root node contributes data, others contribute 0 */
 	if (root_addr != mc_obj->mynode_fiaddr)
@@ -2495,7 +2891,10 @@ ssize_t cxip_reduce(struct fid_ep *ep, const void *buf, size_t count,
 	/* FI_MORE requires result buffer, succeeds immediately */
 	if (flags & FI_MORE) {
 		if (!result) {
-			CXIP_WARN("result required with FI_MORE\n");
+			CXIP_WARN("Result buffer cannot be NULL with FI_MORE "
+				  "flag for reduce (buf=%p, count=%zu, "
+				  "root_addr=%lu)\n",
+				  buf, count, root_addr);
 			return -FI_EINVAL;
 		}
 		_cxip_coll_prereduce(cxi_opcode, buf, result, bytcnt, flags);
@@ -2504,12 +2903,19 @@ ssize_t cxip_reduce(struct fid_ep *ep, const void *buf, size_t count,
 
 	/* otherwise reduce requires mc_obj */
 	ret = _get_mc_obj(ep, coll_addr, &mc_obj);
-	if (ret)
+	if (ret) {
+		CXIP_WARN("Failed to get multicast object for reduce (ret=%zd, "
+			  "coll_addr=%lu, ep=%p)\n",
+			  ret, coll_addr, ep);
 		return ret;
+	}
 
 	/* root requires a result buffer */
 	if (!result && (mc_obj->mynode_fiaddr == root_addr)) {
-		CXIP_WARN("reduce root result required\n");
+		CXIP_WARN(
+			"Root node requires result buffer for reduce operation "
+			"(mynode_fiaddr=%lu, root_addr=%lu, coll_addr=%lu)\n",
+			mc_obj->mynode_fiaddr, root_addr, coll_addr);
 		return -FI_EINVAL;
 	}
 
@@ -2536,7 +2942,9 @@ ssize_t cxip_allreduce(struct fid_ep *ep, const void *buf, size_t count,
 
 	/* result required in all cases */
 	if (!result) {
-		CXIP_WARN("result required with FI_MORE\n");
+		CXIP_WARN("Result buffer cannot be NULL for allreduce "
+			  "operation (buf=%p, count=%zu)\n",
+			  buf, count);
 		return -FI_EINVAL;
 	}
 
@@ -2548,8 +2956,12 @@ ssize_t cxip_allreduce(struct fid_ep *ep, const void *buf, size_t count,
 
 	/* otherwise reduce requires mc_obj */
 	ret = _get_mc_obj(ep, coll_addr, &mc_obj);
-	if (ret)
+	if (ret) {
+		CXIP_WARN("Failed to get multicast object for allreduce "
+			  "(ret=%zd, coll_addr=%lu, ep=%p)\n",
+			  ret, coll_addr, ep);
 		return ret;
+	}
 
 	return _cxip_coll_inject(mc_obj, cxi_opcode, buf, result, bytcnt,
 				 flags, context);
@@ -2586,7 +2998,6 @@ struct cxip_join_state {
 	struct cxip_av_set *av_set_obj;	// av set for this collective
 	struct cxip_coll_mc *mc_obj;	// mc object for this collective
 	struct cxip_zbcoll_obj *zb;	// zb object associated with state
-	struct timespec curlexpires;	// multicast creation expiration timeout
 	struct fid_mc **mc;		// user pointer to return mc_obj
 	void *context;			// user context for concurrent joins
 	uint64_t join_flags;		// user-supplied libfabric join flags
@@ -2607,6 +3018,10 @@ struct cxip_join_state {
 	int join_idx;			// unique join index for diagnostics
 	struct dlist_entry sched_link;	// link to scheduled actions
 };
+
+static int _root_rdma_get_setup(struct cxip_join_state *jstate);
+static int _leaf_rdma_get_setup(struct cxip_join_state *jstate);
+static void free_root_rdma_buffers(struct cxip_ep_obj *ep_obj);
 
 /* State structure for recovering data from CURL response */
 struct cxip_curl_mcast_create_usrptr {
@@ -2704,6 +3119,9 @@ static int _acquire_pte(struct cxip_ep_obj *ep_obj, int pid_idx,
 	coll_pte = calloc(1, sizeof(*coll_pte));
 	if (!coll_pte) {
 		TRACE_JOIN("out of memory\n");
+		CXIP_WARN("Failed to allocate collective PTE structure "
+			  "(size=%zu, pid_idx=%d)\n",
+			  sizeof(*coll_pte), pid_idx);
 		return -FI_ENOMEM;
 	}
 
@@ -2720,6 +3138,9 @@ static int _acquire_pte(struct cxip_ep_obj *ep_obj, int pid_idx,
 			     coll_pte, &coll_pte->pte);
 	if (ret) {
 		TRACE_JOIN("cxip_pte_alloc failed=%d\n", ret);
+		CXIP_WARN("Failed to allocate PTE resource (ret=%d, "
+			  "pid_idx=%d, is_mcast=%s)\n",
+			  ret, pid_idx, is_mcast ? "true" : "false");
 		free(coll_pte);
 		return ret;
 	}
@@ -2728,6 +3149,9 @@ static int _acquire_pte(struct cxip_ep_obj *ep_obj, int pid_idx,
 	ret = _coll_pte_enable(coll_pte, CXIP_PTE_IGNORE_DROPS);
 	if (ret) {
 		TRACE_JOIN("_coll_pte_enable failed=%d\n", ret);
+		CXIP_WARN("Failed to enable collective PTE (ret=%d, "
+			  "pid_idx=%d, pte=%p)\n",
+			  ret, pid_idx, coll_pte->pte);
 		goto fail;
 	}
 
@@ -2737,6 +3161,10 @@ static int _acquire_pte(struct cxip_ep_obj *ep_obj, int pid_idx,
 				ep_obj->coll.buffer_count);
 	if (ret) {
 		TRACE_JOIN("_coll_add_buffers failed=%d\n", ret);
+		CXIP_WARN("Failed to add buffers to collective PTE (ret=%d, "
+			  "buffer_size=%zu, buffer_count=%ld, pid_idx=%d)\n",
+			  ret, ep_obj->coll.buffer_size,
+			  ep_obj->coll.buffer_count, pid_idx);
 		goto fail;
 	}
 
@@ -2757,11 +3185,33 @@ static void _cxip_delete_mcast_cb(struct cxip_curl_handle *handle);
 /* Close multicast collective object */
 static void _close_mc(struct cxip_coll_mc *mc_obj, bool delete, bool has_error)
 {
+	struct cxip_coll_reduction *reduction;
 	int count;
+	int red_id;
 
 	if (!mc_obj)
 		return;
 	TRACE_JOIN("%s starting MC cleanup\n", __func__);
+
+	if (!is_netsim(mc_obj->ep_obj)) {
+		TRACE_JOIN("%s leaf mcast_addr %x %p\n",
+			__func__, mc_obj->mcast_addr, mc_obj);
+		if(mc_obj->leaf_rdma_get_md) {
+			TRACE_JOIN("%s unmap/free leaf rdma_get_md %p\n",
+				__func__, mc_obj->leaf_rdma_get_md);
+			cxip_unmap(mc_obj->leaf_rdma_get_md);
+		}
+		if(mc_obj->leaf_rdma_get_data_p) {
+			TRACE_JOIN("%s unmap/free leaf rdma_get_data_p %p\n",
+				__func__, mc_obj->leaf_rdma_get_data_p);
+			free(mc_obj->leaf_rdma_get_data_p);
+		}
+	}
+
+	for (red_id = 0; red_id < CXIP_COLL_MAX_CONCUR; red_id++) {
+		reduction = &mc_obj->reduction[red_id];
+		_ts_red_clr(reduction);
+	}
 
 	mc_obj->has_closed = true;
 	mc_obj->has_error = has_error;
@@ -2788,16 +3238,12 @@ static void _close_mc(struct cxip_coll_mc *mc_obj, bool delete, bool has_error)
 		_close_pte(mc_obj->ep_obj->coll.coll_pte);
 		mc_obj->ep_obj->coll.coll_pte = NULL;
 	}
+
 	/* index zero deletes the multicast address */
 	if (delete && mc_obj->is_multicast && !mc_obj->mynode_idx) {
-		struct timespec expires = {
-			cxip_env.coll_fm_timeout_msec/1000,
-			(cxip_env.coll_fm_timeout_msec%1000)*1000000};
-
 		if (!mc_obj->has_error)
 			mc_obj->close_state = -FI_EAGAIN;
 
-		_tsset(&mc_obj->curlexpires, &expires);
 		_curl_delete_mc_obj(mc_obj);
 	} else {
 		if (mc_obj->has_error) {
@@ -2838,6 +3284,8 @@ static int _fi_close_mc(struct fid *fid)
 			continue;
 		}
 		if (ret < 0 && ret != -FI_ENODATA) {
+			CXIP_INFO("%s: Curl progress failed, error=%d\n",
+				  __func__, ret);
 			TRACE_JOIN("%s: Curl progress failed, error=%d\n", __func__, ret);
 			break;
 		}
@@ -2913,8 +3361,11 @@ static int _initialize_mc(void *ptr)
 	TRACE_JOIN("%s entry\n", __func__);
 
 	mc_obj = calloc(1, sizeof(*mc_obj));
-	if (!mc_obj)
+	if (!mc_obj) {
+		CXIP_WARN("Failed to allocate multicast object (size=%zu)\n",
+			  sizeof(*mc_obj));
 		return -FI_ENOMEM;
+	}
 
 	TRACE_JOIN("acquiring PTE\n");
 	if (jstate->is_rank) {
@@ -2943,6 +3394,9 @@ static int _initialize_mc(void *ptr)
 	}
 	if (ret) {
 		TRACE_DEBUG("acquiring PTE failed %d\n", ret);
+		CXIP_WARN("Failed to acquire PTE (ret=%d, pid_idx=%d, "
+			  "is_mcast=%s)\n",
+			  ret, pid_idx, jstate->is_mcast ? "true" : "false");
 		free(mc_obj);
 		return ret;
 	}
@@ -2983,10 +3437,13 @@ static int _initialize_mc(void *ptr)
 	mc_obj->max_red_id = CXIP_COLL_MAX_CONCUR;
 	mc_obj->arm_disable = false;
 	mc_obj->rx_discard = jstate->rx_discard;
-	mc_obj->timeout.tv_sec =
-		cxip_env.coll_retry_usec/1000000L;
-	mc_obj->timeout.tv_nsec =
-		(cxip_env.coll_retry_usec%1000000L)*1000L;
+	mc_obj->rootexpires.tv_sec = cxip_env.coll_retry_usec / 1000000L;
+	mc_obj->rootexpires.tv_nsec =
+		(cxip_env.coll_retry_usec % 1000000L) * 1000L;
+	/* leaf timeout before rdma read starts from root node */
+	mc_obj->leafexpires.tv_sec = ((cxip_env.coll_retry_usec*CXIP_COLL_MAX_LEAF_TIMEOUT_MULT) / 1000000L);
+	mc_obj->leafexpires.tv_nsec =
+		(((cxip_env.coll_retry_usec*CXIP_COLL_MAX_LEAF_TIMEOUT_MULT) % 1000000L) * 1000L);
 	for (red_id = 0; red_id < CXIP_COLL_MAX_CONCUR; red_id++) {
 		struct cxip_coll_reduction *reduction;
 
@@ -2996,7 +3453,24 @@ static int _initialize_mc(void *ptr)
 		reduction->red_id = red_id;
 		reduction->in_use = false;
 		reduction->completed = false;
+		/* _tsexp() is used for both the retry timer (tv_expires)
+		 * and the RE timer (arm_expires).  _tsexp() checks for
+		 * TIMER_UNSET to ensure we don't unnecessarily retry when
+		 * the reduction doesn't have a timer set on it yet.
+		 */
+		reduction->tv_expires.tv_sec = TIMER_UNSET;
+		reduction->tv_expires.tv_nsec = TIMER_UNSET;
+		/* set to 0 to insure we arm for the first operation */
+		reduction->arm_expires.tv_sec = 0;
+		reduction->arm_expires.tv_nsec = 0;
+		reduction->rdma_get_sent = false;
+		reduction->rdma_get_completed = false;
+		reduction->leaf_contrib_start_us = 0;
+		reduction->rdma_get_cb_rc = 0;
+		dlist_init(&reduction->tmout_link);
 	}
+	TRACE_DEBUG("reduction table initialized\n");
+	dump_reduction_table(0, &mc_obj->reduction[0]);
 	TRACE_DEBUG("Initializing mc_obj=%p counters\n", mc_obj);
 	ofi_spin_init(&mc_obj->lock);
 	ofi_atomic_initialize32(&mc_obj->send_cnt, 0);
@@ -3013,8 +3487,12 @@ static int _initialize_mc(void *ptr)
 			       sizeof(mc_obj->reduction),
 			       CXI_MAP_PIN  | CXI_MAP_READ | CXI_MAP_WRITE,
 			       NULL, &mc_obj->reduction_md);
-		if (ret)
+		if (ret) {
+			CXIP_WARN("Failed to map reduction buffer for DMA "
+				  "(ret=%d, size=%zu)\n",
+				  ret, sizeof(mc_obj->reduction));
 			goto fail;
+		}
 	}
 
 	/* define the traffic class */
@@ -3041,6 +3519,10 @@ static int _initialize_mc(void *ptr)
 			       mc_obj->tc, mc_obj->tc_type);
 	if (ret) {
 		TRACE_JOIN("%s: cxip_txq_cp_set() = %d\n", __func__, ret);
+		CXIP_WARN("Failed to set command queue control path (ret=%d, "
+			  "vni=%d, tc=%d, tc_type=%d)\n",
+			  ret, ep_obj->auth_key.vni, mc_obj->tc,
+			  mc_obj->tc_type);
 		goto fail;
 	}
 
@@ -3050,12 +3532,23 @@ static int _initialize_mc(void *ptr)
 			   mc_obj->mcast_addr, mc_obj);
 	if (ret < 0) {
 		TRACE_JOIN("%s: idm set failed %d\n", __func__, ret);
+		CXIP_WARN("Failed to index multicast object in mcast_map "
+			  "(ret=%d, mcast_addr=%d, mc_obj=%p)\n",
+			  ret, mc_obj->mcast_addr, mc_obj);
 		goto fail;
 	}
 	/* lock out reuse of this endpoint as hw_root for any multicast addr */
 	if (mc_obj->hwroot_idx == mc_obj->mynode_idx) {
 		TRACE_JOIN("%s: set is_hwroot\n", __func__);
+		/* this is an endpoint level flag, and may not
+		 * indicate current root node within the context of
+		 * mcast addresses. It is used to prevent a node from being
+		 * root more than once, see _finish_bcast().
+		 */
 		ep_obj->coll.is_hwroot = true;
+	} else {
+		TRACE_JOIN("%s: node idx is_hwleaf\n", __func__);
+		TRACE_JOIN("%s: node idx %d root idx %d\n", __func__, mc_obj->mynode_idx, mc_obj->hwroot_idx);
 	}
 #if ENABLE_DEBUG
 	struct cxip_coll_mc *mc_obj_chk;
@@ -3144,12 +3637,22 @@ static void _curl_delete_mc_obj(struct cxip_coll_mc *mc_obj)
 		       mc_obj->mcast_addr);
 	if (ret < 0) {
 		TRACE_JOIN("Failed to construct CURL address\n");
+		CXIP_WARN("Failed to construct CURL delete URL (ret=%d, "
+			  "fm_url='%s', mcast_addr=%d)\n",
+			  ret,
+			  cxip_env.coll_fabric_mgr_url ?
+				  cxip_env.coll_fabric_mgr_url :
+				  "NULL",
+			  mc_obj->mcast_addr);
 		goto quit;
 	}
 	/* create the return pointer */
 	curl_usrptr = calloc(1, sizeof(*curl_usrptr));
 	if (!curl_usrptr) {
 		TRACE_JOIN("curl_usrptr calloc() error\n");
+		CXIP_WARN("Failed to allocate CURL user pointer for multicast "
+			  "delete (size=%zu, mcast_addr=%d)\n",
+			  sizeof(*curl_usrptr), mc_obj->mcast_addr);
 		ret = -FI_ENOMEM;
 		goto quit;
 	}
@@ -3160,6 +3663,9 @@ static void _curl_delete_mc_obj(struct cxip_coll_mc *mc_obj)
 	if (ret < 0) {
 		TRACE_JOIN("CURL delete mcast %d dispatch failed %d\n",
 			   mc_obj->mcast_addr, ret);
+		CXIP_WARN("CURL multicast delete dispatch failed (ret=%d, "
+			  "mcast_addr=%d, url='%s')\n",
+			  ret, mc_obj->mcast_addr, url ? url : "NULL");
 		goto quit;
 	}
 	TRACE_JOIN("CURL delete mcast %d dispatch successful\n",
@@ -3210,16 +3716,8 @@ static void _cxip_delete_mcast_cb(struct cxip_curl_handle *handle)
 		TRACE_JOIN("callback: delete mcast failed: %ld '%s'\n",
 			   handle->status, errmsg);
 
-		if (_tsexp(&mc_obj->curlexpires)) {
-			TRACE_JOIN("callback: FM expired\n");
-			if (mc_obj->has_error) {
-				free(mc_obj);
-			} else {
-				mc_obj->close_state = FI_CXI_ERRNO_JOIN_CURL_TIMEOUT;
-			}
-			break;
-		}
-		/* try again */
+		/* retry, but don't DOS the fabric manager */
+		usleep(100000);
 		_curl_delete_mc_obj(mc_obj);
 		break;
 	default:
@@ -3262,20 +3760,22 @@ static void _create_mcast_addr(struct cxip_join_state *jstate)
 	TRACE_JOIN("ENV minnodes= %ld\n", cxip_env.hwcoll_min_nodes);
 	TRACE_JOIN("ENV retry   = %ld\n", cxip_env.coll_retry_usec);
 	TRACE_JOIN("ENV tmout   = %ld\n", cxip_env.coll_timeout_usec);
-	TRACE_JOIN("ENV fmtmout = %ld\n", cxip_env.coll_fm_timeout_msec);
 
 	/* Generic error for any preliminary failures */
 	ret = 0;
 	if (!cxip_env.coll_job_id) {
 		TRACE_JOIN("missing job id\n");
+		CXIP_WARN("Missing collective job ID\n");
 		ret = -FI_EINVAL;
 	}
 	if (!cxip_env.coll_fabric_mgr_url) {
 		TRACE_JOIN("missing FM url\n");
+		CXIP_WARN("Missing fabric manager URL\n");
 		ret = -FI_EINVAL;
 	}
 	if (!cxip_env.coll_mcast_token) {
 		TRACE_JOIN("missing FM token\n");
+		CXIP_WARN("Missing fabric manager authentication token\n");
 		ret = -FI_EINVAL;
 	}
 	if (ret < 0)
@@ -3287,6 +3787,7 @@ static void _create_mcast_addr(struct cxip_join_state *jstate)
 		ret = asprintf(&url, "%s", cxip_env.coll_fabric_mgr_url);
 	if (ret < 0) {
 		TRACE_JOIN("failed to construct CURL address\n");
+		CXIP_WARN("Failed to construct CURL address (ret=%d)\n", ret);
 		ret = -FI_ENOMEM;
 		goto quit;
 	}
@@ -3297,6 +3798,7 @@ static void _create_mcast_addr(struct cxip_join_state *jstate)
 		ret = asprintf(&tok, "%s", cxip_env.coll_mcast_token);
 	if (ret < 0) {
 		TRACE_JOIN("failed to construct CURL token\n");
+		CXIP_WARN("Failed to construct CURL token (ret=%d)\n", ret);
 		ret = -FI_ENOMEM;
 		goto quit;
 	}
@@ -3306,6 +3808,8 @@ static void _create_mcast_addr(struct cxip_join_state *jstate)
 	p = mac = malloc(10*jstate->av_set_obj->fi_addr_cnt + 1);
 	if (!mac) {
 		TRACE_JOIN("failed to allocate mac list\n");
+		CXIP_WARN("Failed to allocate MAC list for %ld addresses\n",
+			  jstate->av_set_obj->fi_addr_cnt);
 		ret = -FI_ENOMEM;
 		goto quit;
 	}
@@ -3316,6 +3820,9 @@ static void _create_mcast_addr(struct cxip_join_state *jstate)
 		if (ret < 0) {
 			TRACE_JOIN("failed to find address[%d]=%ld\n",
 				   i, jstate->av_set_obj->fi_addr_ary[i]);
+			CXIP_WARN("Failed to lookup address[%d]=%ld in AV set "
+				  "(ret=%d)\n",
+				  i, jstate->av_set_obj->fi_addr_ary[i], ret);
 			goto quit;
 		}
 		p += sprintf(p, "'%01X:%02X:%02X',",
@@ -3337,6 +3844,13 @@ static void _create_mcast_addr(struct cxip_join_state *jstate)
 			cxip_env.coll_job_step_id);
 	if (ret < 0) {
 		TRACE_JOIN("failed to create jsonreq= %d\n", ret);
+		CXIP_WARN("Failed to create JSON request string (ret=%d, "
+			  "vni=%d, job_id='%s', step_id='%s')\n",
+			  ret, jstate->ep_obj->auth_key.vni,
+			  cxip_env.coll_job_id ? cxip_env.coll_job_id : "NULL",
+			  cxip_env.coll_job_step_id ?
+				  cxip_env.coll_job_step_id :
+				  "NULL");
 		ret = -FI_ENOMEM;
 		goto quit;
 	}
@@ -3346,6 +3860,9 @@ static void _create_mcast_addr(struct cxip_join_state *jstate)
 	curl_usrptr = calloc(1, sizeof(*curl_usrptr));
 	if (!curl_usrptr) {
 		TRACE_JOIN("failed to calloc() curl_usrptr\n");
+		CXIP_WARN("Failed to allocate CURL user pointer structure "
+			  "(size=%zu)\n",
+			  sizeof(*curl_usrptr));
 		ret = -FI_ENOMEM;
 		goto quit;
 	}
@@ -3355,6 +3872,9 @@ static void _create_mcast_addr(struct cxip_join_state *jstate)
 				_cxip_create_mcast_cb, curl_usrptr);
 	if (ret < 0) {
 		TRACE_JOIN("CURL create mcast dispatch failed %d\n", ret);
+		CXIP_WARN("CURL multicast creation dispatch failed (ret=%d, "
+			  "url='%s')\n",
+			  ret, url ? url : "NULL");
 		goto quit;
 	}
 	TRACE_JOIN("CURL create mcast dispatch successful\n");
@@ -3463,20 +3983,15 @@ static void _cxip_create_mcast_cb(struct cxip_curl_handle *handle)
 	case 400:
 		TRACE_JOIN("callback: create mcast failed: %ld '%s'\n",
 			   handle->status, message ? message : "<empty>");
-		jstate->prov_errno = FI_CXI_ERRNO_JOIN_SERVER_ERR;
+		jstate->prov_errno = FI_CXI_ERRNO_JOIN_HWROOT_INUSE;
 		jstate->finished_mcast = true;
 		break;
 	case 409:
 		TRACE_JOIN("callback: create mcast failed: %ld '%s'\n",
 		           handle->status, message);
 
-		if (_tsexp(&jstate->curlexpires)) {
-			TRACE_JOIN("callback: FM expired\n");
-			jstate->prov_errno = FI_CXI_ERRNO_JOIN_CURL_TIMEOUT;
-			jstate->finished_mcast = true;
-			break;
-		}
-		/* retry */
+		/* retry, but don't DOS the fabric manager */
+		usleep(100000);
 		_create_mcast_addr(jstate);
 		break;
 	case 507:
@@ -3632,6 +4147,7 @@ static void _start_bcast(void *ptr)
 {
 	struct cxip_join_state *jstate = ptr;
 	struct cxip_zbcoll_obj *zb = jstate->zb;
+	struct cxip_ep_obj *ep_obj = jstate->ep_obj;
 
 	if (!suppress_busy_log)
 		TRACE_JOIN("%s: entry\n", __func__);
@@ -3643,14 +4159,9 @@ static void _start_bcast(void *ptr)
 		if (jstate->create_mcast) {
 			/* first call (only) initiates CURL request */
 			if (!jstate->creating_mcast) {
-				struct timespec expires = {
-					cxip_env.coll_fm_timeout_msec/1000,
-					(cxip_env.coll_fm_timeout_msec%1000)*1000000};
-
 				TRACE_JOIN("%s create mcast\n", __func__);
 				jstate->creating_mcast = true;
 
-				_tsset(&jstate->curlexpires, &expires);
 				_create_mcast_addr(jstate);
 				TRACE_JOIN("%s create mcast initiated\n", __func__);
 			}
@@ -3672,6 +4183,12 @@ static void _start_bcast(void *ptr)
 	if (cxip_trap_search(jstate->mynode_idx, CXIP_TRAP_BCAST, &zb->error,
 			     &jstate->prov_errno))
 		goto quit;
+	/* make sure we clear this before we go down the zbsend path
+	 * _start_rdma_init uses it to send a special cntrl msg
+	 * CXIP_CTRL_MSG_ZB_DATA_RDMA_LAC during the join flow with the
+	 * same zb context.
+	 */	
+	ep_obj->coll.leaf_save_root_lac = false;
 	/* rank > 0 endpoints overwritten by rank = 0 data */
 	/* zb->error == FI_SUCCESS, -FI_EAGAIN, -FI_EINVAL */
 	zb->error = cxip_zbcoll_broadcast(zb, &jstate->bcast_data.uint64);
@@ -3705,6 +4222,10 @@ static void _finish_bcast(void *ptr)
 	TRACE_JOIN("check hwroot\n");
 	if (jstate->bcast_data.hwroot_idx >=
 	    jstate->av_set_obj->fi_addr_cnt) {
+		CXIP_INFO("Invalid hwroot index: hwroot_idx=%d, "
+			  "max_addr_cnt=%zu\n",
+			  jstate->bcast_data.hwroot_idx,
+			  jstate->av_set_obj->fi_addr_cnt);
 		TRACE_JOIN("%s: reject invalid hwroot_idx\n", __func__);
 		jstate->prov_errno = FI_CXI_ERRNO_JOIN_HWROOT_INVALID;
 		ret = -FI_EINVAL;
@@ -3714,6 +4235,9 @@ static void _finish_bcast(void *ptr)
 	/* check for hwroot overlap on this node */
 	is_hwroot = (jstate->bcast_data.hwroot_idx == jstate->mynode_idx);
 	if (is_hwroot && jstate->ep_obj->coll.is_hwroot) {
+		CXIP_INFO("Hardware root already in use on this node: "
+			  "hwroot_idx=%d, mynode_idx=%d\n",
+			  jstate->bcast_data.hwroot_idx, jstate->mynode_idx);
 		TRACE_JOIN("%s: reject join, hwroot in use\n", __func__);
 		jstate->prov_errno = FI_CXI_ERRNO_JOIN_HWROOT_INUSE;
 		ret = -FI_EINVAL;
@@ -3725,6 +4249,8 @@ static void _finish_bcast(void *ptr)
 	if (!jstate->is_rank &&
 	    ofi_idm_lookup(&jstate->ep_obj->coll.mcast_map,
 			   jstate->bcast_data.mcast_addr)) {
+		CXIP_INFO("Multicast address already in use: mcast_addr=%d\n",
+			  jstate->bcast_data.mcast_addr);
 		TRACE_JOIN("%s: reject join, mcast %d in use\n", __func__,
 			   jstate->bcast_data.mcast_addr);
 		jstate->prov_errno = FI_CXI_ERRNO_JOIN_MCAST_INUSE;
@@ -3736,6 +4262,7 @@ static void _finish_bcast(void *ptr)
 	if (cxip_trap_search(jstate->mynode_idx, CXIP_TRAP_INITPTE, &ret,
 			     &jstate->prov_errno))
 		goto quit;
+
 	/* all endpoints initialize with same mcast addr and hwroot */
 	ret = _initialize_mc(jstate);
 quit:
@@ -3744,9 +4271,118 @@ quit:
 		jstate->bcast_data.valid = false;
 	/* represent prov_errno values as inverted bitmask */
 	_proverr_to_bits(jstate);
+	_append_sched(zb, jstate);	// _start_rdma_init
+}
+static void _start_rdma_init(void *ptr) {
+
+	struct cxip_join_state *jstate = ptr;
+	struct cxip_zbcoll_obj *zb = jstate->zb;
+	struct cxip_ep_obj *ep_obj = jstate->ep_obj;
+	struct cxip_coll_mc *mc_obj = jstate->mc_obj;
+	bool is_hwroot = false;
+	int addr_index = 0;
+	uint64_t data = 0;
+	struct cxip_addr dstaddr __attribute__((unused));
+
+	/* if mc_obj is NULL, _finish_bcast did not complete normally */
+	if(mc_obj) {
+		TRACE_JOIN("%s num_mc %d\n", __func__,
+			ofi_atomic_get32(&ep_obj->coll.num_mc));
+		TRACE_JOIN("%s num_joins %d\n", __func__,
+			ofi_atomic_get32(&ep_obj->coll.join_cnt));
+		TRACE_JOIN("%s mcast_id %x %p\n", __func__,
+			mc_obj->mcast_addr, mc_obj);
+		is_hwroot = is_hw_root(mc_obj);
+		data = mc_obj->mcast_addr;
+	} else {
+		TRACE_JOIN("%s mc_obj is NULL\n",__func__);
+		goto append;
+	}
+	/* netsim loops on join flow, we do not support concurrent joins */
+	if (is_netsim(ep_obj)) {
+		TRACE_JOIN("%s Skipping netsim active\n",__func__);
+		goto append;
+	}
+	TRACE_JOIN("%s: my_idx %d mc addr=%x hw_root=%d valid=%d ts:%016lx\n",
+		__func__, jstate->mynode_idx, jstate->bcast_data.mcast_addr,
+		jstate->bcast_data.hwroot_idx, jstate->bcast_data.valid,
+		ofi_gettime_us());
+
+	jstate->prov_errno = 0;
+	if(is_hwroot) {
+		TRACE_JOIN("%s Calling _root_rdma_get_setup()\n", __func__);
+		if( _root_rdma_get_setup(jstate) ) {
+			TRACE_JOIN("%s: Root rdma get setup failed\n", __func__);
+			jstate->prov_errno = FI_CXI_ERRNO_JOIN_FAIL_RDMA;
+		} else {
+			ep_obj->coll.leaf_save_root_lac = true;
+			for(addr_index=0; addr_index < zb->num_caddrs; addr_index++) {
+				if(addr_index == jstate->bcast_data.hwroot_idx)
+					continue;
+				dstaddr = zb->caddrs[addr_index];
+				zb->error = FI_SUCCESS;
+				zb->reduce = false;
+				TRACE_JOIN("%s: rdma index %d pid %x nic %x vni %x\n", __func__,
+					addr_index, dstaddr.pid,dstaddr.nic, dstaddr.vni);
+				cxip_zbcoll_send(zb, 0, addr_index, data);
+			}
+			ep_obj->coll.leaf_save_root_lac = false;
+		}
+	} else {
+		TRACE_JOIN("%s Calling _leaf_rdma_get_setup()\n", __func__);
+		if( _leaf_rdma_get_setup(jstate) ) {
+			TRACE_JOIN("%s: Leaf rdma get setup failed\n", __func__);
+			jstate->prov_errno = FI_CXI_ERRNO_JOIN_FAIL_RDMA;
+		}
+	}
+append:
+	_append_sched(zb, jstate);	// _finish_rdma_init
+}
+static void _finish_rdma_init(void *ptr) {
+
+	struct cxip_join_state *jstate = ptr;
+	struct cxip_zbcoll_obj *zb = jstate->zb;
+	struct cxip_ep_obj *ep_obj = jstate->ep_obj;
+	struct cxip_coll_mc *mc_obj = jstate->mc_obj;
+	bool is_hwroot = false;
+
+	/* if mc_obj is NULL, _finish_bcast did not complete normally */
+	if(mc_obj) {
+		is_hwroot = is_hw_root(mc_obj);
+		TRACE_JOIN("%s mcast_id %x\n",__func__,mc_obj->mcast_addr);
+	} else {
+		TRACE_JOIN("%s mc_obj is NULL\n",__func__);
+		goto append;
+	}
+	/* netsim loops on join flow, we do not support concurrent joins */
+	if (is_netsim(ep_obj)) {
+		TRACE_JOIN("%s Skipping netsim active\n",__func__);
+		goto append;
+	}
+	TRACE_JOIN("%s: my_idx %d mc addr=%x hw_root=%d valid=%d ts:%016lx\n",
+		__func__, jstate->mynode_idx, jstate->bcast_data.mcast_addr,
+		jstate->bcast_data.hwroot_idx, jstate->bcast_data.valid,
+		ofi_gettime_us());
+
+	if(is_hwroot) {
+			TRACE_JOIN("%s: root rdma tx lac %016lx\n",
+				__func__, mc_obj->rdma_get_lac_va_tx);
+			TRACE_JOIN("%s: root rdma get md pntr %p\n",
+				__func__, mc_obj->root_rdma_get_md);
+			TRACE_JOIN("%s: root rdma get data pntr %p\n",
+				__func__, mc_obj->root_rdma_get_data_p);
+	} else {
+			/* this may be 0, depending on if we handled the cb */
+			TRACE_JOIN("%s: leaf rdma rx lac %016lx\n",
+				__func__, mc_obj->rdma_get_lac_va_rx);
+			TRACE_JOIN("%s: leaf rdma get md pntr %p\n",
+				__func__, mc_obj->leaf_rdma_get_md);
+			TRACE_JOIN("%s: leaf rdma get data pntr %p\n",
+				__func__, mc_obj->leaf_rdma_get_data_p);
+	}
+append:
 	_append_sched(zb, jstate);	// _start_reduce
 }
-
 /* Accumulate composite errors from different endpoints */
 static void _start_reduce(void *ptr)
 {
@@ -3821,6 +4457,8 @@ enum state_code {
 	finish_getgroup,
 	start_bcast,
 	finish_bcast,
+	start_rdma_init,
+	finish_rdma_init,
 	start_reduce,
 	finish_reduce,
 	start_cleanup,
@@ -3833,6 +4471,8 @@ const char *state_name[] = {
 	"finish_getgroup",
 	"start_bcast",
 	"finish_bcast",
+	"start_rdma_init",
+	"finish_rdma_init",
 	"start_reduce",
 	"finish_reduce",
 	"start_cleanup",
@@ -3844,6 +4484,8 @@ sched_func state_func[] = {
 	_finish_getgroup,
 	_start_bcast,
 	_finish_bcast,
+	_start_rdma_init,
+	_finish_rdma_init,
 	_start_reduce,
 	_finish_reduce,
 	_start_cleanup,
@@ -3858,15 +4500,17 @@ sched_func state_func[] = {
  */
 static enum state_code progress_state[][3] = {
 	/* STATE              SUCCESS         EAGAIN         FAIL */
-	/* state_init     */ {start_getgroup, start_cleanup, start_cleanup},
-	/* start_getgroup */ {finish_getgroup,start_getgroup,start_cleanup},
-	/* finish_getgroup*/ {start_bcast,    start_cleanup, start_cleanup},
-	/* start_bcast    */ {finish_bcast,   start_bcast,   start_cleanup},
-	/* finish_bcast   */ {start_reduce,   start_cleanup, start_cleanup},
-	/* start_reduce   */ {finish_reduce,  start_reduce,  start_cleanup},
-	/* finish_reduce  */ {start_cleanup,  start_cleanup, start_cleanup},
-	/* start_cleanup  */ {state_done,     state_done,    state_done},
-	/* state_done     */ {state_done,     state_done,    state_done},
+	/* state_init       */ {start_getgroup, start_cleanup, start_cleanup},
+	/* start_getgroup   */ {finish_getgroup,start_getgroup,start_cleanup},
+	/* finish_getgroup  */ {start_bcast,    start_cleanup, start_cleanup},
+	/* start_bcast      */ {finish_bcast,   start_bcast,   start_cleanup},
+	/* finish_bcast     */ {start_rdma_init,   start_cleanup, start_cleanup},
+	/* start_rdma_init  */ {finish_rdma_init,   start_cleanup,   start_cleanup},
+	/* finish_rdma_init */ {start_reduce,   start_cleanup, start_cleanup},
+	/* start_reduce     */ {finish_reduce,  start_reduce,  start_cleanup},
+	/* finish_reduce    */ {start_cleanup,  start_cleanup, start_cleanup},
+	/* start_cleanup    */ {state_done,     state_done,    state_done},
+	/* state_done       */ {state_done,     state_done,    state_done},
 };
 
 /* Advance the state and run scheduled operations */
@@ -3933,11 +4577,18 @@ static unsigned int _caddr_to_idx(struct cxip_av_set *av_set_obj,
 		ret = fi_av_lookup(&av_set_obj->cxi_av->av_fid,
 				   av_set_obj->fi_addr_ary[i],
 				   &addr, &size);
-		if (ret)
+		if (ret) {
+			CXIP_INFO("AV lookup failed during address search: "
+				  "index=%d, fi_addr=%lu, ret=%d\n",
+				  i, av_set_obj->fi_addr_ary[i], ret);
 			return ret;
+		}
 		if (CXIP_ADDR_EQUAL(addr, caddr))
 			return i;
 	}
+	CXIP_INFO("Address not found in AV set: target_nic=0x%x, "
+		  "target_pid=0x%x, searched_count=%ld\n",
+		  caddr.nic, caddr.pid, av_set_obj->fi_addr_cnt);
 	return -FI_EADDRNOTAVAIL;
 }
 
@@ -4027,6 +4678,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		TRACE_JOIN("%s: CXI Collectives are supported\n", __func__);
 	}
 	else {
+		CXIP_WARN("CXI Collectives are not supported on this system\n");
 		TRACE_JOIN("%s: CXI Collectives are not supported\n", __func__);
 		return -FI_EOPNOTSUPP;
 	}
@@ -4035,8 +4687,12 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 
 	TRACE_JOIN("%s: entry\n", __func__);
 	/* Validate arguments */
-	if (!ep || !coll_av_set || !mc || coll_addr != FI_ADDR_NOTAVAIL)
+	if (!ep || !coll_av_set || !mc || coll_addr != FI_ADDR_NOTAVAIL) {
+		CXIP_WARN("Invalid parameters: ep=%p, coll_av_set=%p, mc=%p, "
+			  "coll_addr=%lu\n",
+			  ep, coll_av_set, mc, coll_addr);
 		return -FI_EINVAL;
+	}
 	/* flags are ignored, per util_coll.c example code
 	 * Only FI_SCATTER is documented, and applies to fi_query_collective().
 	 */
@@ -4052,6 +4708,8 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	/* join must be serialized through to completion */
 	ofi_genlock_lock(&ep_obj->lock);
 	if (ep_obj->coll.join_busy) {
+		CXIP_INFO("Collective join already in progress for this "
+			  "endpoint\n");
 		ofi_genlock_unlock(&ep_obj->lock);
 		return -FI_EAGAIN;
 	}
@@ -4063,6 +4721,8 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	/* allocate state to pass arguments through callbacks */
 	jstate = calloc(1, sizeof(*jstate));
 	if (!jstate) {
+		CXIP_WARN("Failed to allocate join state: size=%zu\n",
+			  sizeof(*jstate));
 		ret = -FI_ENOMEM;
 		goto fail;
 	}
@@ -4084,7 +4744,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	case COMM_KEY_NONE:
 		/* Production case, acquire multicast from FM */
 		if (is_netsim(ep_obj)) {
-			CXIP_INFO("NETSIM COMM_KEY_NONE not supported\n");
+			CXIP_WARN("NETSIM COMM_KEY_NONE not supported\n");
 			goto fail;
 		}
 		TRACE_JOIN("%s: MULTICAST CURL model setup\n", __func__);
@@ -4105,7 +4765,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	case COMM_KEY_MULTICAST:
 		/* Real network test with predefined multicast address */
 		if (is_netsim(ep_obj)) {
-			CXIP_INFO("NETSIM COMM_KEY_MULTICAST not supported\n");
+			CXIP_WARN("NETSIM COMM_KEY_MULTICAST not supported\n");
 			goto fail;
 		}
 		TRACE_JOIN("%s: MULTICAST prefab model setup\n", __func__);
@@ -4128,7 +4788,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	case COMM_KEY_UNICAST:
 		/* Real network test without multicast address */
 		if (is_netsim(ep_obj)) {
-			CXIP_INFO("NETSIM COMM_KEY_UNICAST not supported\n");
+			CXIP_WARN("NETSIM COMM_KEY_UNICAST not supported\n");
 			goto fail;
 		}
 		TRACE_JOIN("%s: UNICAST model setup\n", __func__);
@@ -4164,7 +4824,7 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		link_zb = true;
 		break;
 	default:
-		CXIP_INFO("unexpected comm_key keytype: %d\n",
+		CXIP_WARN("Unexpected comm_key keytype: %d\n",
 			  av_set_obj->comm_key.keytype);
 		goto fail;
 	}
@@ -4172,6 +4832,8 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	/* Reject if a rank tries to join a group it doesn't belong to */
 	ret = jstate->mynode_idx;
 	if (ret < 0) {
+		CXIP_WARN("Node not found in collective group: mynode_idx=%d\n",
+			  ret);
 		TRACE_JOIN("May not participate\n");
 		goto fail;
 	}
@@ -4183,8 +4845,13 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 				jstate->av_set_obj->fi_addr_ary,
 				jstate->simrank, &zb);
 	TRACE_JOIN("%s: returned=%d\n", __func__, ret);
-	if (ret)
+	if (ret) {
+		CXIP_WARN("ZB collective allocation failed: addr_cnt=%zu, "
+			  "simrank=%d, ret=%d\n",
+			  jstate->av_set_obj->fi_addr_cnt, jstate->simrank,
+			  ret);
 		goto fail;
+	}
 
 	/* Install the callback function for zb collectives */
 	TRACE_JOIN("%s: cxip_zbcoll_set_user_cb\n", __func__);
@@ -4201,6 +4868,9 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		if (!zb0_count++) {
 			/* first must be rank 0 */
 			if (rank != 0) {
+				CXIP_WARN("First COMM_KEY_RANK join must be "
+					  "rank 0: actual_rank=%d\n",
+					  rank);
 				TRACE_JOIN("%s: rank %d not 0\n", __func__, rank);
 				ret = -FI_EINVAL;
 				goto fail;
@@ -4211,6 +4881,9 @@ int cxip_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		/* link this zb to zb0 */
 		ret = cxip_zbcoll_simlink(zb0, zb);
 		if (ret) {
+			CXIP_WARN("ZB collective simulation link failed: "
+				  "zb0=%p, zb=%p, ret=%d\n",
+				  zb0, zb, ret);
 			TRACE_JOIN("%s: return=%d\n", __func__, ret);
 			return ret;
 		}
@@ -4324,11 +4997,15 @@ void cxip_coll_close(struct cxip_ep_obj *ep_obj)
 {
 	struct cxip_coll_mc *mc_obj;
 
+	TRACE_JOIN("%s Entering\n", __func__);
 	while (!dlist_empty(&ep_obj->coll.mc_list)) {
+		TRACE_JOIN("%s Calling _close_mc\n", __func__);
 		dlist_pop_front(&ep_obj->coll.mc_list,
 				struct cxip_coll_mc, mc_obj, entry);
 		_close_mc(mc_obj, false, true);
 	}
+	free_root_rdma_buffers(ep_obj);
+	cxip_coll_print_prod_trace();
 }
 
 /**
@@ -4377,14 +5054,25 @@ int cxip_coll_enable(struct cxip_ep *ep)
 	}
 
 	/* Sanity checks */
-	if (ep_obj->coll.buffer_size == 0)
+	if (ep_obj->coll.buffer_size == 0) {
+		CXIP_WARN("Invalid configuration: buffer_size is 0\n");
 		return -FI_EINVAL;
-	if (ep_obj->coll.buffer_count == 0)
+	}
+	if (ep_obj->coll.buffer_count == 0) {
+		CXIP_WARN("Invalid configuration: buffer_count is 0\n");
 		return -FI_EINVAL;
-	if (ep_obj->coll.min_multi_recv == 0)
+	}
+	if (ep_obj->coll.min_multi_recv == 0) {
+		CXIP_WARN("Invalid configuration: min_multi_recv is 0\n");
 		return -FI_EINVAL;
-	if (ep_obj->coll.min_multi_recv >= ep_obj->coll.buffer_size)
+	}
+	if (ep_obj->coll.min_multi_recv >= ep_obj->coll.buffer_size) {
+		CXIP_WARN("Invalid configuration: min_multi_recv(%zu) >= "
+			  "buffer_size(%zu)\n",
+			  ep_obj->coll.min_multi_recv,
+			  ep_obj->coll.buffer_size);
 		return -FI_EINVAL;
+	}
 
 	/* Bind all STD EP objects to the coll object */
 	ep_obj->coll.rx_cmdq = ep_obj->rxc->rx_cmdq;
@@ -4398,8 +5086,11 @@ int cxip_coll_enable(struct cxip_ep *ep)
 	ep->ep.collective = &cxip_collective_ops;
 	ep_obj->coll.enabled = true;
 
+	dlist_init(&ep_obj->coll.root_retry_list);
+	dlist_init(&ep_obj->coll.leaf_rdma_get_list);
+
 	cxip_coll_init_metrics();
-	cxip_coll_trace_init();
+	cxip_coll_trace_init(ep_obj);
 	return FI_SUCCESS;
 }
 
@@ -4420,4 +5111,350 @@ int cxip_coll_disable(struct cxip_ep_obj *ep_obj)
 	ep_obj->coll.eq = NULL;
 
 	return FI_SUCCESS;
+}
+
+static void free_root_rdma_buffers(struct cxip_ep_obj *ep_obj)
+{
+	/* safely free collectives rdma root buffers, pay 1 time wait penalty */
+	if(ep_obj->coll.root_rdma_get_data_p) {
+		usleep(CXIP_COLL_MAX_RETRY_USEC * CXIP_COLL_MAX_LEAF_TIMEOUT_MULT);
+		/* safe to free buffer */
+		TRACE_JOIN("%s unmap/free root rdma_get_data_p %p\n",
+			__func__, ep_obj->coll.root_rdma_get_data_p);
+		free(ep_obj->coll.root_rdma_get_data_p);
+		if(ep_obj->coll.root_rdma_get_md) {
+			TRACE_JOIN("%s unmap/free root rdma_get_md %p\n",
+				__func__, ep_obj->coll.root_rdma_get_md);
+			cxip_unmap(ep_obj->coll.root_rdma_get_md);
+		}
+
+	}
+
+}
+static int _root_rdma_get_setup(struct cxip_join_state *jstate)
+{
+	struct cxip_ep_obj *ep_obj;
+	struct cxip_coll_mc *mc_obj;
+	struct cxip_domain *dom;
+	struct cxip_md *cxip_md;
+	uint8_t *buf;
+	uint32_t len = (sizeof(struct red_pkt_64) * CXIP_COLL_MAX_CONCUR);
+	int lock_held=0, ret=0;
+	uint64_t iova=0, lac=0;
+	struct cxip_txc_hpc *txc;
+	struct red_pkt_64 *pkt_p;
+	uint32_t *data, index=0, tag=0xdead;
+
+	if(!jstate) {
+		TRACE_DEBUG("%s: Bad input params!\n", __func__);
+		return FI_EINVAL;
+	}
+	ep_obj = jstate->ep_obj;
+	mc_obj = jstate->mc_obj;
+	dom = ep_obj->domain;
+	if(ep_obj->coll.root_rdma_get_data_p) {
+		TRACE_DEBUG("%s Copy rdma get base pntr mcast_id %x\n",
+			__func__, mc_obj->mcast_addr);
+		mc_obj->root_rdma_get_data_p = ep_obj->coll.root_rdma_get_data_p;
+		mc_obj->root_rdma_get_md = ep_obj->coll.root_rdma_get_md;
+		mc_obj->rdma_get_lac_va_tx = ep_obj->coll.rdma_get_lac_va_tx;
+		TRACE_DEBUG("%s: rdma get base pntr %p\n", __func__,
+			mc_obj->root_rdma_get_data_p);
+		TRACE_DEBUG("%s: final lac|va %16lx\n", __func__,
+			mc_obj->rdma_get_lac_va_tx);
+		return FI_SUCCESS;
+	}
+	ep_obj->coll.rdma_get_lac_va_tx = 0;
+	ep_obj->coll.root_rdma_get_data_p = calloc(1, len);
+	mc_obj->root_rdma_get_data_p = ep_obj->coll.root_rdma_get_data_p;
+	buf = ep_obj->coll.root_rdma_get_data_p;
+	if(!buf) {
+		TRACE_DEBUG("%s: Unable to calloc rdma get base pointer\n", __func__);
+		return FI_ENOMEM;
+	}
+	pkt_p = (struct red_pkt_64 *)buf;
+	/* Init the root buffers with a known pattern */
+	for (index=0; index<CXIP_COLL_MAX_CONCUR; index++) {
+		data = (uint32_t *)&pkt_p[index];
+		data[0] = (tag<<16);
+		data[0] |= index;
+		TRACE_DEBUG("%s: pkt addr %p index %d data[0] - %08x\n",
+			__func__, data, index, data[0]);
+	}
+	TRACE_DEBUG("%s: rdma get base pntr %p mcast_id %x\n",
+		__func__, ((void *)buf), mc_obj->mcast_addr);
+	/* setup code needs to be envoked holding the endpoint lock */
+	lock_held = ofi_genlock_held(&ep_obj->lock);
+	TRACE_DEBUG("%s: ep lock held status %d\n", __func__, lock_held);
+	if(!lock_held)
+		ofi_genlock_lock(&ep_obj->lock);
+
+	ret = cxip_map(dom, buf, len, CXI_MAP_READ, 0, &ep_obj->coll.root_rdma_get_md);
+	if (ret != FI_SUCCESS) {
+		TRACE_DEBUG("%s: cxip_map() failed! %d\n", __func__, ret);
+		if(!lock_held)
+			ofi_genlock_unlock(&ep_obj->lock);
+		return ret;
+	} else
+		TRACE_DEBUG("%s: cxip_map() success! %d\n", __func__, ret);
+
+	/* we unmap it in _close_mc */
+	cxip_md = ep_obj->coll.root_rdma_get_md;
+	mc_obj->root_rdma_get_md = cxip_md;
+	iova = CXI_VA_TO_IOVA(cxip_md->md, buf);
+	/* Build the LAC used by the leafs, first save the virtual address */
+	ep_obj->coll.rdma_get_lac_va_tx = iova;
+	TRACE_DEBUG("%s: virtual address %16lx\n", __func__, iova);
+	/* we use default protocol, so all we need is the LAC, stuff that in the upper 3 bits,0-7 ordinal */
+	lac = cxip_md->md->lac;
+	TRACE_DEBUG("%s: LAC %16lx\n", __func__, lac);
+	ep_obj->coll.rdma_get_lac_va_tx |= (lac<<61);
+	mc_obj->rdma_get_lac_va_tx = ep_obj->coll.rdma_get_lac_va_tx;
+	TRACE_DEBUG("%s: final lac|va %16lx\n", __func__, ep_obj->coll.rdma_get_lac_va_tx);
+	txc = container_of(ep_obj->txc, struct cxip_txc_hpc, base);
+	ret = cxip_rdzv_pte_src_req_alloc(txc->rdzv_pte, cxip_md->md->lac);
+	if (ret != FI_SUCCESS) {
+		TRACE_DEBUG("%s: cxip_rdzv_pte_src_req_alloc() failed! %d\n",
+			__func__, ret);
+		if(!lock_held)
+			ofi_genlock_unlock(&ep_obj->lock);
+		return ret;
+	} else
+		TRACE_DEBUG("%s: cxip_rdzv_pte_src_req_alloc() success! %d\n",
+			__func__, ret);
+
+	if(!lock_held)
+		ofi_genlock_unlock(&ep_obj->lock);
+
+
+	return FI_SUCCESS;
+}
+static int _leaf_rdma_get_setup(struct cxip_join_state *jstate)
+{
+	struct cxip_ep_obj *ep_obj = jstate->ep_obj;
+	struct cxip_coll_mc *mc_obj = jstate->mc_obj;
+	uint32_t len = (sizeof(struct red_pkt_64) * CXIP_COLL_MAX_CONCUR);
+	struct cxip_domain *dom = ep_obj->domain;
+	uint8_t *buf;
+	int ret;
+
+	if(!jstate) {
+		TRACE_DEBUG("%s: Bad input params!\n", __func__);
+		return FI_EINVAL;
+	}
+	/* alloc leaf rdma get dest buffers */
+	mc_obj->leaf_rdma_get_data_p = calloc(1, len);
+	buf = mc_obj->leaf_rdma_get_data_p;
+	if(!buf) {
+		TRACE_DEBUG("%s: Unable to calloc RDMA get base pointer\n", __func__);
+		return FI_ENOMEM;
+	}
+	TRACE_DEBUG("%s: leaf rdma get dest buffers allocated mcast_id %x\n",
+		__func__, mc_obj->mcast_addr);
+	/* map the local buffer for the read */
+	ret = cxip_map(dom, buf, len, CXI_MAP_WRITE, 0, &mc_obj->leaf_rdma_get_md);
+	if (ret != FI_SUCCESS)
+		TRACE_DEBUG("%s: cxip_map() failed! %d\n", __func__, ret);
+	else
+		TRACE_DEBUG("%s: cxip_map() success! %d\n", __func__, ret);
+
+	return FI_SUCCESS;
+}
+
+int leaf_rdma_get_callback(struct cxip_req *req, const union c_event *evt);
+static int _leaf_rdma_get(struct cxip_coll_reduction *reduction)
+{
+	int lock_held = 0, ret = FI_SUCCESS, red_id = 0, av_set_idx = 0, len = 0;
+	int red_op __attribute__((unused));
+	struct cxip_ep_obj *ep_obj;
+	struct cxip_coll_mc *mc_obj;
+	struct cxip_av_set *av_set_obj;
+	struct cxip_addr dest_caddr;
+	fi_addr_t dest_addr;
+	struct c_full_dma_cmd dma_cmd = {};
+	struct cxip_req *req;
+	struct cxip_txc *txc;
+	struct cxip_md *cxip_md;
+	uint8_t *buf, lac = 0;
+	uint32_t rdzv_idx = 0;
+	union c_fab_addr dfa;
+	uint8_t idx_ext = 0;
+	uint64_t local_addr;
+	uint64_t rem_offset;
+	union cxip_match_bits mb = {};
+	uint16_t vni = 0;
+	struct red_pkt_64 *get_pkt_64_p;
+
+	red_id = reduction->red_id;
+	red_op = reduction->accum.red_op;
+	ep_obj = reduction->mc_obj->ep_obj;
+	mc_obj = reduction->mc_obj;
+	ep_obj = mc_obj->ep_obj;
+	av_set_obj = mc_obj->av_set_obj;
+	txc = ep_obj->txc;
+	get_pkt_64_p = (struct red_pkt_64 *)mc_obj->leaf_rdma_get_data_p;
+	if(!get_pkt_64_p) {
+		TRACE_DEBUG("%s: leaf rdma get base pntr is NULL\n", __func__);
+		TRACE_DEBUG("%s: alloc is in leaf_rdma_get_setup\n", __func__);
+		return FI_ENOMEM;
+	}
+	buf = (uint8_t *)&get_pkt_64_p[red_id].pkt;
+	len = sizeof(struct red_pkt_64);
+	/* check the lac sent from root before we do anything */
+	if(!mc_obj->rdma_get_lac_va_rx) {
+		TRACE_DEBUG("%s: Invalid RDMA_GET_LAC_VA_RX %016lx\n",
+			__func__, mc_obj->rdma_get_lac_va_rx);
+		return FI_EINVAL;
+	}
+	TRACE_DEBUG("%s: starting leaf rdma_get mc_addr %x red_id %d red_op %d\n",
+		__func__, mc_obj->mcast_addr, red_id, red_op);
+	/* rdma_get code needs to be envoked holding the endpoint lock */
+	lock_held = ofi_genlock_held(&ep_obj->lock);
+	TRACE_DEBUG("%s: ep lock held status %d\n", __func__, lock_held);
+	if(!lock_held)
+		ofi_genlock_lock(&ep_obj->lock);
+	/* init the recv buffer */
+	memset(buf,0,len);
+	/* figure out the root network address */
+	av_set_idx = reduction->mc_obj->hwroot_idx;
+	dest_addr = av_set_obj->fi_addr_ary[av_set_idx];
+	ret = cxip_av_lookup_addr(ep_obj->av, dest_addr, &dest_caddr);
+	if (ret != FI_SUCCESS) {
+		TRACE_DEBUG("%s: Failed to find root address\n", __func__);
+		goto unlock;
+	}
+	TRACE_DEBUG("%s: dest_addr nic %d pid %d\n", __func__, dest_caddr.nic, dest_caddr.pid);
+	/* get a tx evtq handle needed for the rdma read */
+	req = cxip_evtq_req_alloc(&txc->tx_evtq, false, txc);
+	if (!req) {
+		TRACE_DEBUG("%s: Failed to get a tx eq handle \n", __func__);
+		ret = FI_EBUSY;
+		goto unlock;
+	}
+	/* set the callback for the get */
+	req->cb = leaf_rdma_get_callback;
+	req->rma.txc = txc;
+	req->rma.reduction = reduction;
+	req->type = CXIP_REQ_RMA;
+	/* fill in the dma req */
+	cxip_md = mc_obj->leaf_rdma_get_md;
+	dma_cmd.command.cmd_type = C_CMD_TYPE_DMA;
+	dma_cmd.command.opcode = C_CMD_GET;
+	dma_cmd.event_send_disable = 1;
+	TRACE_DEBUG("%s: RDMA_GET_LAC_VA_RX %016lx\n", __func__, mc_obj->rdma_get_lac_va_rx);
+	/* lac is in upper 3 bits, this came in from the recv message path at
+	 * cxip_zbcoll_recv_cb, it is the user_data variable passed in and copied to rdma_get_lac_va_rx
+	 */
+	lac = (uint8_t)((mc_obj->rdma_get_lac_va_rx & 0xE000000000000000) >> 61);
+	/* build the dfa */
+	rdzv_idx = txc->domain->iface->dev->info.rdzv_get_idx;
+	mb.rdzv_lac = lac;
+	mb.coll_get = 1;
+	dma_cmd.match_bits = mb.raw;
+	dma_cmd.user_ptr = (uint64_t)req;
+	cxi_build_dfa(dest_caddr.nic, dest_caddr.pid,
+		txc->pid_bits, rdzv_idx, &dfa, &idx_ext);
+	dma_cmd.dfa = dfa;
+	dma_cmd.index_ext = idx_ext;
+	local_addr = CXI_VA_TO_IOVA(cxip_md->md,buf);
+	/* VA of the root buffer, 56 bit remote offset */
+	rem_offset = ((mc_obj->rdma_get_lac_va_rx & 0x00FFFFFFFFFFFFFF) +
+		(red_id * sizeof(struct red_pkt_64)));
+	dma_cmd.lac = lac;
+	dma_cmd.local_addr = local_addr;
+	dma_cmd.remote_offset = rem_offset;
+	dma_cmd.request_len = len;
+	if (ep_obj->av_auth_key)
+		vni = dest_caddr.vni;
+	else
+		vni = ep_obj->auth_key.vni;
+	TRACE_DEBUG("%s: vni %d\n", __func__, vni);
+	dma_cmd.eq = cxip_evtq_eqn(&txc->tx_evtq);
+	/* Enqueue the DMA get command */
+	ret = cxip_txc_emit_dma(txc, vni,
+			cxip_ofi_to_cxi_tc(cxip_env.rget_tc),
+			CXI_TC_TYPE_DEFAULT, NULL, 0, &dma_cmd, 0);
+	if (ret != FI_SUCCESS) {
+		TRACE_DEBUG("%s: cxip_txc_emit_dma() failed! %d\n", __func__, ret);
+		goto free_mem;
+	} else
+		TRACE_DEBUG("%s: cxip_txc_emit_dma() success! %d\n", __func__, ret);
+
+	reduction->rdma_get_sent = true;
+	TRACE_DEBUG("%s: rdma_get was posted for red_id %d red_op %d completed!\n",
+		__func__, red_id, red_op);
+	/* if we successfully launched a dma, the callback will free the request and the tx credits */
+	goto unlock;
+
+free_mem:
+	cxip_unmap(mc_obj->leaf_rdma_get_md);
+	cxip_evtq_req_free(req);
+unlock:
+	if(!lock_held)
+		ofi_genlock_unlock(&ep_obj->lock);
+	TRACE_DEBUG("%s: ret = %d\n", __func__, ret);
+	return ret;
+}
+int leaf_rdma_get_callback(struct cxip_req *req, const union c_event *evt)
+{
+	int event_rc = cxi_event_rc(evt);
+	struct cxip_txc *txc = NULL;
+	struct red_pkt_64 *get_pkt_64_p = NULL;
+	uint8_t red_id;
+	struct red_pkt *root_pkt;
+	struct cxip_coll_reduction *reduction;
+	struct cxip_coll_mc *mc_obj;
+
+	if(!req || !evt) {
+		TRACE_DEBUG("%s: Bad input params!\n", __func__);
+		return FI_EINVAL;
+	}
+	event_rc = cxi_event_rc(evt);
+	switch(evt->hdr.event_type) {
+	case C_EVENT_SEND:
+		if (event_rc == C_RC_OK) {
+			TRACE_DEBUG("%s: Good status after rdma get C_EVENT_SEND\n",
+				__func__);
+		} else
+			TRACE_DEBUG("%s: Bad status after rdma get C_EVENT_SEND %d\n",
+				__func__, event_rc);
+		break;
+	case C_EVENT_ACK:
+		if (event_rc == C_RC_OK) {
+			TRACE_DEBUG("%s: Good status after rdma get C_EVENT_ACK\n", __func__);
+		} else
+			TRACE_DEBUG("%s: Bad status after rdma get C_EVENT_ACK %d\n",
+				__func__, event_rc);
+		break;
+	case C_EVENT_REPLY:
+		if (event_rc == C_RC_OK) {
+			TRACE_DEBUG("%s: Good stat after rget C_EVENT_REPLY - ts:%016lx\n",
+				__func__, ofi_gettime_us());
+			txc = req->rma.txc;
+			reduction = req->rma.reduction;
+			mc_obj = reduction->mc_obj;
+			red_id = reduction->red_id;
+			/* print the dest rd buffer */
+			get_pkt_64_p = (struct red_pkt_64 *)mc_obj->leaf_rdma_get_data_p;
+			root_pkt = (struct red_pkt *)&get_pkt_64_p[red_id].pkt;
+			_dump_red_pkt(root_pkt, "leaf rdma get callback", "rdma");
+			reduction->rdma_get_cb_rc = C_RC_OK;
+			reduction->rdma_get_completed = true;
+			TRACE_DEBUG("%s: rdma_get_completed for mc_addr %x red_id %d\n",
+				__func__, mc_obj->mcast_addr, red_id);
+		} else {
+			txc = req->rma.txc;
+			reduction = req->rma.reduction;
+			red_id = reduction->red_id;
+			reduction->rdma_get_cb_rc = event_rc;
+			reduction->rdma_get_completed = true;
+			TRACE_DEBUG("%s: Bad stat after rget red_id %d C_EVENT_REPLY %d\n",
+				__func__, red_id,event_rc);
+		}
+		/* free the tx credits and the request */
+		cxip_txc_otx_reqs_dec(txc);
+		cxip_evtq_req_free(req);
+		break;
+	}
+	return 0;
 }

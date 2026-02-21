@@ -141,7 +141,6 @@ struct smr_pend_entry {
 };
 
 struct smr_cmd_ctx {
-	struct dlist_entry entry;
 	struct fi_peer_rx_entry *rx_entry;
 	struct smr_ep *ep;
 	struct smr_cmd cmd;
@@ -230,10 +229,10 @@ struct smr_ep {
 	struct smr_tx_fs	*tx_fs;
 	struct dlist_entry	sar_list;
 	struct dlist_entry	ipc_cpy_pend_list;
-	struct dlist_entry	unexp_cmd_list;
 	size_t			min_multi_recv_size;
 
 	int			ep_idx;
+	bool			user_setname;
 	enum ofi_shm_p2p_type	p2p_type;
 	struct smr_sock_info	*sock_info;
 	void			*dsa_context;
@@ -246,8 +245,8 @@ struct smr_ep {
 static inline int smr_mmap_name(char *shm_name, const char *ep_name,
 				uint64_t msg_id)
 {
-	return snprintf(shm_name, SMR_NAME_MAX - 1, "%s_%ld",
-			ep_name, msg_id);
+	return snprintf(shm_name, SMR_NAME_MAX - 1, "%s_%" PRIu64,
+			ep_name, (uint64_t)(msg_id));
 }
 
 int smr_endpoint(struct fid_domain *domain, struct fi_info *info,

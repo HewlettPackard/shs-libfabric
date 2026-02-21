@@ -184,18 +184,17 @@ static int rxm_av_add_peers(struct rxm_av *av, const void *addr, size_t count,
 		if (!peer)
 			goto err;
 
-		if (user_ids) {
+		cur_fi_addr = (fi_addr) ? fi_addr[i] :
+			ofi_av_lookup_fi_addr(&av->util_av, cur_addr);
+
+		if (user_ids)
 			peer->fi_addr = user_ids[i];
-		} else {
-			peer->fi_addr =
-				fi_addr ? fi_addr[i] :
-					  ofi_av_lookup_fi_addr(&av->util_av,
-								cur_addr);
-		}
+		else
+			peer->fi_addr = cur_fi_addr;
 
 		/* lookup can fail if prior AV insertion failed */
 		if (peer->fi_addr != FI_ADDR_NOTAVAIL)
-			rxm_set_av_context(av, peer->fi_addr, peer);
+			rxm_set_av_context(av, cur_fi_addr, peer);
 	}
 	return 0;
 
@@ -226,6 +225,7 @@ static int rxm_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr,
 	struct dlist_entry *item;
 	struct rxm_av *av;
 	ssize_t i;
+	int ret = FI_SUCCESS;
 
 	if (flags)
 		return -FI_EINVAL;
@@ -242,11 +242,14 @@ static int rxm_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr,
 	for (i = count - 1; i >= 0; i--) {
 		FI_INFO(av->util_av.prov, FI_LOG_AV, "fi_addr %" PRIu64 "\n",
 			fi_addr[i]);
+		if (!ofi_bufpool_ibuf_is_valid(av->util_av.av_entry_pool,
+					       fi_addr[i])) {
+			ret = -FI_EINVAL;
+			continue;
+		}
+
 		av_entry = ofi_bufpool_get_ibuf(av->util_av.av_entry_pool,
 						fi_addr[i]);
-		if (!av_entry)
-			continue;
-
 		if (av->util_av.remove_handler) {
 			/* The remove_handler may call back into the AV to
 			 * remove the provider's reference on the peer address.
@@ -281,7 +284,7 @@ static int rxm_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr,
 	}
 	ofi_genlock_unlock(&av->util_av.lock);
 
-	return 0;
+	return ret;
 }
 
 static int rxm_av_insert(struct fid_av *av_fid, const void *addr, size_t count,

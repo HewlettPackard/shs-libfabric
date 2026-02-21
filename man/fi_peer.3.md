@@ -424,10 +424,7 @@ The data structures to support peer SRXs are defined as follows:
 ```
 struct fid_peer_srx;
 
-/* Castable to dlist_entry */
 struct fi_peer_rx_entry {
-    struct fi_peer_rx_entry *next;
-    struct fi_peer_rx_entry *prev;
     struct fi_peer_srx *srx;
     fi_addr_t addr;
     size_t msg_size;
@@ -516,7 +513,7 @@ These calls are invoked by the peer provider to obtain the receive buffer(s)
 where an incoming message should be placed.  The peer provider will pass in
 the relevant fields to request a matching rx_entry from the owner.  If source
 addressing is required, the addr will be passed in; otherwise, the address will
-be set to FI_ADDR_NOT_AVAIL.
+be set to FI_ADDR_NOTAVAIL.
 The msg_size field indicates the received message size.
 This field may be needed by the owner when handling FI_MULTI_RECV or FI_PEEK.
 The owner will set the peer_entry->msg_size field on get_msg/tag() for the owner

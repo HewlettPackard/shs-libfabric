@@ -52,9 +52,8 @@ DEFINE_LIST(sock_name_list);
 pthread_mutex_t sock_list_lock = PTHREAD_MUTEX_INITIALIZER;
 int smr_global_ep_idx = 0;
 
-int smr_setname(fid_t fid, void *addr, size_t addrlen)
+static int smr_setname_internal(struct smr_ep *ep, void *addr, size_t addrlen)
 {
-	struct smr_ep *ep;
 	char *name;
 
 	if (addrlen > SMR_NAME_MAX) {
@@ -63,7 +62,6 @@ int smr_setname(fid_t fid, void *addr, size_t addrlen)
 		return -FI_EINVAL;
 	}
 
-	ep = container_of(fid, struct smr_ep, util_ep.ep_fid.fid);
 	if (ep->region) {
 		FI_WARN(&smr_prov, FI_LOG_EP_CTRL,
 			"Cannot set name after EP has been enabled\n");
@@ -78,6 +76,16 @@ int smr_setname(fid_t fid, void *addr, size_t addrlen)
 		free((void *) ep->name);
 	ep->name = name;
 	return 0;
+}
+
+int smr_setname(fid_t fid, void *addr, size_t addrlen)
+{
+	struct smr_ep *ep;
+
+	ep = container_of(fid, struct smr_ep, util_ep.ep_fid.fid);
+	ep->user_setname = true;
+
+	return smr_setname_internal(ep, addr, addrlen);
 }
 
 int smr_getname(fid_t fid, void *addr, size_t *addrlen)
@@ -308,6 +316,7 @@ static int smr_format_ipc(struct smr_cmd *cmd, void *ptr, size_t len,
 {
 	int ret;
 	void *base;
+	size_t base_length;
 
 	cmd->msg.hdr.op_src = smr_src_ipc;
 	cmd->msg.hdr.src_data = smr_get_offset(smr, resp);
@@ -317,9 +326,11 @@ static int smr_format_ipc(struct smr_cmd *cmd, void *ptr, size_t len,
 
 	ret = ofi_hmem_get_base_addr(cmd->msg.data.ipc_info.iface, ptr,
 				     len, &base,
-				     &cmd->msg.data.ipc_info.base_length);
+				     &base_length);
 	if (ret)
 		return ret;
+
+	cmd->msg.data.ipc_info.base_length = (uint64_t)base_length;
 
 	ret = ofi_hmem_get_handle(cmd->msg.data.ipc_info.iface, base,
 				  cmd->msg.data.ipc_info.base_length,
@@ -791,7 +802,6 @@ static int smr_ep_close(struct fid *fid)
 {
 	struct smr_ep *ep;
 	struct smr_pend_entry *pend;
-	struct smr_cmd_ctx *cmd_ctx;
 
 	ep = container_of(fid, struct smr_ep, util_ep.ep_fid.fid);
 
@@ -807,20 +817,15 @@ static int smr_ep_close(struct fid *fid)
 		smr_free_sock_info(ep);
 	}
 
+	ofi_genlock_lock(&ep->util_ep.lock);
 	while (!dlist_empty(&ep->sar_list)) {
 		dlist_pop_front(&ep->sar_list, struct smr_pend_entry, pend,
 				entry);
-		if (pend->rx_entry)
+		if (pend->rx_entry && !pend->cmd_ctx)
 			ep->srx->owner_ops->free_entry(pend->rx_entry);
 		ofi_buf_free(pend);
 	}
-
-	while (!dlist_empty(&ep->unexp_cmd_list)) {
-		dlist_pop_front(&ep->unexp_cmd_list, struct smr_cmd_ctx,
-				cmd_ctx, entry);
-		ep->srx->owner_ops->free_entry(cmd_ctx->rx_entry);
-		ofi_buf_free(cmd_ctx);
-	}
+	ofi_genlock_unlock(&ep->util_ep.lock);
 
 	if (ep->srx) {
 		/* shm is an owner provider */
@@ -1058,7 +1063,6 @@ static int smr_discard(struct fi_peer_rx_entry *rx_entry)
 		resp->status = SMR_STATUS_SUCCESS;
 	}
 
-	dlist_remove(&cmd_ctx->entry);
 	ofi_buf_free(cmd_ctx);
 
 	return FI_SUCCESS;
@@ -1123,6 +1127,7 @@ static int smr_ep_ctrl(struct fid *fid, int command, void *arg)
 	struct smr_ep *ep;
 	struct smr_av *av;
 	struct fid_ep *srx;
+	char tmp_name[SMR_NAME_MAX];
 	int ret;
 
 	ep = container_of(fid, struct smr_ep, util_ep.ep_fid.fid);
@@ -1136,15 +1141,25 @@ static int smr_ep_ctrl(struct fid *fid, int command, void *arg)
 		if (!ep->util_ep.av)
 			return -FI_ENOAV;
 
-		attr.name = smr_no_prefix(ep->name);
 		attr.rx_count = ep->rx_size;
 		attr.tx_count = ep->tx_size;
 		attr.flags = ep->util_ep.caps & FI_HMEM ?
 				SMR_FLAG_HMEM_ENABLED : 0;
 
+create_shm:
+		attr.name = smr_no_prefix(ep->name);
 		ret = smr_create(&smr_prov, &av->smr_map, &attr, &ep->region);
-		if (ret)
-			return ret;
+		if (ret == -FI_EBUSY && !ep->user_setname) {
+			snprintf(tmp_name, SMR_NAME_MAX - 1, "%s:%u",
+				 ep->name, ofi_generate_seed());
+			FI_WARN(&smr_prov, FI_LOG_EP_CTRL,
+				"SMR %s busy, retry with name %s\n",
+				ep->name, tmp_name);
+
+			if (strcmp(tmp_name, ep->name) &&
+			    !smr_setname_internal(ep, tmp_name, SMR_NAME_MAX))
+				goto create_shm;
+		}
 
 		if (ep->util_ep.caps & FI_HMEM || smr_env.disable_cma) {
 			ep->region->cma_cap_peer = SMR_VMA_CAP_OFF;
@@ -1301,7 +1316,8 @@ int smr_endpoint(struct fid_domain *domain, struct fi_info *info,
 	ret = smr_endpoint_name(ep, name, info->src_addr, info->src_addrlen);
 	if (ret)
 		goto free;
-	ret = smr_setname(&ep->util_ep.ep_fid.fid, name, SMR_NAME_MAX);
+
+	ret = smr_setname_internal(ep, name, SMR_NAME_MAX);
 	if (ret)
 		goto free;
 
@@ -1323,7 +1339,6 @@ int smr_endpoint(struct fid_domain *domain, struct fi_info *info,
 
 	dlist_init(&ep->sar_list);
 	dlist_init(&ep->ipc_cpy_pend_list);
-	dlist_init(&ep->unexp_cmd_list);
 
 	ep->min_multi_recv_size = SMR_INJECT_SIZE;
 

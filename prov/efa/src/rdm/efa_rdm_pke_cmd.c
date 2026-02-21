@@ -55,7 +55,7 @@ int efa_rdm_pke_fill_data(struct efa_rdm_pke *pkt_entry,
 	if (efa_both_support_zero_hdr_data_transfer(pkt_entry->ep, ope->peer)) {
 		/* zero hdr transfer only happens for eager msg (non-tagged) pkt */
 		assert(pkt_type == EFA_RDM_EAGER_MSGRTM_PKT);
-		pkt_entry->flags |= EFA_RDM_PKE_SEND_TO_USER_RECV_QP;
+		pkt_entry->flags |= EFA_RDM_PKE_SEND_TO_USER_RECV_QP | EFA_RDM_PKE_HAS_NO_BASE_HDR;
 	}
 
 	/* Only 3 categories of packets has data_size and data_offset:
@@ -399,9 +399,7 @@ void efa_rdm_pke_handle_data_copied(struct efa_rdm_pke *pkt_entry)
  */
 void efa_rdm_pke_handle_tx_error(struct efa_rdm_pke *pkt_entry, int prov_errno)
 {
-	struct efa_rdm_peer *peer;
 	struct efa_rdm_ope *txe;
-	struct efa_rdm_ope *rxe;
 	struct efa_rdm_ep *ep;
 
 	int err = to_fi_errno(prov_errno);
@@ -414,8 +412,7 @@ void efa_rdm_pke_handle_tx_error(struct efa_rdm_pke *pkt_entry, int prov_errno)
 	ep = pkt_entry->ep;
 	efa_rdm_ep_record_tx_op_completed(ep, pkt_entry);
 
-	peer = efa_rdm_ep_get_peer(ep, pkt_entry->addr);
-	if (!peer) {
+	if (!pkt_entry->peer) {
 		/*
 		 * If peer is NULL, it means the peer has been removed from AV.
 		 * In this case, ignore this error completion.
@@ -428,41 +425,44 @@ void efa_rdm_pke_handle_tx_error(struct efa_rdm_pke *pkt_entry, int prov_errno)
 	switch (pkt_entry->ope->type) {
 	case EFA_RDM_TXE:
 		txe = pkt_entry->ope;
-		if (!(pkt_entry->flags & EFA_RDM_PKE_SEND_TO_USER_RECV_QP) && efa_rdm_pke_get_base_hdr(pkt_entry)->type == EFA_RDM_HANDSHAKE_PKT) {
-			if (prov_errno == EFA_IO_COMP_STATUS_REMOTE_ERROR_RNR) {
-				/*
-				 * handshake should always be queued for RNR
-				 */
-				assert(!(peer->flags & EFA_RDM_PEER_HANDSHAKE_QUEUED));
-				peer->flags |= EFA_RDM_PEER_HANDSHAKE_QUEUED;
-				dlist_insert_tail(&peer->handshake_queued_entry,
+		if (efa_rdm_pkt_type_of(pkt_entry) == EFA_RDM_HANDSHAKE_PKT) {
+			switch (prov_errno) {
+				case EFA_IO_COMP_STATUS_REMOTE_ERROR_RNR:
+					/**
+					 * handshake should always be queued for RNR
+					 */
+					assert(!(pkt_entry->peer->flags & EFA_RDM_PEER_HANDSHAKE_QUEUED));
+					pkt_entry->peer->flags |= EFA_RDM_PEER_HANDSHAKE_QUEUED;
+					dlist_insert_tail(&pkt_entry->peer->handshake_queued_entry,
 						  &efa_rdm_ep_domain(ep)->handshake_queued_peer_list);
-			} else if (prov_errno != EFA_IO_COMP_STATUS_REMOTE_ERROR_BAD_DEST_QPN) {
-				/*
-				 * If prov_errno is EFA_IO_COMP_STATUS_REMOTE_ERROR_BAD_DEST_QPN
-				 * the peer has been destroyed. Which is normal, as peer does not
-				 * always need a handshake packet to perform its duty. (For example,
-				 * if a peer just want to sent 1 message to the ep, it does not need
-				 * handshake.) In this case, it is safe to ignore this error
-				 * completion. In all other cases, we write an eq entry because
-				 * there is no application operation associated with handshake.
-				 */
-				char ep_addr_str[OFI_ADDRSTRLEN], peer_addr_str[OFI_ADDRSTRLEN];
-				size_t buflen=0;
-
-				memset(&ep_addr_str, 0, sizeof(ep_addr_str));
-				memset(&peer_addr_str, 0, sizeof(peer_addr_str));
-				buflen = sizeof(ep_addr_str);
-				efa_base_ep_raw_addr_str(&ep->base_ep, ep_addr_str, &buflen);
-				buflen = sizeof(peer_addr_str);
-				efa_base_ep_get_peer_raw_addr_str(&ep->base_ep, pkt_entry->addr, peer_addr_str, &buflen);
-				EFA_WARN(FI_LOG_CQ,
-					"While sending a handshake packet, an error occurred."
-					"  Our address: %s, peer address: %s\n",
+					break;
+				case EFA_IO_COMP_STATUS_REMOTE_ERROR_BAD_DEST_QPN: /* fall through */
+				case FI_EFA_ERR_ESTABLISHED_RECV_UNRESP: /* fall through */
+				case FI_EFA_ERR_UNESTABLISHED_RECV_UNRESP: /* fall through */
+				case EFA_IO_COMP_STATUS_REMOTE_ERROR_ABORT: /* fall through */
+				case EFA_IO_COMP_STATUS_LOCAL_ERROR_UNRESP_REMOTE: /* fall through */
+				case EFA_IO_COMP_STATUS_LOCAL_ERROR_UNREACH_REMOTE:
+					/**
+					 * This means the peer has been destroyed. Which is normal, as peer does not
+					 * always need a handshake packet to perform its duty. (For example,
+					 * if a peer just want to sent 1 message to the ep, it does not need
+					 * handshake.) In this case, it is safe to ignore this error
+					 * completion. In all other cases, we write an eq entry because
+					 * there is no application operation associated with handshake.
+					 */
+					break;
+				default:
+				{
+					EFA_RDM_GET_EP_ADDR_STR(ep, ep_addr_str);
+					EFA_RDM_GET_PEER_ADDR_STR(ep, pkt_entry->peer, peer_addr_str);
+					EFA_WARN(FI_LOG_CQ,
+						"While sending a handshake packet, an error occurred."
+						"  Our address: %s, peer address: %s\n",
 					ep_addr_str, peer_addr_str);
-				efa_base_ep_write_eq_error(&ep->base_ep, err, prov_errno);
+					efa_base_ep_write_eq_error(&ep->base_ep, err, prov_errno);
+					break;
+				}
 			}
-
 			efa_rdm_pke_release_tx(pkt_entry);
 			efa_rdm_txe_release(txe);
 
@@ -493,12 +493,7 @@ void efa_rdm_pke_handle_tx_error(struct efa_rdm_pke *pkt_entry, int prov_errno)
 				 * packets include all REQ, DATA) thus shoud be queued for RNR
 				 * only if application wants EFA to manager resource.
 				 */
-				efa_rdm_ep_queue_rnr_pkt(ep, &txe->queued_pkts, pkt_entry);
-				if (!(txe->internal_flags & EFA_RDM_OPE_QUEUED_RNR)) {
-					txe->internal_flags |= EFA_RDM_OPE_QUEUED_RNR;
-					dlist_insert_tail(&txe->queued_entry,
-							  &efa_rdm_ep_domain(ep)->ope_queued_list);
-				}
+				efa_rdm_ep_queue_rnr_pkt(ep, pkt_entry);
 			}
 		} else {
 			efa_rdm_txe_handle_error(pkt_entry->ope, err, prov_errno);
@@ -506,7 +501,6 @@ void efa_rdm_pke_handle_tx_error(struct efa_rdm_pke *pkt_entry, int prov_errno)
 		}
 		break;
 	case EFA_RDM_RXE:
-		rxe = pkt_entry->ope;
 		if (prov_errno == EFA_IO_COMP_STATUS_REMOTE_ERROR_RNR) {
 			/*
 			 * This packet is associated with a recv operation, (such packets
@@ -514,12 +508,7 @@ void efa_rdm_pke_handle_tx_error(struct efa_rdm_pke *pkt_entry, int prov_errno)
 			 * is regardless value of ep->handle_resource_management, because
 			 * resource management is only applied to send operation.
 			 */
-			efa_rdm_ep_queue_rnr_pkt(ep, &rxe->queued_pkts, pkt_entry);
-			if (!(rxe->internal_flags & EFA_RDM_OPE_QUEUED_RNR)) {
-				rxe->internal_flags |= EFA_RDM_OPE_QUEUED_RNR;
-				dlist_insert_tail(&rxe->queued_entry,
-						  &efa_rdm_ep_domain(ep)->ope_queued_list);
-			}
+			efa_rdm_ep_queue_rnr_pkt(ep, pkt_entry);
 		} else {
 			efa_rdm_rxe_handle_error(pkt_entry->ope, err, prov_errno);
 			efa_rdm_pke_release_tx(pkt_entry);
@@ -537,8 +526,8 @@ void efa_rdm_pke_handle_tx_error(struct efa_rdm_pke *pkt_entry, int prov_errno)
 /**
  * @brief handle the event that a send request has been completed
  *
- * send completion means that EFA device has acknowledge that data has been sent,
- * therefore buffer can be safely reused.
+ * send completion means that EFA device has acknowledge that data has been
+ * sent, therefore buffer can be safely reused.
  *
  * This function will call each packet type's send completion handler,
  * then release the packet entry.
@@ -550,17 +539,18 @@ void efa_rdm_pke_handle_send_completion(struct efa_rdm_pke *pkt_entry)
 	struct efa_rdm_ep *ep;
 
 	ep = pkt_entry->ep;
+
+	efa_rdm_ep_record_tx_op_completed(ep, pkt_entry);
 	/*
-	 * For a send completion, pkt_entry->addr can be FI_ADDR_NOTAVAIL in 3 situations:
+	 * For a send completion, pkt_entry->peer can be NULL in 3 situations:
 	 * 1. the pkt_entry is used for a local read operation
 	 * 2. a new peer with same gid+qpn was inserted to av, thus the peer was removed from AV.
 	 * 3. application removed the peer's address from av.
 	 * In 1, we should proceed. For 2 and 3, the send completion should be ignored.
 	 */
-	if (pkt_entry->addr == FI_ADDR_NOTAVAIL &&
+	if (!pkt_entry->peer &&
 	    !(pkt_entry->flags & EFA_RDM_PKE_LOCAL_READ)) {
 		EFA_WARN(FI_LOG_CQ, "ignoring send completion of a packet to a removed peer.\n");
-		efa_rdm_ep_record_tx_op_completed(ep, pkt_entry);
 		efa_rdm_pke_release_tx(pkt_entry);
 		return;
 	}
@@ -568,14 +558,18 @@ void efa_rdm_pke_handle_send_completion(struct efa_rdm_pke *pkt_entry)
 	/* These pkts are eager pkts withour hdrs */
 	if (pkt_entry->flags & EFA_RDM_PKE_SEND_TO_USER_RECV_QP) {
 		efa_rdm_pke_handle_eager_rtm_send_completion(pkt_entry);
-		efa_rdm_ep_record_tx_op_completed(ep, pkt_entry);
 		efa_rdm_pke_release_tx(pkt_entry);
 		return;
 	}
 
 	/* Start handling pkts with hdrs */
-	switch (efa_rdm_pke_get_base_hdr(pkt_entry)->type) {
+	switch (efa_rdm_pkt_type_of(pkt_entry)) {
 	case EFA_RDM_HANDSHAKE_PKT:
+		efa_rdm_tracepoint(handshake_send_completion,
+				   (size_t) pkt_entry, pkt_entry->pkt_size,
+				   pkt_entry->ope->msg_id,
+				   (size_t) pkt_entry->ope->cq_entry.op_context,
+				   pkt_entry->ope->total_len);
 		efa_rdm_txe_release(pkt_entry->ope);
 		break;
 	case EFA_RDM_CTS_PKT:
@@ -652,16 +646,16 @@ void efa_rdm_pke_handle_send_completion(struct efa_rdm_pke *pkt_entry)
 	case EFA_RDM_DC_LONGCTS_MSGRTM_PKT:
 	case EFA_RDM_DC_LONGCTS_TAGRTM_PKT:
 	case EFA_RDM_DC_LONGCTS_RTW_PKT:
-		/* no action to be taken here
-		 * For non-dc version of these packet types,
-		 * this is the place to increase bytes_acked or
-		 * write tx completion.
-		 * For dc, tx completion will always be
-		 * written upon receving the receipt packet
-		 * Moreoever, because receipt can arrive
-		 * before send completion, we cannot take
-		 * any action on txe here.
+		/* For DC packets, use efa_outstanding_tx_ops to track TX completions
+		 * instead of bytes_acked to avoid issues with unset payload_size.
+		 * Note: efa_rdm_ep_record_tx_op_completed() above decrements efa_outstanding_tx_ops,
+		 * so this check must come after that call.
+		 * Only release TXE when both TX ops complete and receipt is received.
 		 */
+		assert(pkt_entry->ope);
+		if (efa_rdm_txe_dc_ready_for_release(pkt_entry->ope))
+			efa_rdm_txe_release(pkt_entry->ope);
+		break;
 	case EFA_RDM_READ_NACK_PKT:
 		/* no action needed for NACK packet */
 		break;
@@ -673,8 +667,6 @@ void efa_rdm_pke_handle_send_completion(struct efa_rdm_pke *pkt_entry)
 		efa_base_ep_write_eq_error(&ep->base_ep, FI_EIO, FI_EFA_ERR_INVALID_PKT_TYPE);
 		return;
 	}
-
-	efa_rdm_ep_record_tx_op_completed(ep, pkt_entry);
 	efa_rdm_pke_release_tx(pkt_entry);
 }
 
@@ -736,57 +728,11 @@ void efa_rdm_pke_handle_rx_error(struct efa_rdm_pke *pkt_entry, int prov_errno)
 	efa_rdm_pke_release_rx(pkt_entry);
 }
 
-static
-fi_addr_t efa_rdm_pke_insert_addr(struct efa_rdm_pke *pkt_entry, void *raw_addr)
-{
-	int ret;
-	fi_addr_t rdm_addr;
-	struct efa_rdm_ep *ep;
-	struct efa_rdm_base_hdr *base_hdr;
-
-	ep = pkt_entry->ep;
-
-	base_hdr = efa_rdm_pke_get_base_hdr(pkt_entry);
-	if (base_hdr->version < EFA_RDM_PROTOCOL_VERSION) {
-		char self_raw_addr_str[OFI_ADDRSTRLEN];
-		size_t buflen = OFI_ADDRSTRLEN;
-
-		efa_base_ep_raw_addr_str(&ep->base_ep, self_raw_addr_str, &buflen);
-		EFA_WARN(FI_LOG_CQ,
-			"Host %s received a packet with invalid protocol version %d.\n"
-			"This host can only support protocol version %d and above.\n",
-			self_raw_addr_str, base_hdr->version, EFA_RDM_PROTOCOL_VERSION);
-		efa_base_ep_write_eq_error(&ep->base_ep, FI_EIO, FI_EFA_ERR_INVALID_PKT_TYPE);
-		fprintf(stderr, "Host %s received a packet with invalid protocol version %d.\n"
-			"This host can only support protocol version %d and above. %s:%d\n",
-			self_raw_addr_str, base_hdr->version, EFA_RDM_PROTOCOL_VERSION, __FILE__, __LINE__);
-		abort();
-	}
-
-	assert(base_hdr->type >= EFA_RDM_REQ_PKT_BEGIN);
-
-	/*
-	 * The message is from a peer through efa device, which means peer is not local
-	 * or shm is disabled for transmission.
-	 * We shouldn't insert shm av anyway in this case.
-	 * Also, calling fi_av_insert internally inside progress engine is violating
-	 * Libfabric standard for FI_AV_TABLE.
-	 */
-	ret = efa_av_insert_one(ep->base_ep.av, (struct efa_ep_addr *)raw_addr,
-	                        &rdm_addr, 0, NULL, false);
-	if (OFI_UNLIKELY(ret != 0)) {
-		efa_base_ep_write_eq_error(&ep->base_ep, ret, FI_EFA_ERR_AV_INSERT);
-		return -1;
-	}
-
-	return rdm_addr;
-}
-
 void efa_rdm_pke_proc_received_no_hdr(struct efa_rdm_pke *pkt_entry, bool has_imm_data, uint32_t imm_data)
 {
 	struct efa_rdm_ope *rxe = pkt_entry->ope;
 
-	assert(pkt_entry->alloc_type == EFA_RDM_PKE_FROM_USER_RX_POOL);
+	assert(pkt_entry->flags & EFA_RDM_PKE_HAS_NO_BASE_HDR);
 	assert(rxe);
 
 	if (has_imm_data) {
@@ -794,7 +740,8 @@ void efa_rdm_pke_proc_received_no_hdr(struct efa_rdm_pke *pkt_entry, bool has_im
 		rxe->cq_entry.data = imm_data;
 	}
 
-	rxe->addr = pkt_entry->addr;
+	rxe->peer = pkt_entry->peer;
+	dlist_insert_tail(&rxe->peer_entry, &rxe->peer->rxe_list);
 	rxe->total_len = pkt_entry->pkt_size;
 	rxe->cq_entry.len = pkt_entry->pkt_size;
 
@@ -808,6 +755,7 @@ void efa_rdm_pke_proc_received_no_hdr(struct efa_rdm_pke *pkt_entry, bool has_im
  *
  * @param[in]	ep		endpoint
  * @param[in]	pkt_entry	received packet entry
+ * @param[in]	peer		peer struct of the sender
  */
 void efa_rdm_pke_proc_received(struct efa_rdm_pke *pkt_entry)
 {
@@ -912,195 +860,3 @@ void efa_rdm_pke_proc_received(struct efa_rdm_pke *pkt_entry)
 		return;
 	}
 }
-
-/**
- * @brief Read peer raw address from packet header and insert the peer in AV.
- * @param ep Pointer to RDM endpoint
- * @param pkt_entry Pointer to packet entry
- * @returns Peer address, or FI_ADDR_NOTAVIL if the packet header does not include raw address
- */
-fi_addr_t efa_rdm_pke_determine_addr(struct efa_rdm_pke *pkt_entry)
-{
-	struct efa_rdm_base_hdr *base_hdr;
-
-	base_hdr = efa_rdm_pke_get_base_hdr(pkt_entry);
-	if (base_hdr->type >= EFA_RDM_REQ_PKT_BEGIN && efa_rdm_pke_get_req_raw_addr(pkt_entry)) {
-		void *raw_addr;
-		raw_addr = efa_rdm_pke_get_req_raw_addr(pkt_entry);
-		assert(raw_addr);
-		return efa_rdm_pke_insert_addr(pkt_entry, raw_addr);
-	}
-
-	return FI_ADDR_NOTAVAIL;
-}
-
-#if ENABLE_DEBUG
-
-/*
- *  Functions used to dump packets
- */
-
-#define EFA_RDM_PKE_DUMP_DATA_LEN 64
-
-static
-void efa_rdm_pke_print_handshake(char *prefix,
-			         struct efa_rdm_handshake_hdr *handshake_hdr)
-{
-	EFA_DBG(FI_LOG_EP_DATA,
-	       "%s EFA RDM HANDSHAKE packet - version: %" PRIu8
-	       " flags: %x\n", prefix, handshake_hdr->version,
-	       handshake_hdr->flags);
-
-	EFA_DBG(FI_LOG_EP_DATA,
-	       "%s EFA RDM HANDSHAKE packet, nextra_p3: %d\n",
-	       prefix, handshake_hdr->nextra_p3);
-}
-
-static
-void efa_rdm_pke_print_cts(char *prefix, struct efa_rdm_cts_hdr *cts_hdr)
-{
-	EFA_DBG(FI_LOG_EP_DATA,
-	       "%s EFA RDM CTS packet - version: %"	PRIu8
-	       " flags: %x tx_id: %" PRIu32
-	       " rx_id: %"	   PRIu32
-	       " window: %"	   PRIu64
-	       "\n", prefix, cts_hdr->version, cts_hdr->flags,
-	       cts_hdr->send_id, cts_hdr->recv_id, cts_hdr->recv_length);
-}
-
-static void efa_rdm_pke_print_eager_tag_rtm(char *prefix,
-					    struct efa_rdm_pke *pkt_entry)
-{
-	struct efa_rdm_rtm_base_hdr *base_hdr;
-	struct efa_rdm_eager_tagrtm_hdr *tag_rtm_hdr;
-	struct efa_rdm_req_opt_raw_addr_hdr *raw_addr_hdr;
-	char str[EFA_RDM_PKE_DUMP_DATA_LEN * 4];
-	size_t str_len = EFA_RDM_PKE_DUMP_DATA_LEN * 4, l;
-	char raw_gid_str[INET6_ADDRSTRLEN];
-	char *opt_hdr;
-	uint8_t *data;
-	int i;
-
-	str[str_len - 1] = '\0';
-
-	base_hdr = (struct efa_rdm_rtm_base_hdr *) pkt_entry->wiredata;
-	tag_rtm_hdr = (struct efa_rdm_eager_tagrtm_hdr *) pkt_entry->wiredata;
-
-	EFA_DBG(FI_LOG_EP_DATA,
-		"%s EFA RDM RTM packet - type: %" PRIu32 "  version: %" PRIu8
-		" flags: %x peer: %" PRIu64 " msg_id: %" PRIu32 " tag: %" PRIu64
-		"\n",
-		prefix, base_hdr->type, base_hdr->version, base_hdr->flags,
-		pkt_entry->addr, base_hdr->msg_id, tag_rtm_hdr->tag);
-
-	/* logic copied from efa_rdm_pke_init_req_hdr_common */
-	opt_hdr = (char *) base_hdr +
-		  efa_rdm_pke_get_req_base_hdr_size(pkt_entry);
-	if (base_hdr->flags & EFA_RDM_REQ_OPT_RAW_ADDR_HDR) {
-		raw_addr_hdr = (struct efa_rdm_req_opt_raw_addr_hdr *) opt_hdr;
-		if (!inet_ntop(AF_INET6, raw_addr_hdr->raw_addr, raw_gid_str,
-			       INET6_ADDRSTRLEN)) {
-			EFA_DBG(FI_LOG_EP_DATA,
-				"could not parse raw address \n");
-		} else {
-			EFA_DBG(FI_LOG_EP_DATA, "raw addr len: %d gid %s\n",
-				raw_addr_hdr->addr_len, raw_gid_str);
-		}
-		opt_hdr += EFA_RDM_REQ_OPT_RAW_ADDR_HDR_SIZE;
-	}
-
-	if (base_hdr->flags & EFA_RDM_REQ_OPT_CQ_DATA_HDR) {
-		struct efa_rdm_req_opt_cq_data_hdr *cq_data_hdr;
-		cq_data_hdr = (struct efa_rdm_req_opt_cq_data_hdr *) opt_hdr;
-		EFA_DBG(FI_LOG_EP_DATA, "cq_data %lu\n", cq_data_hdr->cq_data);
-		opt_hdr += sizeof(*cq_data_hdr);
-	}
-
-	if (base_hdr->flags & EFA_RDM_PKT_CONNID_HDR) {
-		struct efa_rdm_req_opt_connid_hdr *connid_hdr;
-		connid_hdr = (struct efa_rdm_req_opt_connid_hdr *) opt_hdr;
-		EFA_DBG(FI_LOG_EP_DATA, "sender_connid: %d\n",
-			connid_hdr->connid);
-		opt_hdr += sizeof(*connid_hdr);
-	}
-
-	if (pkt_entry->payload) {
-		data = (uint8_t *) pkt_entry->payload;
-	} else {
-		data = (uint8_t *) opt_hdr;
-	}
-
-	l = snprintf(str, str_len, ("\tdata:    "));
-	for (i = 0; i < MIN(pkt_entry->payload_size, EFA_RDM_PKE_DUMP_DATA_LEN);
-	     i++)
-		l += snprintf(str + l, str_len - l, "%02x ", data[i]);
-	EFA_DBG(FI_LOG_EP_DATA, "%s\n", str);
-}
-
-static
-void efa_rdm_pke_print_data(char *prefix, struct efa_rdm_pke *pkt_entry)
-{
-	struct efa_rdm_ctsdata_hdr *data_hdr;
-	char str[EFA_RDM_PKE_DUMP_DATA_LEN * 4];
-	size_t str_len = EFA_RDM_PKE_DUMP_DATA_LEN * 4, l, hdr_size;
-	uint8_t *data;
-	int i;
-
-	str[str_len - 1] = '\0';
-
-	data_hdr = efa_rdm_pke_get_ctsdata_hdr(pkt_entry);
-
-	EFA_DBG(FI_LOG_EP_DATA,
-	       "%s EFA RDM CTSDATA packet -  version: %" PRIu8
-	       " flags: %x rx_id: %" PRIu32
-	       " seg_size: %"	     PRIu64
-	       " seg_offset: %"	     PRIu64
-	       "\n", prefix, data_hdr->version, data_hdr->flags,
-	       data_hdr->recv_id, data_hdr->seg_length,
-	       data_hdr->seg_offset);
-
-	hdr_size = sizeof(struct efa_rdm_ctsdata_hdr);
-	if (data_hdr->flags & EFA_RDM_PKT_CONNID_HDR) {
-		hdr_size += sizeof(struct efa_rdm_ctsdata_opt_connid_hdr);
-		EFA_DBG(FI_LOG_EP_DATA,
-		       "sender_connid: %d\n",
-		       data_hdr->connid_hdr->connid);
-	}
-
-	data = (uint8_t *)pkt_entry->wiredata + hdr_size;
-
-	l = snprintf(str, str_len, ("\tdata:    "));
-	for (i = 0; i < MIN(data_hdr->seg_length, EFA_RDM_PKE_DUMP_DATA_LEN);
-	     i++)
-		l += snprintf(str + l, str_len - l, "%02x ",
-			      data[i]);
-	EFA_DBG(FI_LOG_EP_DATA, "%s\n", str);
-}
-
-void efa_rdm_pke_print(struct efa_rdm_pke *pkt_entry, char *prefix)
-{
-	struct efa_rdm_base_hdr *hdr;
-
-	hdr = efa_rdm_pke_get_base_hdr(pkt_entry);
-
-	switch (hdr->type) {
-	case EFA_RDM_HANDSHAKE_PKT:
-		efa_rdm_pke_print_handshake(prefix, efa_rdm_pke_get_handshake_hdr(pkt_entry));
-		break;
-	case EFA_RDM_CTS_PKT:
-		efa_rdm_pke_print_cts(prefix, efa_rdm_pke_get_cts_hdr(pkt_entry));
-		break;
-	case EFA_RDM_CTSDATA_PKT:
-		efa_rdm_pke_print_data(prefix, pkt_entry);
-		break;
-	case EFA_RDM_EAGER_TAGRTM_PKT:
-		efa_rdm_pke_print_eager_tag_rtm(prefix, pkt_entry);
-		break;
-	default:
-		EFA_WARN(FI_LOG_CQ, "Cannot print pkt type %d\n",
-			 hdr->type);
-		assert(0);
-		return;
-	}
-}
-#endif

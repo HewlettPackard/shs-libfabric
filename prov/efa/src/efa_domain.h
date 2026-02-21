@@ -11,6 +11,7 @@
 #include "ofi_hmem.h"
 #include "ofi_util.h"
 #include "ofi_lock.h"
+#include "ofi_atom.h"
 
 enum efa_domain_info_type {
 	EFA_INFO_RDM,
@@ -20,15 +21,12 @@ enum efa_domain_info_type {
 
 struct efa_domain {
 	struct util_domain	util_domain;
-	struct fi_info		*shm_info;
 	struct fid_domain	*shm_domain;
 	struct efa_device	*device;
 	struct ibv_pd		*ibv_pd;
 	struct fi_info		*info;
 	struct efa_fabric	*fabric;
 	struct ofi_mr_cache	*cache;
-	struct efa_qp		**qp_table;
-	size_t			qp_table_sz_m1;
 	size_t			mtu_size;
 	size_t			addrlen;
 	bool 			mr_local;
@@ -36,9 +34,9 @@ struct efa_domain {
 	struct ofi_genlock	srx_lock; /* shared among peer providers */
 	struct efa_ah		*ah_map;
 	/* Total count of ibv memory registrations */
-	size_t ibv_mr_reg_ct;
+	ofi_atomic64_t ibv_mr_reg_ct;
 	/* Total size of memory registrations (in bytes) */
-	size_t ibv_mr_reg_sz;
+	ofi_atomic64_t ibv_mr_reg_sz;
 	/* info_type is used to distinguish between the rdm, dgram and
 	 * efa-direct paths */
 	enum efa_domain_info_type info_type;
@@ -55,6 +53,14 @@ struct efa_domain {
 	struct dlist_entry peer_backoff_list;
 	/* list of #efa_rdm_peer that will retry posting handshake pkt */
 	struct dlist_entry handshake_queued_peer_list;
+	/* LRU list of AH entries in this domain */
+	struct dlist_entry ah_lru_list;
+	/* Function pointer for internal buffer memory registration */
+	int (*internal_buf_mr_regv)(struct fid_domain *domain_fid,
+				    const struct iovec *iov, size_t count,
+				    uint64_t access, uint64_t offset,
+				    uint64_t requested_key, uint64_t flags,
+				    struct fid_mr **mr_fid, void *context);
 };
 
 extern struct dlist_entry g_efa_domain_list;

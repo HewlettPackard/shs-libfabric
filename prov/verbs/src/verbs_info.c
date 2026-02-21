@@ -319,6 +319,7 @@ int vrb_set_rai(uint32_t addr_format, void *src_addr, size_t src_addrlen,
 		rai->ai_flags |= RAI_FAMILY;
 		break;
 	case FI_SOCKADDR:
+	case FI_SOCKADDR_IP:
 		rai->ai_port_space = RDMA_PS_TCP;
 		if (src_addr && src_addrlen) {
 			rai->ai_family = ((struct sockaddr *)src_addr)->sa_family;
@@ -532,6 +533,56 @@ static const char *vrb_link_layer_str(uint8_t link_layer)
 	}
 }
 
+static void vrb_get_device_bus_attr(const char *dev_name, struct fi_bus_attr *bus_attr)
+{
+	char *path = NULL;
+	char *real_path;
+	char *pci;
+	int n;
+	uint32_t a = 0, b = 0, c = 0, d = 0;
+
+	if (asprintf(&path, "/sys/class/infiniband/%s/device", dev_name) < 0 ||
+	    !path) {
+		VRB_WARN(FI_LOG_FABRIC,
+			 "Unable to allocate memory for PCI device path\n");
+		return;
+	}
+
+	real_path = realpath(path, NULL);
+	if (!real_path) {
+		VRB_WARN_ERRNO(FI_LOG_FABRIC, "realpath");
+		goto free_path;
+	}
+
+	pci = strrchr(real_path, '/');
+	if (!pci) {
+		VRB_WARN(FI_LOG_FABRIC,
+			 "Unable to find PCI device for %s\n", dev_name);
+		goto free_real_path;
+	}
+
+	pci++; /* skip '/' */
+
+	n = sscanf(pci, "%x:%x:%x.%x", &a, &b, &c, &d);
+	if (n != 4) {
+		VRB_WARN(FI_LOG_FABRIC,
+			 "Failed to parse pci bus address: %s\n", pci);
+		goto free_real_path;
+	}
+
+	bus_attr->attr.pci.domain_id = a;
+	bus_attr->attr.pci.bus_id = b;
+	bus_attr->attr.pci.device_id = c;
+	bus_attr->attr.pci.function_id = d;
+	bus_attr->bus_type = FI_BUS_PCI;
+
+free_real_path:
+	free(real_path);
+
+free_path:
+	free(path);
+}
+
 static int vrb_get_device_attrs(struct ibv_context *ctx,
 				   struct fi_info *info, uint32_t protocol)
 {
@@ -676,6 +727,8 @@ static int vrb_get_device_attrs(struct ibv_context *ctx,
 		return -FI_ENOMEM;
 	}
 
+	vrb_get_device_bus_attr(dev_name, info->nic->bus_attr);
+
 	return 0;
 }
 
@@ -727,10 +780,12 @@ static bool vrb_hmem_supported(const char *dev_name)
 	if (ofi_hmem_p2p_disabled())
 		return false;
 
-	if (vrb_gl_data.peer_mem_support && strstr(dev_name, "mlx"))
+	if (vrb_gl_data.peer_mem_support && (strstr(dev_name, "mlx") ||
+					     strstr(dev_name, "bnxt_re")))
 		return true;
 
-	if (vrb_gl_data.dmabuf_support && strstr(dev_name, "mlx5"))
+	if (vrb_gl_data.dmabuf_support && (strstr(dev_name, "mlx") ||
+					   strstr(dev_name, "bnxt_re")))
 		return true;
 
 	return false;
@@ -765,7 +820,7 @@ static int vrb_alloc_info(struct ibv_context *ctx, struct fi_info **info,
 		fi->caps = VERBS_MSG_CAPS;
 		*(fi->tx_attr) = verbs_tx_attr;
 		*(fi->rx_attr) = verbs_rx_attr;
-		fi->addr_format = FI_SOCKADDR_IB;
+		fi->addr_format = FI_SOCKADDR;
 		break;
 	case FI_EP_DGRAM:
 		fi->caps = VERBS_DGRAM_CAPS;
@@ -1414,6 +1469,12 @@ static int vrb_init_info(struct dlist_entry *verbs_devs,
 			continue;
 		}
 
+		if (vrb_gl_data.device_name &&
+		    strncasecmp(ctx_list[i]->device->name,
+				vrb_gl_data.device_name,
+				strlen(vrb_gl_data.device_name)))
+			continue;
+
 		for (j = 0; j < dom_count; j++) {
 			if (ep_type[j]->type == FI_EP_MSG &&
 			    !vrb_device_has_ipoib_addr(verbs_devs, ctx_list[i]->device->name)) {
@@ -1425,11 +1486,6 @@ static int vrb_init_info(struct dlist_entry *verbs_devs,
 					ctx_list[i]->device->name);
 				continue;
 			}
-			if (vrb_gl_data.device_name &&
-			    strncasecmp(ctx_list[i]->device->name,
-					vrb_gl_data.device_name,
-					strlen(vrb_gl_data.device_name)))
-				continue;
 
 			ret = vrb_alloc_info(ctx_list[i], &fi, ep_type[j]);
 			if (ret)
@@ -1916,27 +1972,50 @@ int vrb_getinfo(uint32_t version, const char *node, const char *service,
 		   struct fi_info **info)
 {
 	static bool init_done = false;
+	struct dlist_entry tmp_devs;
+	struct fi_info *tmp_info = NULL;
 	int ret;
 
 	vrb_prof_func_start(__func__);
-	ofi_mutex_lock(&vrb_info_mutex);
-	if (!init_done || flags & FI_RESCAN) {
-		if (!init_done) {
-			ret = vrb_init();
-			if (ret) {
-				ofi_mutex_unlock(&vrb_info_mutex);
-				goto out;
-			}
-			init_done = true;
-		}
-
-		ret = vrb_init_info(&vrb_devs, &vrb_util_prov.info);
+	ofi_mutex_lock(&vrb_init_mutex);
+	if (!init_done) {
+		ret = vrb_init();
 		if (ret) {
-			ofi_mutex_unlock(&vrb_info_mutex);
+			ofi_mutex_unlock(&vrb_init_mutex);
+			goto out;
+		}
+		init_done = true;
+
+		ofi_mutex_lock(&vrb_info_mutex);
+		ret = vrb_init_info(&vrb_devs, &vrb_util_prov.info);
+		ofi_mutex_unlock(&vrb_info_mutex);
+		if (ret) {
+			ofi_mutex_unlock(&vrb_init_mutex);
+			goto out;
+		}
+		flags &= ~FI_RESCAN; /* No rescan needed */
+	}
+	ofi_mutex_unlock(&vrb_init_mutex);
+
+	if (flags & FI_RESCAN) {
+		dlist_init(&tmp_devs);
+		ret = vrb_init_info(&tmp_devs, &tmp_info);
+		if (ret) {
+			vrb_devs_free(&tmp_devs);
+			fi_freeinfo(tmp_info);
 			goto out;
 		}
 	}
 
+	ofi_mutex_lock(&vrb_info_mutex);
+	if (flags & FI_RESCAN) {
+		/* Swap the lists while holding the lock */
+		vrb_devs_free(&vrb_devs);
+		dlist_splice_tail(&vrb_devs, &tmp_devs);
+
+		fi_freeinfo(vrb_util_prov.info);
+		vrb_util_prov.info = tmp_info;
+	}
 	ret = vrb_get_match_infos(&vrb_devs, version, node, service,
 				     flags, hints,
 				     vrb_util_prov.info, info);

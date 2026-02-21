@@ -245,7 +245,7 @@ void cxip_rxc_recv_req_cleanup(struct cxip_rxc *rxc)
 	start = ofi_gettime_ms();
 	while (cxip_rxc_orx_reqs_get(rxc)) {
 		sched_yield();
-		cxip_evtq_progress(&rxc->rx_evtq);
+		cxip_evtq_progress(&rxc->rx_evtq, false);
 
 		if (ofi_gettime_ms() - start > CXIP_REQ_CLEANUP_TO) {
 			CXIP_WARN("Timeout waiting for outstanding requests.\n");
@@ -324,8 +324,8 @@ void cxip_rxc_disable(struct cxip_rxc *rxc)
 	}
 }
 
-int cxip_rxc_emit_dma(struct cxip_rxc_hpc *rxc, uint16_t vni,
-		      enum cxi_traffic_class tc,
+int cxip_rxc_emit_dma(struct cxip_rxc_hpc *rxc, struct cxip_cmdq *cmdq,
+		      uint16_t vni, enum cxi_traffic_class tc,
 		      enum cxi_traffic_class_type tc_type,
 		      struct c_full_dma_cmd *dma, uint64_t flags)
 {
@@ -341,27 +341,27 @@ int cxip_rxc_emit_dma(struct cxip_rxc_hpc *rxc, uint16_t vni,
 	}
 
 	/* Ensure correct traffic class is used. */
-	ret = cxip_cmdq_cp_set(rxc->tx_cmdq, vni, tc, tc_type);
+	ret = cxip_cmdq_cp_set(cmdq, vni, tc, tc_type);
 	if (ret) {
 		RXC_WARN(rxc, "Failed to set traffic class: %d:%s\n", ret,
 			 fi_strerror(-ret));
 		return ret;
 	}
 
-	ret = cxip_cmdq_emit_dma(rxc->tx_cmdq, dma, flags);
+	ret = cxip_cmdq_emit_dma(cmdq, dma, flags);
 	if (ret) {
 		RXC_WARN(rxc, "Failed to emit dma command: %d:%s\n", ret,
 			 fi_strerror(-ret));
 		return ret;
 	}
 
-	cxip_txq_ring(rxc->tx_cmdq, 0, 1);
+	cxip_txq_ring(cmdq, 0, 1);
 
 	return FI_SUCCESS;
 }
 
-int cxip_rxc_emit_idc_msg(struct cxip_rxc_hpc *rxc, uint16_t vni,
-			  enum cxi_traffic_class tc,
+int cxip_rxc_emit_idc_msg(struct cxip_rxc_hpc *rxc, struct cxip_cmdq *cmdq,
+			  uint16_t vni, enum cxi_traffic_class tc,
 			  enum cxi_traffic_class_type tc_type,
 			  const struct c_cstate_cmd *c_state,
 			  const struct c_idc_msg_hdr *msg, const void *buf,
@@ -379,22 +379,21 @@ int cxip_rxc_emit_idc_msg(struct cxip_rxc_hpc *rxc, uint16_t vni,
 	}
 
 	/* Ensure correct traffic class is used. */
-	ret = cxip_cmdq_cp_set(rxc->tx_cmdq, vni, tc, tc_type);
+	ret = cxip_cmdq_cp_set(cmdq, vni, tc, tc_type);
 	if (ret) {
 		RXC_WARN(rxc, "Failed to set traffic class: %d:%s\n", ret,
 			 fi_strerror(-ret));
 		return ret;
 	}
 
-	ret = cxip_cmdq_emit_idc_msg(rxc->tx_cmdq, c_state, msg, buf, len,
-				     flags);
+	ret = cxip_cmdq_emit_idc_msg(cmdq, c_state, msg, buf, len, flags);
 	if (ret) {
 		RXC_WARN(rxc, "Failed to emit idc_msg command: %d:%s\n", ret,
 			 fi_strerror(-ret));
 		return ret;
 	}
 
-	cxip_txq_ring(rxc->tx_cmdq, 0, 1);
+	cxip_txq_ring(cmdq, 0, 1);
 
 	return FI_SUCCESS;
 }
@@ -439,15 +438,15 @@ struct cxip_rxc *cxip_rxc_calloc(struct cxip_ep_obj *ep_obj, void *context)
 	rxc->domain = ep_obj->domain;
 	rxc->min_multi_recv = CXIP_EP_MIN_MULTI_RECV;
 	rxc->state = RXC_DISABLED;
-	rxc->msg_offload = cxip_env.msg_offload;
+	rxc->msg_offload = ep_obj->domain->msg_offload;
 	rxc->max_tx = cxip_env.sw_rx_tx_init_max;
 	rxc->attr = ep_obj->rx_attr;
 	rxc->hmem = !!(rxc->attr.caps & FI_HMEM);
 	rxc->pid_bits = ep_obj->domain->iface->dev->info.pid_bits;
 	cxip_rxc_orx_reqs_init(rxc);
-
-	rxc->sw_ep_only = cxip_env.rx_match_mode ==
+	rxc->sw_ep_only = ep_obj->domain->rx_match_mode ==
 					CXIP_PTLTE_SOFTWARE_MODE;
+
 	cxip_msg_counters_init(&rxc->cntrs);
 
 	/* Derived initialization/overrides */

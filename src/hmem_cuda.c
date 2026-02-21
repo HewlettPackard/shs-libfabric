@@ -270,7 +270,7 @@ int cuda_set_sync_memops(void *ptr)
 	ofi_cuGetErrorName(cu_result, &cu_error_name);
 	ofi_cuGetErrorString(cu_result, &cu_error_str);
 	FI_WARN(&core_prov, FI_LOG_CORE,
-		"Failed to perform cuPointerSetAttribute: %s:%s\n",
+		"Failed to set CU_POINTER_ATTRIBUTE_SYNC_MEMOPS: %s:%s\n",
 		cu_error_name, cu_error_str);
 	return -FI_EINVAL;
 }
@@ -786,7 +786,7 @@ int cuda_hmem_init(void)
 			"this variable is not checked. (default: true)");
 
 	fi_param_define(NULL, "hmem_cuda_use_dmabuf", FI_PARAM_BOOL,
-			"Use dma-buf for sharing buffer with hardware. (default:true)");
+			"Use dma-buf for sharing buffer with hardware. (default: true)");
 
 	ret = cuda_hmem_dl_init();
 	if (ret != FI_SUCCESS)
@@ -959,13 +959,17 @@ bool cuda_is_gdrcopy_enabled(void)
 	return cuda_attr.use_gdrcopy;
 }
 
-bool cuda_is_dmabuf_supported(void)
+bool cuda_is_dmabuf_requested(void)
 {
 	int use_dmabuf = 1;
 
 	fi_param_get_bool(NULL, "hmem_cuda_use_dmabuf", &use_dmabuf);
+	return use_dmabuf;
+}
 
-	return use_dmabuf && cuda_attr.dmabuf_supported;
+bool cuda_is_dmabuf_supported(void)
+{
+	return cuda_is_dmabuf_requested() && cuda_attr.dmabuf_supported;
 }
 
 #else
@@ -1064,6 +1068,11 @@ bool cuda_is_gdrcopy_enabled(void)
 }
 
 bool cuda_is_dmabuf_supported(void)
+{
+	return false;
+}
+
+bool cuda_is_dmabuf_requested(void)
 {
 	return false;
 }

@@ -113,45 +113,10 @@
 #define OPX_RZV_MIN_PAYLOAD_BYTES_MIN (FI_OPX_HFI1_TX_MIN_RZV_PAYLOAD_BYTES) /* Min value */
 #define OPX_RZV_MIN_PAYLOAD_BYTES_MAX (OPX_MP_EGR_MAX_PAYLOAD_BYTES_MAX + 1) /* Max value */
 
-/**
- * @brief The minimum length required to use multi-packet eager.
- */
-#ifndef OPX_MP_EGR_MIN_BYTES
-#ifndef OPX_JKR_SUPPORT
-#define OPX_MP_EGR_MIN_BYTES (4160)
-#else
-#define OPX_MP_EGR_MIN_BYTES (OPX_HFI1_PKT_SIZE + 1)
-#endif
-#endif
-
-/* The PBC length to use for a single packet in a multi-packet eager send.
-
-   This is packet payload plus the PBC plus the packet header plus
-   tail (16B only).
-
-   All packets in a multi-packet eager send will be this size, except
-   possibly the last one, which may be smaller.
-
-   This value is derived by rounding OPX_MP_EGR_MIN_BYTES down to the
-   previous multiple of 64, then adding 64 back for the PBC & packet header
-
-   NOTE: This value MUST be a multiple of 64!
-   */
-#define FI_OPX_MP_EGR_CHUNK_SIZE ((OPX_MP_EGR_MIN_BYTES & -64) + 64)
-
-/* The actual user payload __consumed__ for a full chunk is the
-   FI_OPX_MP_EGR_CHUNK_SIZE minus the PBC minus the header minus
-   the tail (16B only).
-   */
-
-#define FI_OPX_MP_EGR_CHUNK_PAYLOAD_SIZE(hfi1_type)                                                              \
-	((hfi1_type & OPX_HFI1_JKR) ? (FI_OPX_MP_EGR_CHUNK_SIZE - (8 /* PBC */ + 64 /* hdr */ + 8 /* tail */)) : \
-				      (FI_OPX_MP_EGR_CHUNK_SIZE - (8 /* PBC */ + 56 /* hdr */)))
-
-#define FI_OPX_MP_EGR_CHUNK_CREDITS (FI_OPX_MP_EGR_CHUNK_SIZE >> 6) /* PACKET CREDITS TOTAL */
-#define FI_OPX_MP_EGR_CHUNK_DWS	    (FI_OPX_MP_EGR_CHUNK_SIZE >> 2) /* PBC DWS */
-#define FI_OPX_MP_EGR_CHUNK_PAYLOAD_QWS(hfi1_type) \
-	((FI_OPX_MP_EGR_CHUNK_PAYLOAD_SIZE(hfi1_type)) >> 3) /* PAYLOAD QWS CONSUMED */
+/* Maximum Multi-packet eager chunk size. The chunk size should be at most 8K,
+   even if we're using a larger (i.e. 10K) packet MTU */
+#define OPX_MP_EGR_MAX_CHUNK_SIZE_WFR  (4096)
+#define OPX_MP_EGR_MAX_CHUNK_SIZE_CN5K (8192)
 
 /* SDMA tuning constants */
 
@@ -318,7 +283,7 @@ static inline void fi_opx_store_scb_qw(volatile uint64_t dest[8], const uint64_t
 	volatile uint64_t * const scb =
 		FI_OPX_HFI1_PIO_SCB_HEAD(opx_ep->tx->pio_scb_sop_first, pio_state);
 
-	if ((hfi1_type & (OPX_HFI1_WFR | OPX_HFI1_JKR_9B))) {
+	if ((hfi1_type & (OPX_HFI1_WFR | OPX_HFI1_MIXED_9B))) {
 		OPX_HFI1_BAR_STORE(&scb[0], (model_9B.qw0 | OPX_PBC_CR(0x1, hfi1_type) |
 OPX_PBC_LRH_DLID_TO_PBC_DLID(lrh_dlid, hfi1_type))); OPX_HFI1_BAR_STORE(&scb[1], (model_9B.hdr.qw_9B[0] | lrh_dlid));
 		OPX_HFI1_BAR_STORE(&scb[2], (model_9B.hdr.qw_9B[1] | bth_rx));
@@ -538,7 +503,9 @@ struct opx_spio_ctrl {
 	union fi_opx_hfi1_pio_state pio;	    // 1 qw
 	pthread_spinlock_t	    spio_ctrl_lock; // 4 bytes
 	uint32_t		    unused;
-	uint64_t		    unused1[6];
+	volatile uint64_t	   *credits_addr_copy;
+	uint64_t		    dummy_free_credits;
+	uint64_t		    unused1[4];
 } __attribute__((aligned(64)));
 
 /* Up to HFI1_MAX_SHARED_CTXTS of these strucutres are placed in the page of shared memory
@@ -563,9 +530,10 @@ struct opx_subcontext_ureg {
  */
 struct opx_hwcontext_ctrl {
 	pthread_spinlock_t context_lock; /* lock shared by all subctxts */
-	uint32_t	   last_egrbrf_index;
+	uint32_t	   last_egrbfr_index;
 	uint64_t	   rx_hdrq_rhf_seq; /* rhf seq for the hw hdrq shared by all subctxts */
 	uint64_t	   hdrq_head;	    /* software copy of head */
+	uint64_t	   hfi_frozen_count;
 } __attribute__((aligned(64)));
 
 /* Locking macros for shared PIO state when context sharing is in use. */
@@ -592,14 +560,15 @@ struct fi_opx_hfi1_context {
 
 	} info;
 
-	int		   fd;
+	int		   fd_cdev;
+	int		   fd_verbs;
 	opx_lid_t	   lid;
-	struct _hfi_ctrl  *ctrl;
 	enum opx_hfi1_type hfi1_type;
+	struct _hfi_ctrl  *ctrl;
 	uint32_t	   hfi_unit;
 	uint32_t	   hfi_port;
 	uint16_t	   subctxt_cnt;
-	uint16_t	   unused;
+	uint16_t	   unused[3];
 
 	uint64_t gid_hi;
 	uint64_t gid_lo;
@@ -623,17 +592,16 @@ struct fi_opx_hfi1_context {
 		int rank_inst;
 	} daos_info;
 
-	int64_t	 ref_cnt;
-	size_t	 status_lasterr;
-	time_t	 network_lost_time;
-	uint64_t status_check_next_usec;
-	uint64_t link_down_wait_time_max_sec;
-	union {
-		volatile uint64_t		       *credits_addr;
-		volatile union fi_opx_hfi1_txe_credits *credits;
-	} credits_addr_copy;
+	int64_t		   ref_cnt;
+	size_t		   status_lasterr;
+	time_t		   network_lost_time;
+	uint64_t	   status_check_next_usec;
+	uint64_t	   link_down_wait_time_max_sec;
+	volatile uint64_t *credits_addr_copy;
 
-	uint64_t dummy_free_credits;
+	uint64_t		    dummy_free_credits;
+	uint64_t		    hfi1_frozen_count; /* local copy */
+	union fi_opx_hfi1_pio_state dummy_pio_state;
 
 	/* struct ibv_context * for hfi1 direct/rdma-core only */
 	void *ibv_context;
@@ -786,29 +754,32 @@ struct opx_hfi_local_entry *fi_opx_hfi1_get_lid_local(opx_lid_t lid)
 {
 	int lid_index = opx_local_lid_index(lid);
 
-	// We should only ever be calling this function for lids that are intranode
+	// We should only ever be calling this function for lids that are shm
 	assert(lid_index != -1);
 
 	return &fi_opx_global.hfi_local_info.local_lid_entries[lid_index];
 }
 
 __OPX_FORCE_INLINE__
-int fi_opx_hfi1_get_lid_local_unit(opx_lid_t lid)
+bool opx_lid_is_shm(opx_lid_t lid)
 {
-	return fi_opx_hfi1_get_lid_local(lid)->hfi_unit;
+	return (opx_local_lid_index(lid) != -1);
 }
 
 __OPX_FORCE_INLINE__
-bool opx_lid_is_intranode(opx_lid_t lid)
+int fi_opx_hfi1_get_lid_local_unit(opx_lid_t lid)
 {
-	return (fi_opx_global.hfi_local_info.lid == lid) || (opx_local_lid_index(lid) != -1);
+	return ((fi_opx_global.hfi_local_info.lid == lid) ? fi_opx_global.hfi_local_info.hfi_unit :
+							    fi_opx_hfi1_get_lid_local(lid)->hfi_unit);
 }
 
 struct fi_opx_hfi1_context *fi_opx_hfi1_context_open(struct fid_ep *ep, uuid_t unique_job_key);
 
 int init_hfi1_rxe_state(struct fi_opx_hfi1_context *context, struct fi_opx_hfi1_rxe_state *rxe_state);
 
-void fi_opx_init_hfi_lookup();
+void opx_remove_self_lid(const int hfi_unit, const opx_lid_t lid);
+
+void fi_opx_init_hfi_lookup(bool sriov);
 
 /*
  * Shared memory transport
@@ -902,7 +873,8 @@ void opx_print_context(struct fi_opx_hfi1_context *context)
 	/*	Not printing                                Context info.rxe.uregbase                   */
 	FI_DBG(fi_opx_global.prov, FI_LOG_EP_DATA, "Context info.rxe.id                   %#X\n", context->info.rxe.id);
 
-	FI_DBG(fi_opx_global.prov, FI_LOG_EP_DATA, "Context fd                            %#X \n", context->fd);
+	FI_DBG(fi_opx_global.prov, FI_LOG_EP_DATA, "Context fd_cdev                       %#X \n", context->fd_cdev);
+	FI_DBG(fi_opx_global.prov, FI_LOG_EP_DATA, "Context fd_verbs                      %#X \n", context->fd_verbs);
 	FI_DBG(fi_opx_global.prov, FI_LOG_EP_DATA, "Context lid                           %#X \n", context->lid);
 	FI_DBG(fi_opx_global.prov, FI_LOG_EP_DATA, "Context ctrl                          %p  \n", context->ctrl);
 	FI_DBG(fi_opx_global.prov, FI_LOG_EP_DATA, "Context hfi1_type                     %#X \n", context->hfi1_type);
@@ -936,11 +908,14 @@ void opx_print_context(struct fi_opx_hfi1_context *context)
 	FI_DBG(fi_opx_global.prov, FI_LOG_EP_DATA, "Context subctxt                  	  %#X  \n", context->subctxt);
 }
 
-void opx_reset_context(struct fi_opx_ep *opx_ep, uint64_t events, const enum opx_hfi1_type hfi1_type);
+void opx_reset_context(struct fi_opx_ep *opx_ep, uint64_t events, const enum opx_hfi1_type hfi1_type,
+		       const bool ctx_sharing);
 
-void opx_link_down_update_pio_credit_addr(struct fi_opx_hfi1_context *context, struct fi_opx_ep *opx_ep);
+void opx_link_down_update_pio_credit_addr(struct fi_opx_hfi1_context *context, struct fi_opx_ep *opx_ep,
+					  const bool ctx_sharing);
 
-void opx_link_up_update_pio_credit_addr(struct fi_opx_hfi1_context *context, struct fi_opx_ep *opx_ep);
+void opx_link_up_update_pio_credit_addr(struct fi_opx_hfi1_context *context, struct fi_opx_ep *opx_ep,
+					const bool ctx_sharing);
 
 #define OPX_CONTEXT_STATUS_CHECK_INTERVAL_USEC 250000 /* 250 ms*/
 
@@ -983,7 +958,7 @@ uint64_t opx_get_hw_status_jkr(struct fi_opx_hfi1_context *context)
 
 __OPX_FORCE_INLINE__
 size_t fi_opx_context_check_status(struct fi_opx_hfi1_context *context, const enum opx_hfi1_type hfi1_type,
-				   struct fi_opx_ep *opx_ep)
+				   struct fi_opx_ep *opx_ep, const bool ctx_sharing)
 {
 	size_t	 err	= FI_SUCCESS;
 	uint64_t status = (hfi1_type & OPX_HFI1_WFR) ? opx_get_hw_status_wfr(context) : opx_get_hw_status_jkr(context);
@@ -999,7 +974,7 @@ size_t fi_opx_context_check_status(struct fi_opx_hfi1_context *context, const en
 		if (err != context->status_lasterr) {
 			context->network_lost_time = time(NULL);
 			/* Point the pio credit addr to a dummy pointer */
-			opx_link_down_update_pio_credit_addr(context, opx_ep);
+			opx_link_down_update_pio_credit_addr(context, opx_ep, ctx_sharing);
 		} else {
 			time_t now = time(NULL);
 

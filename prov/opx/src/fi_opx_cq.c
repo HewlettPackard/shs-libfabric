@@ -150,6 +150,15 @@ static int fi_opx_close_cq(fid_t fid)
 		fi_opx_lock(&opx_cq->lock);
 	}
 
+#if HAVE_HFISVC
+	if (opx_cq->use_hfisvc) {
+		ret = (*opx_cq->domain->hfisvc.completion_queue_close)(&opx_cq->hfisvc.completion_queue);
+		if (ret) {
+			goto fail;
+		}
+	}
+#endif
+
 	ret = fi_opx_fid_check(fid, FI_CLASS_CQ, "completion queue");
 	if (ret) {
 		goto fail;
@@ -269,7 +278,7 @@ struct fi_ops_cq *fi_opx_cq_select_ops(const enum fi_cq_format format, const enu
 					       fi_opx_cq_select_non_locking_runtime_ops(format, reliability, comm_caps,
 											0, ctx_sharing);
 		}
-	} else if (hfi1_type & OPX_HFI1_JKR_9B) {
+	} else if (hfi1_type & OPX_HFI1_MIXED_9B) {
 		switch (rcvhdrcnt) {
 		case 2048:
 			return lock_required ? fi_opx_cq_select_locking_2048_ops(format, reliability, comm_caps, 1,
@@ -308,6 +317,26 @@ struct fi_ops_cq *fi_opx_cq_select_ops(const enum fi_cq_format format, const enu
 										    ctx_sharing) :
 					       fi_opx_cq_select_non_locking_runtime_ops(format, reliability, comm_caps,
 											2, ctx_sharing);
+		}
+	} else if (hfi1_type & OPX_HFI1_CYR) {
+		switch (rcvhdrcnt) {
+		case 2048:
+			return lock_required ? fi_opx_cq_select_locking_2048_ops(format, reliability, comm_caps, 3,
+										 ctx_sharing) :
+					       fi_opx_cq_select_non_locking_2048_ops(format, reliability, comm_caps, 3,
+										     ctx_sharing);
+		case 8192:
+			return lock_required ? fi_opx_cq_select_locking_8192_ops(format, reliability, comm_caps, 3,
+										 ctx_sharing) :
+					       fi_opx_cq_select_non_locking_8192_ops(format, reliability, comm_caps, 3,
+										     ctx_sharing);
+		default:
+			FI_INFO(fi_opx_global.prov, FI_LOG_CQ,
+				"WARNING: non-optimal setting specified for hfi1 rcvhdrcnt.  Optimal values are 2048 and 8192\n");
+			return lock_required ? fi_opx_cq_select_locking_runtime_ops(format, reliability, comm_caps, 3,
+										    ctx_sharing) :
+					       fi_opx_cq_select_non_locking_runtime_ops(format, reliability, comm_caps,
+											3, ctx_sharing);
 		}
 	} else {
 		FI_WARN(fi_opx_global.prov, FI_LOG_CQ, "Invalid HFI type %d\n", hfi1_type);
@@ -354,13 +383,13 @@ int fi_opx_cq_open(struct fid_domain *dom, struct fi_cq_attr *attr, struct fid_c
 
 	opx_cq->ep_bind_count	  = 0;
 	opx_cq->progress.ep_count = 0;
+	opx_cq->use_hfisvc	  = 0;
 	unsigned i;
 	for (i = 0; i < OPX_CQ_MAX_ENDPOINTS; ++i) {
 		opx_cq->ep[i]	       = NULL;
 		opx_cq->progress.ep[i] = NULL;
 	}
 
-	// fi_opx_ref_init(&opx_cq->domain->fabric->node, &opx_cq->ref_cnt, "completion queue");
 	fi_opx_ref_inc(&opx_cq->domain->ref_cnt, "domain");
 
 	ofi_spin_init(&opx_cq->lock);
@@ -428,7 +457,7 @@ void				 fi_opx_cq_finalize_ops(struct fid_ep *ep)
 		opx_cq->cq_fid.ops = fi_opx_cq_select_ops(
 			opx_cq->format, opx_cq->domain->threading, fi_opx_select_reliability(opx_ep),
 			opx_ep->hfi->info.rxe.hdrq.elemcnt, opx_cq->ep_comm_caps, opx_cq->domain->data_progress,
-			OPX_HFI1_TYPE, OPX_IS_CTX_SHARING_ENABLED);
+			OPX_SW_HFI1_TYPE, OPX_IS_CTX_SHARING_ENABLED);
 	}
 
 	if (opx_ep->tx->cq && (opx_ep->tx->cq != opx_ep->rx->cq)) {
@@ -436,7 +465,7 @@ void				 fi_opx_cq_finalize_ops(struct fid_ep *ep)
 		opx_cq->cq_fid.ops = fi_opx_cq_select_ops(
 			opx_cq->format, opx_cq->domain->threading, fi_opx_select_reliability(opx_ep),
 			opx_ep->hfi->info.rxe.hdrq.elemcnt, opx_cq->ep_comm_caps, opx_cq->domain->data_progress,
-			OPX_HFI1_TYPE, OPX_IS_CTX_SHARING_ENABLED);
+			OPX_SW_HFI1_TYPE, OPX_IS_CTX_SHARING_ENABLED);
 	}
 
 	FI_DBG_TRACE(fi_opx_global.prov, FI_LOG_CQ, "(end)\n");

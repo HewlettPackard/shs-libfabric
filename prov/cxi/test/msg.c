@@ -1949,13 +1949,13 @@ static void test_fc_multi_recv(size_t xfer_len, bool progress_before_post)
 Test(msg, fc_multi_recv_rdzv, .timeout = 10)
 {
 	/* Transfer size needs to be large enough to trigger rendezvous. */
-	test_fc_multi_recv(16384, false);
+	test_fc_multi_recv(20480, false);
 }
 
 Test(msg, fc_multi_recv_rdzv_onload_ules, .timeout = 10)
 {
 	/* Transfer size needs to be large enough to trigger rendezvous. */
-	test_fc_multi_recv(16384, true);
+	test_fc_multi_recv(20480, true);
 }
 
 Test(msg, fc_no_eq_space_expected_multi_recv, .timeout = 10)
@@ -2189,6 +2189,9 @@ Test(rnr_msg, timeout)
 	send_buf = aligned_alloc(s_page_size, send_len);
 	cr_assert(send_buf);
 
+	fi_cntr_set(cxit_send_cntr, 0);
+	fi_cntr_seterr(cxit_send_cntr, 0);
+
 	for (i = 0; i < send_len; i++)
 		send_buf[i] = i + 0xa0;
 
@@ -2210,6 +2213,9 @@ Test(rnr_msg, timeout)
 		  "Invalid Error TX CQE err %d", err_cqe.err);
 	cr_assert(err_cqe.prov_errno == C_RC_ENTRY_NOT_FOUND,
 		  "Invalid Error TX CQE prov_errno %d", err_cqe.prov_errno);
+
+	cr_assert(fi_cntr_read(cxit_send_cntr) == 0, "Invalid success count");
+	cr_assert(fi_cntr_readerr(cxit_send_cntr) == 1, "RNR timeout not reported");
 
 	free(send_buf);
 }
@@ -2786,7 +2792,8 @@ Test(rnr_msg_hybrid_mr_desc, sizes_comp)
 
 static void msg_hybrid_append_test_runner(bool recv_truncation,
 					  bool byte_counts,
-					  bool cq_events)
+					  bool cq_events,
+					  bool mr_desc)
 {
 	struct cxip_ep *cxip_ep = container_of(&cxit_ep->fid, struct cxip_ep,
 					       ep.fid);
@@ -2822,7 +2829,6 @@ static void msg_hybrid_append_test_runner(bool recv_truncation,
 	ret = mr_create(send_win_len, FI_READ | FI_WRITE, 0xa, &send_key,
 			&send_window);
 	cr_assert(ret == FI_SUCCESS);
-
 	send_desc[0] = fi_mr_desc(send_window.mr);
 	cr_assert(send_desc[0] != NULL);
 
@@ -2840,7 +2846,7 @@ static void msg_hybrid_append_test_runner(bool recv_truncation,
 	msg.iov_count = 1;
 	msg.addr = FI_ADDR_UNSPEC;
 	msg.context = &ctxt[0];
-	msg.desc = recv_desc;
+	msg.desc = mr_desc ? recv_desc : NULL;
 	msg.msg_iov = &riovec;
 	riovec.iov_base = recv_window.mem;
 	riovec.iov_len = recv_win_len;
@@ -2954,6 +2960,13 @@ static void msg_hybrid_append_test_runner(bool recv_truncation,
 	ret = fi_cq_read(cxit_rx_cq, &cqe, 1);
 	cr_assert(ret == -FI_EAGAIN);
 
+	/* Verfiy that after additional progress, RX counts have not
+	 * incremented.
+	 */
+	recv_cnt = fi_cntr_read(cxit_recv_cntr);
+	cr_assert(recv_cnt == byte_counts ? trunc_byte_len : iters,
+		  "RX receive count %ld updated by software", recv_cnt);
+
 	/* Cancel append FI_MULIT_RECV buffer */
 	ret = fi_cancel(&cxit_ep->fid, &ctxt[0]);
 	cr_assert_eq(ret, FI_SUCCESS, "fi_cancel failed %d", ret);
@@ -2980,6 +2993,11 @@ static void msg_hybrid_append_test_runner(bool recv_truncation,
 	ret = fi_cq_read(cxit_rx_cq, &cqe, 1);
 	cr_assert(ret == -FI_EAGAIN);
 
+	/* Make sure unlink of FI_MULTI_RECV did not update counter */
+	recv_cnt = fi_cntr_read(cxit_recv_cntr);
+	cr_assert(recv_cnt == byte_counts ? trunc_byte_len : iters,
+		  "Unlink updated RX recieve count %ld by software", recv_cnt);
+
 	for (i = 0; i < recv_win_len; i++)
 		cr_assert_eq(send_window.mem[i], recv_window.mem[i],
 			     "data mismatch, element: (%d) %02x != %02x\n", i,
@@ -2995,17 +3013,17 @@ TestSuite(rnr_msg_append_hybrid_mr_desc,
 
 Test(rnr_msg_append_hybrid_mr_desc, no_trunc_count_events_non_comp)
 {
-	msg_hybrid_append_test_runner(false, false, false);
+	msg_hybrid_append_test_runner(false, false, false, true);
 }
 
 Test(rnr_msg_append_hybrid_mr_desc, no_trunc_count_events_comp)
 {
-	msg_hybrid_append_test_runner(false, false, true);
+	msg_hybrid_append_test_runner(false, false, true, true);
 }
 
 Test(rnr_msg_append_hybrid_mr_desc, trunc_count_events_non_comp)
 {
-	msg_hybrid_append_test_runner(true, false, false);
+	msg_hybrid_append_test_runner(true, false, false, true);
 }
 
 Test(rnr_msg_append_hybrid_mr_desc, trunc_count_events_comp)
@@ -3018,7 +3036,35 @@ Test(rnr_msg_append_hybrid_mr_desc, trunc_count_events_comp)
 	 */
 	cxip_ep->ep_obj->rxc->trunc_ok = true;
 
-	msg_hybrid_append_test_runner(true, false, true);
+	msg_hybrid_append_test_runner(true, false, true, true);
+}
+
+Test(rnr_msg_append_hybrid_mr_desc, no_desc_no_trunc_count_events_non_comp)
+{
+	msg_hybrid_append_test_runner(false, false, false, false);
+}
+
+Test(rnr_msg_append_hybrid_mr_desc, no_desc_no_trunc_count_events_comp)
+{
+	msg_hybrid_append_test_runner(false, false, true, false);
+}
+
+Test(rnr_msg_append_hybrid_mr_desc, no_desc_trunc_count_events_non_comp)
+{
+	msg_hybrid_append_test_runner(true, false, false, false);
+}
+
+Test(rnr_msg_append_hybrid_mr_desc, no_desc_trunc_count_events_comp)
+{
+	struct cxip_ep *cxip_ep = container_of(&cxit_ep->fid, struct cxip_ep,
+					       ep.fid);
+
+	/* This test requires that experimental truncation a success
+	 * is enabled.
+	 */
+	cxip_ep->ep_obj->rxc->trunc_ok = true;
+
+	msg_hybrid_append_test_runner(true, false, true, false);
 }
 
 TestSuite(rnr_msg_append_hybrid_mr_desc_byte_cntr,
@@ -3027,17 +3073,17 @@ TestSuite(rnr_msg_append_hybrid_mr_desc_byte_cntr,
 
 Test(rnr_msg_append_hybrid_mr_desc_byte_cntr, no_trunc_count_bytes_non_comp)
 {
-	msg_hybrid_append_test_runner(false, true, false);
+	msg_hybrid_append_test_runner(false, true, false, true);
 }
 
 Test(rnr_msg_append_hybrid_mr_desc_byte_cntr, no_trunc_count_bytes_comp)
 {
-	msg_hybrid_append_test_runner(false, true, true);
+	msg_hybrid_append_test_runner(false, true, true, true);
 }
 
 Test(rnr_msg_append_hybrid_mr_desc_byte_cntr, trunc_count_bytes_non_comp)
 {
-	msg_hybrid_append_test_runner(true, true, false);
+	msg_hybrid_append_test_runner(true, true, false, true);
 }
 
 Test(rnr_msg_append_hybrid_mr_desc_byte_cntr, trunc_count_bytes_comp)
@@ -3050,5 +3096,261 @@ Test(rnr_msg_append_hybrid_mr_desc_byte_cntr, trunc_count_bytes_comp)
 	 */
 	cxip_ep->ep_obj->rxc->trunc_ok = true;
 
-	msg_hybrid_append_test_runner(true, true, true);
+	msg_hybrid_append_test_runner(true, true, true, true);
+}
+
+TestSuite(rnr_msg_append_byte_cntr,
+	  .init = cxit_setup_rma_rnr_hybrid_mr_desc_byte_cntr,
+	  .fini = cxit_teardown_rma, .timeout = CXIT_DEFAULT_TIMEOUT);
+
+Test(rnr_msg_append_byte_cntr, basic_byte_counts)
+{
+	int i, ret;
+	uint8_t *send_buf;
+	uint8_t *recv_buf;
+	int send_len = 64;
+	int recv_len = 64;
+	size_t min_multi_recv = 0;
+	size_t opt_len = sizeof(size_t);
+	struct iovec riovec;
+	struct iovec siovec;
+	struct fi_msg rmsg = {};
+	struct fi_msg smsg = {};
+	struct fi_context ctxt;
+	struct fi_cq_tagged_entry tx_cqe;
+	struct fi_cq_tagged_entry rx_cqe;
+	struct fi_cq_err_entry err_cqe = {};
+
+	/* Update min_multi_recv to ensure append buffer does not unlink */
+	ret = fi_setopt(&cxit_ep->fid, FI_OPT_ENDPOINT, FI_OPT_MIN_MULTI_RECV,
+			&min_multi_recv, opt_len);
+	cr_assert(ret == FI_SUCCESS);
+
+	send_buf = aligned_alloc(s_page_size, send_len);
+	cr_assert(send_buf);
+
+	recv_buf = aligned_alloc(s_page_size, recv_len);
+	cr_assert(recv_buf);
+
+	fi_cntr_set(cxit_send_cntr, 0);
+	fi_cntr_seterr(cxit_send_cntr, 0);
+	fi_cntr_set(cxit_recv_cntr, 0);
+	fi_cntr_seterr(cxit_recv_cntr, 0);
+
+	for (i = 0; i < send_len; i++)
+		send_buf[i] = i + 0xa0;
+
+	/* Post RX buffer */
+	riovec.iov_base = recv_buf;
+	riovec.iov_len = recv_len;
+	rmsg.msg_iov = &riovec;
+	rmsg.iov_count = 1;
+	rmsg.addr = FI_ADDR_UNSPEC;
+	rmsg.context = &ctxt;
+
+	ret = fi_recvmsg(cxit_ep, &rmsg, FI_MULTI_RECV);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed %d", ret);
+	sleep(1);
+
+	/* Send 64 bytes to self, no receive posted */
+	siovec.iov_base = send_buf;
+	siovec.iov_len = send_len;
+	smsg.addr = cxit_ep_fi_addr;
+	smsg.iov_count = 1;
+	smsg.context = NULL;
+	smsg.msg_iov = &siovec;
+
+	ret = fi_sendmsg(cxit_ep, &smsg, FI_COMPLETION);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_send failed %d", ret);
+
+	/* Wait for async event indicating data has been received */
+	do {
+		ret = fi_cq_read(cxit_tx_cq, &tx_cqe, 1);
+	} while (ret == -FI_EAGAIN);
+	cr_assert_eq(ret, 1, "fi_cq_read unexpected status %d", ret);
+
+	cr_assert(fi_cntr_read(cxit_send_cntr) == send_len,
+		  "Invalid TX success count %ld", fi_cntr_read(cxit_send_cntr));
+	cr_assert(fi_cntr_readerr(cxit_send_cntr) == 0,
+		  "Unexpected RNR error reported %ld",
+		  fi_cntr_readerr(cxit_send_cntr));
+	cr_assert(fi_cntr_read(cxit_recv_cntr) == send_len,
+		  "Invalid RX success count %ld", fi_cntr_read(cxit_recv_cntr));
+	cr_assert(fi_cntr_readerr(cxit_recv_cntr) == 0,
+		  "Unexpected RNR RX error reported %ld",
+		  fi_cntr_readerr(cxit_recv_cntr));
+
+	/* Cancel append buffer */
+	ret = fi_cancel(&cxit_ep->fid, &ctxt);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_cancel failed %d", ret);
+
+	do {
+		ret = fi_cq_read(cxit_rx_cq, &rx_cqe, 1);
+		if (ret == -FI_EAVAIL)
+			break;
+
+		cr_assert_eq(ret, -FI_EAGAIN, "unexpected event %d", ret);
+	} while (1);
+
+	ret = fi_cq_readerr(cxit_rx_cq, &err_cqe, 0);
+	cr_assert_eq(ret, 1);
+
+	cr_assert(err_cqe.op_context == &ctxt, "Error RX CQE Context mismatch");
+	cr_assert(err_cqe.flags == (FI_MSG | FI_RECV | FI_MULTI_RECV),
+		  "Error RX CQE flags mismatch");
+	cr_assert(err_cqe.err == FI_ECANCELED, "Invalid Error RX CQE code\n");
+	cr_assert(err_cqe.prov_errno == 0, "Invalid Error RX CQE errno");
+
+	free(recv_buf);
+	free(send_buf);
+}
+
+Test(rnr_msg_append_byte_cntr, basic_byte_counts_trunc)
+{
+	int i, ret;
+	uint8_t *send_buf;
+	uint8_t *recv_buf;
+	int send_len = 1;
+	int recv_len = 8;
+	size_t min_multi_recv = 0;
+	size_t opt_len = sizeof(size_t);
+	struct iovec riovec;
+	struct iovec siovec;
+	struct fi_msg rmsg = {};
+	struct fi_msg smsg = {};
+	struct fi_context ctxt;
+	struct fi_cq_tagged_entry tx_cqe;
+	struct fi_cq_tagged_entry rx_cqe;
+	struct fi_cq_err_entry err_cqe = {};
+	struct cxip_ep *cxip_ep = container_of(&cxit_ep->fid, struct cxip_ep,
+					       ep.fid);
+
+	/* This test requires that experimental truncation as a success
+	 * is enabled.
+	 */
+	cxip_ep->ep_obj->txc->trunc_ok = true;
+	cxip_ep->ep_obj->rxc->trunc_ok = true;
+
+	/* Update min_multi_recv to ensure append buffer does not unlink */
+	ret = fi_setopt(&cxit_ep->fid, FI_OPT_ENDPOINT, FI_OPT_MIN_MULTI_RECV,
+			&min_multi_recv, opt_len);
+	cr_assert(ret == FI_SUCCESS);
+
+	send_buf = aligned_alloc(s_page_size, send_len);
+	cr_assert(send_buf);
+
+	recv_buf = aligned_alloc(s_page_size, recv_len);
+	cr_assert(recv_buf);
+
+	fi_cntr_set(cxit_send_cntr, 0);
+	fi_cntr_seterr(cxit_send_cntr, 0);
+	fi_cntr_set(cxit_recv_cntr, 0);
+	fi_cntr_seterr(cxit_recv_cntr, 0);
+
+	/* Post RX buffer */
+	riovec.iov_base = recv_buf;
+	riovec.iov_len = recv_len;
+	rmsg.msg_iov = &riovec;
+	rmsg.iov_count = 1;
+	rmsg.addr = FI_ADDR_UNSPEC;
+	rmsg.context = &ctxt;
+
+	ret = fi_recvmsg(cxit_ep, &rmsg, FI_MULTI_RECV);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_recv failed %d", ret);
+	sleep(1);
+
+	/* Send byte to self */
+	siovec.iov_base = send_buf;
+	siovec.iov_len = send_len;
+	smsg.addr = cxit_ep_fi_addr;
+	smsg.iov_count = 1;
+	smsg.context = NULL;
+	smsg.msg_iov = &siovec;
+
+	/* Send 10, only 8 should land */
+	for (i = 0; i < 10; i++) {
+		send_buf[0] = i;
+		ret = fi_sendmsg(cxit_ep, &smsg, FI_COMPLETION);
+		cr_assert_eq(ret, FI_SUCCESS, "fi_send failed %d", ret);
+
+		/* Wait for async event indicating data has been received */
+		do {
+			ret = fi_cq_read(cxit_tx_cq, &tx_cqe, 1);
+		} while (ret == -FI_EAGAIN);
+		cr_assert_eq(ret, 1, "fi_cq_read unexpected status %d", ret);
+	}
+
+	/* Verify only 8 bytes were known to have landed from senders view */
+	cr_assert(fi_cntr_read(cxit_send_cntr) == 8,
+		  "Invalid TX success count %ld", fi_cntr_read(cxit_send_cntr));
+
+	/* Verify the 2 bytes that were truncated at the receiver did not cause
+	 * an error at the sender.
+	 */
+	cr_assert(fi_cntr_readerr(cxit_send_cntr) == 0,
+		  "Unexpected RNR error reported %ld",
+		  fi_cntr_readerr(cxit_send_cntr));
+
+	/* Verify only 8 bytes landed from receivers view */
+	cr_assert(fi_cntr_read(cxit_recv_cntr) == 8,
+		  "Invalid RX success count %ld", fi_cntr_read(cxit_recv_cntr));
+
+	/* Verify the 2 bytes that were truncated at the receiver did not cause
+	 * and error at the receiver.
+	 */
+	cr_assert(fi_cntr_readerr(cxit_recv_cntr) == 0,
+		  "Unexpected RNR RX error reported %ld",
+		  fi_cntr_readerr(cxit_recv_cntr));
+
+	/* Cancel append buffer */
+	ret = fi_cancel(&cxit_ep->fid, &ctxt);
+	cr_assert_eq(ret, FI_SUCCESS, "fi_cancel failed %d", ret);
+
+	do {
+		ret = fi_cq_read(cxit_rx_cq, &rx_cqe, 1);
+		if (ret == -FI_EAVAIL)
+			break;
+
+		cr_assert_eq(ret, -FI_EAGAIN, "unexpected event %d", ret);
+	} while (1);
+
+	ret = fi_cq_readerr(cxit_rx_cq, &err_cqe, 0);
+	cr_assert_eq(ret, 1);
+
+	cr_assert(err_cqe.op_context == &ctxt, "Error RX CQE Context mismatch");
+	cr_assert(err_cqe.flags == (FI_MSG | FI_RECV | FI_MULTI_RECV),
+		  "Error RX CQE flags mismatch");
+	cr_assert(err_cqe.err == FI_ECANCELED, "Invalid Error RX CQE code\n");
+	cr_assert(err_cqe.prov_errno == 0, "Invalid Error RX CQE errno");
+
+	free(recv_buf);
+	free(send_buf);
+}
+
+Test(rnr_msg_append_byte_cntr, no_desc_no_trunc_count_bytes_non_comp)
+{
+	msg_hybrid_append_test_runner(false, true, false, false);
+}
+
+Test(rnr_msg_append_byte_cntr, no_desc_no_trunc_count_bytes_comp)
+{
+	msg_hybrid_append_test_runner(false, true, true, false);
+}
+
+Test(rnr_msg_append_byte_cntr, no_desc_trunc_count_bytes_non_comp)
+{
+	msg_hybrid_append_test_runner(true, true, false, false);
+}
+
+Test(rnr_msg_append_byte_cntr, no_desc_trunc_count_bytes_comp)
+{
+	struct cxip_ep *cxip_ep = container_of(&cxit_ep->fid, struct cxip_ep,
+					       ep.fid);
+
+	/* This test requires that experimental truncation a success
+	 * is enabled.
+	 */
+	cxip_ep->ep_obj->rxc->trunc_ok = true;
+
+	msg_hybrid_append_test_runner(true, true, true, false);
 }

@@ -87,16 +87,20 @@ struct fi_provider vrb_prov = {
 	.cleanup = vrb_fini
 };
 
+/* mutex for guarding the initialization of vrb_util_prov.info */
+ofi_mutex_t vrb_info_mutex;
+
 struct util_prov vrb_util_prov = {
 	.prov = &vrb_prov,
 	.info = NULL,
+	.info_lock = &vrb_info_mutex,
 	/* The support of the shared recieve contexts
 	 * is dynamically calculated */
 	.flags = 0,
 };
 
-/* mutex for guarding the initialization of vrb_util_prov.info */
-ofi_mutex_t vrb_info_mutex;
+/* mutex for guarding concurrent calls to protect provider initialization */
+ofi_mutex_t vrb_init_mutex;
 DEFINE_LIST(vrb_devs);
 
 int vrb_sockaddr_len(struct sockaddr *addr)
@@ -370,12 +374,9 @@ static int vrb_param_define(const char *param_name, const char *param_str,
 		switch (type) {
 		case FI_PARAM_STRING:
 			if (*(char **)param_default != NULL) {
-				param_default_sz =
-					MIN(strlen(*(char **)param_default),
-					    254);
-				strncpy(param_default_str, *(char **)param_default,
-					param_default_sz);
-				param_default_str[param_default_sz + 1] = '\0';
+				strncpy(param_default_str, *(char **)param_default, 255);
+				param_default_str[255] = '\0';
+				param_default_sz = strlen(param_default_str);
 			}
 			break;
 		case FI_PARAM_INT:
@@ -797,6 +798,7 @@ static void vrb_fini(void)
 	ofi_mem_fini();
 #endif
 	ofi_mutex_destroy(&vrb_info_mutex);
+	ofi_mutex_destroy(&vrb_init_mutex);
 	fi_freeinfo(vrb_util_prov.info);
 	vrb_os_fini();
 	vrb_util_prov.info = NULL;
@@ -808,8 +810,10 @@ VERBS_INI
 	ofi_mem_init();
 	ofi_hmem_init();
 	ofi_monitors_init();
+	ofi_params_init();
 #endif
 	ofi_mutex_init(&vrb_info_mutex);
+	ofi_mutex_init(&vrb_init_mutex);
 
 	vrb_prof_init();
 

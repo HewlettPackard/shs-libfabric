@@ -108,9 +108,10 @@ struct timespec start, end;
 int listen_sock = -1;
 int sock = -1;
 int oob_sock = -1;
+bool allow_rx_cq_data = true;
 
 struct fi_av_attr av_attr = {
-	.type = FI_AV_MAP,
+	.type = FI_AV_TABLE,
 	.count = 1
 };
 struct fi_eq_attr eq_attr = {
@@ -275,7 +276,7 @@ static inline int ft_rma_write_target_allowed(uint64_t caps)
 uint64_t ft_info_to_mr_access(struct fi_info *info)
 {
 	uint64_t mr_access = 0;
-	if (info->domain_attr->mr_mode & FI_MR_LOCAL) {
+	if (ft_need_mr_reg(info)) {
 		if (info->caps & (FI_MSG | FI_TAGGED)) {
 			if (info->caps & FT_MSG_MR_ACCESS) {
 				mr_access |= info->caps & FT_MSG_MR_ACCESS;
@@ -433,7 +434,7 @@ int ft_get_dmabuf_from_iov(struct fi_mr_dmabuf *dmabuf,
 		dmabuf[i].fd = dmabuf_fd;
 		dmabuf[i].offset = dmabuf_offset;
 		dmabuf[i].len = iov[i].iov_len;
-		dmabuf[i].base_addr = (void *)(
+		dmabuf[i].base_addr = (void *)(uintptr_t)(
 			(uintptr_t) iov[i].iov_base - dmabuf_offset);
 	}
 	return FI_SUCCESS;
@@ -468,12 +469,14 @@ int ft_reg_mr(struct fi_info *fi, void *buf, size_t size, uint64_t access,
 		dmabuf.fd = dmabuf_fd;
 		dmabuf.offset = dmabuf_offset;
 		dmabuf.len = size;
-		dmabuf.base_addr = (void *)((uintptr_t) buf - dmabuf_offset);
+		dmabuf.base_addr = (void *)((char *) buf - dmabuf_offset);
 		flags |= FI_MR_DMABUF;
 	}
 
 	ft_fill_mr_attr(&iov, &dmabuf, 1, access, key, iface, device, &attr, flags);
 	ret = fi_mr_regattr(domain, &attr, flags, mr);
+	if (opts.options & FT_OPT_REG_DMABUF_MR)
+		ft_hmem_put_dmabuf_fd(iface, dmabuf_fd);
 	if (ret)
 		return ret;
 
@@ -1065,6 +1068,10 @@ int ft_getinfo(struct fi_info *hints, struct fi_info **info)
 		hints->domain_attr->mr_mode |= FI_MR_HMEM;
 	}
 
+	/* ft_cqdata_opcodes enum start from 1, 0 means no cq data */
+	if (opts.cqdata_op && allow_rx_cq_data)
+		hints->mode |= FI_RX_CQ_DATA;
+
 	hints->domain_attr->threading = opts.threading;
 
 	ret = fi_getinfo(FT_FIVERSION, node, service, flags, hints, info);
@@ -1584,6 +1591,18 @@ int ft_init_av(void)
 int ft_exchange_addresses_oob(struct fid_av *av_ptr, struct fid_ep *ep_ptr,
 		fi_addr_t *remote_addr)
 {
+	int ret;
+
+	ret = ft_send_addr_oob(ep_ptr);
+	if (ret)
+		return ret;
+
+	return ft_recv_addr_oob(av_ptr, remote_addr);
+}
+
+/* Only send local address out-of-band */
+int ft_send_addr_oob(struct fid_ep *ep_ptr)
+{
 	char buf[FT_MAX_CTRL_MSG];
 	int ret;
 	size_t addrlen = FT_MAX_CTRL_MSG;
@@ -1594,19 +1613,20 @@ int ft_exchange_addresses_oob(struct fid_av *av_ptr, struct fid_ep *ep_ptr,
 		return ret;
 	}
 
-	ret = ft_sock_send(oob_sock, buf, FT_MAX_CTRL_MSG);
-	if (ret)
-		return ret;
+	return ft_sock_send(oob_sock, buf, FT_MAX_CTRL_MSG);
+}
+
+/* Receive and insert peer address out-of-band */
+int ft_recv_addr_oob(struct fid_av *av_ptr, fi_addr_t *remote_addr)
+{
+	char buf[FT_MAX_CTRL_MSG];
+	int ret;
 
 	ret = ft_sock_recv(oob_sock, buf, FT_MAX_CTRL_MSG);
 	if (ret)
 		return ret;
 
-	ret = ft_av_insert(av_ptr, buf, 1, remote_addr, 0, NULL);
-	if (ret)
-		return ret;
-
-	return 0;
+	return ft_av_insert(av_ptr, buf, 1, remote_addr, 0, NULL);
 }
 
 /* TODO: retry send for unreliable endpoints */
@@ -2562,7 +2582,7 @@ int check_compare_atomic_op(struct fid_ep *endpoint, enum fi_op op,
 	return check_atomic_attr(op, datatype, FI_COMPARE_ATOMIC);
 }
 
-ssize_t ft_post_rx_buf(struct fid_ep *ep, size_t size, void *ctx,
+ssize_t ft_post_rx_buf(struct fid_ep *ep, fi_addr_t fi_addr, size_t size, void *ctx,
 		       void *op_buf, void *op_mr_desc, uint64_t op_tag)
 {
 	size = MAX(size, FT_MAX_CTRL_MSG) + ft_rx_prefix_size();
@@ -2570,17 +2590,17 @@ ssize_t ft_post_rx_buf(struct fid_ep *ep, size_t size, void *ctx,
 		op_tag = op_tag ? op_tag : rx_seq;
 		FT_POST(fi_trecv, ft_progress, rxcq, rx_seq, &rx_cq_cntr,
 			"receive", ep, op_buf, size, op_mr_desc,
-			remote_fi_addr, op_tag, 0, ctx);
+			fi_addr, op_tag, 0, ctx);
 	} else {
 		FT_POST(fi_recv, ft_progress, rxcq, rx_seq, &rx_cq_cntr,
-			"receive", ep, op_buf, size, op_mr_desc, remote_fi_addr, ctx);
+			"receive", ep, op_buf, size, op_mr_desc, fi_addr, ctx);
 	}
 	return 0;
 }
 
 ssize_t ft_post_rx(struct fid_ep *ep, size_t size, void *ctx)
 {
-	return ft_post_rx_buf(ep, size, ctx, rx_buf, mr_desc, ft_tag);
+	return ft_post_rx_buf(ep, remote_fi_addr, size, ctx, rx_buf, mr_desc, ft_tag);
 }
 
 ssize_t ft_rx(struct fid_ep *ep, size_t size)
@@ -2895,9 +2915,9 @@ int ft_get_tx_comp(uint64_t total)
 	int ret;
 
 	if (opts.options & FT_OPT_TX_CQ) {
-		ret = ft_get_cq_comp(txcq, &tx_cq_cntr, total, -1);
+		ret = ft_get_cq_comp(txcq, &tx_cq_cntr, total, timeout);
 	} else if (txcntr) {
-		ret = ft_get_cntr_comp(txcntr, total, -1);
+		ret = ft_get_cntr_comp(txcntr, total, timeout);
 	} else {
 		FT_ERR("Trying to get a TX completion when no TX CQ or counter were opened");
 		ret = -FI_EOTHER;
@@ -3234,17 +3254,28 @@ int ft_finalize_ep(struct fid_ep *ep)
 	int ret;
 	struct fi_context2 ctx;
 
-	ret = ft_sendmsg(ep, remote_fi_addr, tx_buf, 4, &ctx, FI_TRANSMIT_COMPLETE);
-	if (ret)
-		return ret;
+	if (ft_check_opts(FT_OPT_OOB_SYNC))
+		return ft_sock_sync(oob_sock, 0);
 
-	ret = ft_get_tx_comp(tx_seq);
-	if (ret)
-		return ret;
+	if (opts.dst_addr) {
+		ret = ft_tx_msg(ep, remote_fi_addr, tx_buf, 4, &ctx,
+					    FI_TRANSMIT_COMPLETE);
+		if (ret)
+			return ret;
 
-	ret = ft_get_rx_comp(rx_seq);
-	if (ret)
-		return ret;
+		ret = ft_get_rx_comp(rx_seq);
+		if (ret)
+			return ret;
+	} else {
+		ret = ft_get_rx_comp(rx_seq);
+		if (ret)
+			return ret;
+
+		ret = ft_tx_msg(ep, remote_fi_addr, tx_buf, 4, &ctx,
+					    FI_TRANSMIT_COMPLETE);
+		if (ret)
+			return ret;
+	}
 
 	return 0;
 }
@@ -3404,7 +3435,7 @@ void ft_usage(char *name, char *desc)
 void ft_hmem_usage()
 {
 	FT_PRINT_OPTS_USAGE("-D <device_iface>", "Specify device interface: "
-			    "e.g. cuda, ze, neuron, synapseai (default: None). "
+			    "e.g. cuda, ze, neuron, synapseai, rocr (default: None). "
 			    "Automatically enables FI_HMEM (-H)");
 	FT_PRINT_OPTS_USAGE("-i <device_id>", "Specify which device to use (default: 0)");
 	FT_PRINT_OPTS_USAGE("-H", "Enable provider FI_HMEM support");
@@ -3566,6 +3597,8 @@ void ft_parse_hmem_opts(int op, char *optarg, struct ft_opts *opts)
 			opts->iface = FI_HMEM_CUDA;
 		else if (!strncasecmp("neuron", optarg, 6))
 			opts->iface = FI_HMEM_NEURON;
+		else if (!strncasecmp("rocr", optarg, 4))
+			opts->iface = FI_HMEM_ROCR;
 		else if (!strncasecmp("synapseai", optarg, 9)) {
 			opts->iface = FI_HMEM_SYNAPSEAI;
 			opts->options |= FT_OPT_REG_DMABUF_MR;
@@ -3712,13 +3745,11 @@ int ft_parse_api_opts(int op, char *optarg, struct fi_info *hints,
 			opts->rma_op = FT_RMA_READ;
 		} else if (!strcasecmp(optarg, "writedata")) {
 			hints->caps |= FI_WRITE | FI_REMOTE_WRITE;
-			hints->mode |= FI_RX_CQ_DATA;
 			hints->domain_attr->cq_data_size = 4;
 			opts->rma_op = FT_RMA_WRITEDATA;
 			opts->cqdata_op = FT_CQDATA_WRITEDATA;
 			cq_attr.format = FI_CQ_FORMAT_DATA;
 		} else if (!strcasecmp(optarg, "senddata")) {
-			hints->mode |= FI_RX_CQ_DATA;
 			hints->domain_attr->cq_data_size = 4;
 			opts->cqdata_op = FT_CQDATA_SENDDATA;
 			cq_attr.format = FI_CQ_FORMAT_DATA;
@@ -4501,6 +4532,10 @@ void ft_longopts_usage()
 		"Run tests with FI_MORE");
 	FT_PRINT_OPTS_USAGE("--threading",
 		"threading model: safe|completion|domain (default:domain)");
+	FT_PRINT_OPTS_USAGE("--no-rx-cq-data",
+		"Do not request FI_RX_CQ_DATA in hints for writedata/sendata tests");
+	FT_PRINT_OPTS_USAGE("--expect-error",
+		"Expect specific error code");
 }
 
 int debug_assert;
@@ -4515,6 +4550,8 @@ struct option long_opts[] = {
 	{"max-msg-size", required_argument, NULL, LONG_OPT_MAX_MSG_SIZE},
 	{"use-fi-more", no_argument, NULL, LONG_OPT_USE_FI_MORE},
 	{"threading", required_argument, NULL, LONG_OPT_THREADING},
+	{"no-rx-cq-data", no_argument, NULL, LONG_OPT_NO_RX_CQ_DATA},
+	{"expect-error", required_argument, NULL, LONG_OPT_EXPECT_ERROR},
 	{NULL, 0, NULL, 0},
 };
 
@@ -4574,6 +4611,12 @@ int ft_parse_long_opts(int op, char *optarg)
 		return 0;
 	case LONG_OPT_THREADING:
 		opts.threading = ft_parse_threading_string(optarg);
+		return 0;
+	case LONG_OPT_NO_RX_CQ_DATA:
+		allow_rx_cq_data = false;
+		return 0;
+	case LONG_OPT_EXPECT_ERROR:
+		opts.expect_error = atoi(optarg);
 		return 0;
 	default:
 		return EXIT_FAILURE;

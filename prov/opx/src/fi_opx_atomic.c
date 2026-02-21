@@ -114,7 +114,7 @@ void fi_opx_atomic_op_internal(struct fi_opx_ep *opx_ep, const uint32_t opcode, 
 			       const struct fi_opx_cntr *opx_cntr, struct fi_opx_completion_counter *cc,
 			       enum fi_datatype dt, enum fi_op op, const int lock_required, const uint64_t caps,
 			       const enum ofi_reliability_kind reliability, const uint64_t is_hmem,
-			       const uint64_t is_intranode, const enum opx_hfi1_type hfi1_type, const bool ctx_sharing)
+			       const uint64_t is_shm, const enum opx_hfi1_type hfi1_type, const bool ctx_sharing)
 {
 	if (tx_op_flags & FI_INJECT) {
 		assert((tx_op_flags & (FI_COMPLETION | FI_TRANSMIT_COMPLETE)) !=
@@ -136,12 +136,12 @@ void fi_opx_atomic_op_internal(struct fi_opx_ep *opx_ep, const uint32_t opcode, 
 	params->work_elem.payload_copy	    = NULL;
 	params->work_elem.complete	    = false;
 	params->opx_ep			    = opx_ep;
-	if (hfi1_type & (OPX_HFI1_WFR | OPX_HFI1_JKR_9B)) {
+	if (hfi1_type & (OPX_HFI1_WFR | OPX_HFI1_MIXED_9B)) {
 		params->lrh_dlid = FI_OPX_ADDR_TO_HFI1_LRH_DLID_9B(opx_dst_addr.lid);
 	} else {
 		params->lrh_dlid = opx_dst_addr.lid;
 	}
-	params->pbc_dlid	   = OPX_PBC_DLID_TO_PBC_DLID(opx_dst_addr.lid, hfi1_type);
+	params->pbc_dlid	   = OPX_PBC_DLID(opx_dst_addr.lid, hfi1_type);
 	params->slid		   = opx_dst_addr.lid;
 	params->dt		   = dt == FI_VOID ? FI_VOID - 1 : dt;
 	params->op		   = op == FI_NOOP ? FI_NOOP - 1 : op;
@@ -158,20 +158,18 @@ void fi_opx_atomic_op_internal(struct fi_opx_ep *opx_ep, const uint32_t opcode, 
 	params->iov[0].sbuf_handle = 0; // This will change to a valid gdrcopy when we implement gdrcopy in atomic paths
 	params->dput_iov	   = &params->iov[0];
 	params->opcode		   = opcode;
-	params->is_intranode	   = is_intranode;
+	params->is_shm		   = is_shm;
 	params->reliability	   = reliability;
 	params->cur_iov		   = 0;
 	params->bytes_sent	   = 0;
 	params->cc		   = NULL;
 	params->user_cc		   = NULL;
 	params->src_base_addr	   = NULL;
-	params->origin_byte_counter	  = NULL;
-	params->payload_bytes_for_iovec	  = sizeof(struct fi_opx_hfi1_dput_fetch);
-	params->fetch_vaddr		  = (void *) fetch_iov->buf;
-	params->target_byte_counter_vaddr = (const uintptr_t) cc;
-	params->target_hfi_unit		  = opx_dst_addr.hfi1_unit;
-	params->u32_extended_rx =
-		fi_opx_ep_get_u32_extended_rx(opx_ep, params->is_intranode, opx_dst_addr.hfi1_subctxt_rx);
+	params->origin_byte_counter	= NULL;
+	params->payload_bytes_for_iovec = sizeof(struct fi_opx_hfi1_dput_fetch);
+	params->fetch_vaddr		= (void *) fetch_iov->buf;
+	params->target_hfi_unit		= opx_dst_addr.hfi1_unit;
+	params->u32_extended_rx = fi_opx_ep_get_u32_extended_rx(opx_ep, params->is_shm, opx_dst_addr.hfi1_subctxt_rx);
 
 	if (compare_iov) {
 		params->compare_vaddr = (void *) compare_iov->buf;
@@ -185,10 +183,11 @@ void fi_opx_atomic_op_internal(struct fi_opx_ep *opx_ep, const uint32_t opcode, 
 
 	struct fi_opx_rma_request *rma_request = ofi_buf_alloc(opx_ep->tx->rma_request_pool);
 	assert(rma_request != NULL);
-	rma_request->cc		  = cc;
-	rma_request->hmem_iface	  = fetch_iov->iface;
-	rma_request->hmem_device  = fetch_iov->device;
-	params->rma_request_vaddr = (uintptr_t) rma_request;
+	rma_request->cc			  = cc;
+	rma_request->hmem_iface		  = fetch_iov->iface;
+	rma_request->hmem_device	  = fetch_iov->device;
+	params->rma_request_vaddr	  = (uintptr_t) rma_request;
+	params->target_byte_counter_vaddr = params->rma_request_vaddr;
 
 	fi_opx_ep_rx_poll(&opx_ep->ep_fid, 0, OPX_RELIABILITY, FI_OPX_HDRQ_MASK_RUNTIME, hfi1_type, ctx_sharing);
 
@@ -275,7 +274,7 @@ size_t fi_opx_atomic_internal(struct fi_opx_ep *opx_ep, const void *buf, size_t 
 			 "===================================== ATOMIC %s (begin)\n", is_compare ? "CAS" : "FETCH");
 		cc->cntr = opx_ep->read_cntr;
 
-		const uint64_t	       is_intranode = fi_opx_hfi1_tx_is_intranode(opx_ep, opx_dst_addr, caps);
+		const uint64_t	       is_shm = fi_opx_hfi1_tx_is_shm(opx_ep, opx_dst_addr, caps);
 		struct fi_opx_hmem_iov fetch_iov;
 		uint64_t	       fetch_handle;
 		opx_hmem_iov_init(fetch_vaddr, buf_len, NULL, &fetch_iov, &fetch_handle);
@@ -289,15 +288,15 @@ size_t fi_opx_atomic_internal(struct fi_opx_ep *opx_ep, const void *buf, size_t 
 		uint64_t	       is_hmem = opx_hmem_iov_init(buf, buf_len, NULL, &buf_iov, &handle);
 
 		if (!is_compare) {
-			FI_OPX_DEBUG_COUNTERS_INC_COND((is_hmem || fetch_iov.iface != FI_HMEM_SYSTEM) && is_intranode,
+			FI_OPX_DEBUG_COUNTERS_INC_COND((is_hmem || fetch_iov.iface != FI_HMEM_SYSTEM) && is_shm,
 						       opx_ep->debug_counters.hmem.rma_atomic_fetch_intranode);
-			FI_OPX_DEBUG_COUNTERS_INC_COND((is_hmem || fetch_iov.iface != FI_HMEM_SYSTEM) && !is_intranode,
+			FI_OPX_DEBUG_COUNTERS_INC_COND((is_hmem || fetch_iov.iface != FI_HMEM_SYSTEM) && !is_shm,
 						       opx_ep->debug_counters.hmem.rma_atomic_fetch_hfi);
 
 			fi_opx_atomic_op_internal(opx_ep, FI_OPX_HFI_DPUT_OPCODE_ATOMIC_FETCH, &buf_iov, opx_dst_addr,
 						  addr, key, &fetch_iov, NULL, opx_ep->tx->op_flags, opx_ep->rx->cq,
 						  opx_ep->read_cntr, cc, datatype, op, lock_required, caps, reliability,
-						  is_hmem, is_intranode, hfi1_type, ctx_sharing);
+						  is_hmem, is_shm, hfi1_type, ctx_sharing);
 
 		} else {
 			struct fi_opx_hmem_iov compare_iov;
@@ -305,16 +304,16 @@ size_t fi_opx_atomic_internal(struct fi_opx_ep *opx_ep, const void *buf, size_t 
 			is_hmem |= opx_hmem_iov_init(compare_vaddr, buf_len, NULL, &compare_iov, &handle);
 			buf_iov.len <<= 1;
 
-			FI_OPX_DEBUG_COUNTERS_INC_COND((is_hmem || fetch_iov.iface != FI_HMEM_SYSTEM) && is_intranode,
+			FI_OPX_DEBUG_COUNTERS_INC_COND((is_hmem || fetch_iov.iface != FI_HMEM_SYSTEM) && is_shm,
 						       opx_ep->debug_counters.hmem.rma_atomic_cmp_fetch_intranode);
-			FI_OPX_DEBUG_COUNTERS_INC_COND((is_hmem || fetch_iov.iface != FI_HMEM_SYSTEM) && !is_intranode,
+			FI_OPX_DEBUG_COUNTERS_INC_COND((is_hmem || fetch_iov.iface != FI_HMEM_SYSTEM) && !is_shm,
 						       opx_ep->debug_counters.hmem.rma_atomic_cmp_fetch_hfi);
 
 			fi_opx_atomic_op_internal(opx_ep, FI_OPX_HFI_DPUT_OPCODE_ATOMIC_COMPARE_FETCH, &buf_iov,
 						  opx_dst_addr, addr, key, &fetch_iov, &compare_iov,
 						  opx_ep->tx->op_flags, opx_ep->rx->cq, opx_ep->read_cntr, cc, datatype,
-						  op, lock_required, caps, reliability, is_hmem, is_intranode,
-						  hfi1_type, ctx_sharing);
+						  op, lock_required, caps, reliability, is_hmem, is_shm, hfi1_type,
+						  ctx_sharing);
 		}
 		FI_TRACE(fi_opx_global.prov, FI_LOG_EP_DATA, "===================================== ATOMIC %s (end)\n",
 			 is_compare ? "CAS" : "FETCH");
@@ -921,34 +920,42 @@ ssize_t fi_opx_atomic(struct fid_ep *ep, const void *buf, size_t count, void *de
 
 	/* Non-inlined functions should just use the runtime HFI1 type check, no optimizations */
 	if (OPX_IS_CTX_SHARING_ENABLED) {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			rc = fi_opx_atomic_generic(ep, buf, count, dst_addr, addr, key, datatype, op, context,
 						   FI_OPX_LOCK_NOT_REQUIRED, opx_ep->av_type, 0x0018000000000000ull,
 						   OPX_RELIABILITY, OPX_HFI1_WFR, OPX_CTX_SHARING_ON);
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			rc = fi_opx_atomic_generic(ep, buf, count, dst_addr, addr, key, datatype, op, context,
 						   FI_OPX_LOCK_NOT_REQUIRED, opx_ep->av_type, 0x0018000000000000ull,
-						   OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
-		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+						   OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
 			rc = fi_opx_atomic_generic(ep, buf, count, dst_addr, addr, key, datatype, op, context,
 						   FI_OPX_LOCK_NOT_REQUIRED, opx_ep->av_type, 0x0018000000000000ull,
 						   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+		} else {
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
+			rc = fi_opx_atomic_generic(ep, buf, count, dst_addr, addr, key, datatype, op, context,
+						   FI_OPX_LOCK_NOT_REQUIRED, opx_ep->av_type, 0x0018000000000000ull,
+						   OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_ON);
 		}
 	} else {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			rc = fi_opx_atomic_generic(ep, buf, count, dst_addr, addr, key, datatype, op, context,
 						   FI_OPX_LOCK_NOT_REQUIRED, opx_ep->av_type, 0x0018000000000000ull,
 						   OPX_RELIABILITY, OPX_HFI1_WFR, OPX_CTX_SHARING_OFF);
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			rc = fi_opx_atomic_generic(ep, buf, count, dst_addr, addr, key, datatype, op, context,
 						   FI_OPX_LOCK_NOT_REQUIRED, opx_ep->av_type, 0x0018000000000000ull,
-						   OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
-		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+						   OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
 			rc = fi_opx_atomic_generic(ep, buf, count, dst_addr, addr, key, datatype, op, context,
 						   FI_OPX_LOCK_NOT_REQUIRED, opx_ep->av_type, 0x0018000000000000ull,
 						   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+		} else {
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
+			rc = fi_opx_atomic_generic(ep, buf, count, dst_addr, addr, key, datatype, op, context,
+						   FI_OPX_LOCK_NOT_REQUIRED, opx_ep->av_type, 0x0018000000000000ull,
+						   OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_OFF);
 		}
 	}
 
@@ -976,7 +983,7 @@ ssize_t fi_opx_fetch_atomic(struct fid_ep *ep, const void *buf, size_t count, vo
 	assert((FI_AV_TABLE == opx_ep->av_type) || (FI_AV_MAP == opx_ep->av_type));
 	/* Non-inlined functions should just use the runtime HFI1 type check, no optimizations */
 	if (OPX_IS_CTX_SHARING_ENABLED) {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_fetch_atomic_generic(
 					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
@@ -988,34 +995,46 @@ ssize_t fi_opx_fetch_atomic(struct fid_ep *ep, const void *buf, size_t count, vo
 					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull,
 					OPX_RELIABILITY, OPX_HFI1_WFR, OPX_CTX_SHARING_ON);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_fetch_atomic_generic(
 					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
 					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull,
-					OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+					OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_fetch_atomic_generic(
 					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
 					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull,
-					OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+					OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_fetch_atomic_generic(
+					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
+					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull,
+					OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+			} else {
+				rc = fi_opx_fetch_atomic_generic(
+					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
+					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull,
+					OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_fetch_atomic_generic(
 					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
 					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull,
-					OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+					OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_fetch_atomic_generic(
 					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
 					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull,
-					OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+					OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_ON);
 			}
 		}
 	} else {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_fetch_atomic_generic(
 					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
@@ -1027,30 +1046,42 @@ ssize_t fi_opx_fetch_atomic(struct fid_ep *ep, const void *buf, size_t count, vo
 					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull,
 					OPX_RELIABILITY, OPX_HFI1_WFR, OPX_CTX_SHARING_OFF);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_fetch_atomic_generic(
 					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
 					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull,
-					OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+					OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_fetch_atomic_generic(
 					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
 					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull,
-					OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+					OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_fetch_atomic_generic(
+					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
+					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull,
+					OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+			} else {
+				rc = fi_opx_fetch_atomic_generic(
+					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
+					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull,
+					OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_fetch_atomic_generic(
 					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
 					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull,
-					OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+					OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_fetch_atomic_generic(
 					ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op,
 					context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull,
-					OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+					OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_OFF);
 			}
 		}
 	}
@@ -1079,7 +1110,7 @@ ssize_t fi_opx_compare_atomic(struct fid_ep *ep, const void *buf, size_t count, 
 	assert((FI_AV_TABLE == opx_ep->av_type) || (FI_AV_MAP == opx_ep->av_type));
 	/* Non-inlined functions should just use the runtime HFI1 type check, no optimizations */
 	if (OPX_IS_CTX_SHARING_ENABLED) {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_compare_atomic_generic(
 					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
@@ -1091,34 +1122,46 @@ ssize_t fi_opx_compare_atomic(struct fid_ep *ep, const void *buf, size_t count, 
 					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
 					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR, OPX_CTX_SHARING_ON);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_compare_atomic_generic(
 					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
 					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_compare_atomic_generic(
 					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
 					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_compare_atomic_generic(
+					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
+					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+			} else {
+				rc = fi_opx_compare_atomic_generic(
+					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
+					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_compare_atomic_generic(
 					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
 					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_compare_atomic_generic(
 					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
 					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_ON);
 			}
 		}
 	} else {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_compare_atomic_generic(
 					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
@@ -1130,30 +1173,42 @@ ssize_t fi_opx_compare_atomic(struct fid_ep *ep, const void *buf, size_t count, 
 					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
 					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR, OPX_CTX_SHARING_OFF);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_compare_atomic_generic(
 					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
 					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_compare_atomic_generic(
 					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
 					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_compare_atomic_generic(
+					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
+					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+			} else {
+				rc = fi_opx_compare_atomic_generic(
+					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
+					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_compare_atomic_generic(
 					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
 					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_compare_atomic_generic(
 					ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr,
 					addr, key, datatype, op, context, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_OFF);
 			}
 		}
 	}
@@ -1181,7 +1236,7 @@ ssize_t fi_opx_inject_atomic(struct fid_ep *ep, const void *buf, size_t count, f
 	assert((FI_AV_TABLE == opx_ep->av_type) || (FI_AV_MAP == opx_ep->av_type));
 	/* Non-inlined functions should just use the runtime HFI1 type check, no optimizations */
 	if (OPX_IS_CTX_SHARING_ENABLED) {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
 								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
@@ -1193,34 +1248,46 @@ ssize_t fi_opx_inject_atomic(struct fid_ep *ep, const void *buf, size_t count, f
 								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR,
 								  OPX_CTX_SHARING_ON);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
 								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
 								  0x0018000000000000ull, OPX_RELIABILITY,
-								  OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+								  OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
 								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
 								  0x0018000000000000ull, OPX_RELIABILITY,
-								  OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+								  OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
+								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
+								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+								  OPX_CTX_SHARING_ON);
+			} else {
+				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
+								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
+								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+								  OPX_CTX_SHARING_ON);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
 								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
-								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
 								  OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
 								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
-								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
 								  OPX_CTX_SHARING_ON);
 			}
 		}
 	} else {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
 								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
@@ -1232,29 +1299,41 @@ ssize_t fi_opx_inject_atomic(struct fid_ep *ep, const void *buf, size_t count, f
 								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR,
 								  OPX_CTX_SHARING_OFF);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
 								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
 								  0x0018000000000000ull, OPX_RELIABILITY,
-								  OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+								  OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
 								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
 								  0x0018000000000000ull, OPX_RELIABILITY,
-								  OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+								  OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
+								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
+								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+								  OPX_CTX_SHARING_OFF);
+			} else {
+				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
+								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
+								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+								  OPX_CTX_SHARING_OFF);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
 								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
-								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
 								  OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_inject_atomic_generic(ep, buf, count, dest_addr, addr, key, datatype, op,
 								  FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
-								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+								  0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
 								  OPX_CTX_SHARING_OFF);
 			}
 		}
@@ -1288,7 +1367,7 @@ ssize_t fi_opx_atomic_writemsg(struct fid_ep *ep, const struct fi_msg_atomic *ms
 	assert((FI_AV_TABLE == opx_ep->av_type) || (FI_AV_MAP == opx_ep->av_type));
 	/* Non-inlined functions should just use the runtime HFI1 type check, no optimizations */
 	if (OPX_IS_CTX_SHARING_ENABLED) {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
 								    0x0018000000000000ull, OPX_RELIABILITY,
@@ -1298,30 +1377,40 @@ ssize_t fi_opx_atomic_writemsg(struct fid_ep *ep, const struct fi_msg_atomic *ms
 								    FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
 								    OPX_HFI1_WFR, OPX_CTX_SHARING_ON);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
 								    0x0018000000000000ull, OPX_RELIABILITY,
-								    OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+								    OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED,
 								    FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
-								    OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+								    OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
+								    0x0018000000000000ull, OPX_RELIABILITY,
+								    OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+			} else {
+				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED,
+								    FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
+								    OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
 								    0x0018000000000000ull, OPX_RELIABILITY,
-								    OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+								    OPX_HFI1_CYR, OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED,
 								    FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
-								    OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+								    OPX_HFI1_CYR, OPX_CTX_SHARING_ON);
 			}
 		}
 	} else {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
 								    0x0018000000000000ull, OPX_RELIABILITY,
@@ -1331,26 +1420,36 @@ ssize_t fi_opx_atomic_writemsg(struct fid_ep *ep, const struct fi_msg_atomic *ms
 								    FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
 								    OPX_HFI1_WFR, OPX_CTX_SHARING_OFF);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
 								    0x0018000000000000ull, OPX_RELIABILITY,
-								    OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+								    OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED,
 								    FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
-								    OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+								    OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
+								    0x0018000000000000ull, OPX_RELIABILITY,
+								    OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+			} else {
+				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED,
+								    FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
+								    OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
 								    0x0018000000000000ull, OPX_RELIABILITY,
-								    OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+								    OPX_HFI1_CYR, OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_atomic_writemsg_generic(ep, msg, flags, FI_OPX_LOCK_NOT_REQUIRED,
 								    FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
-								    OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+								    OPX_HFI1_CYR, OPX_CTX_SHARING_OFF);
 			}
 		}
 	}
@@ -1378,7 +1477,7 @@ ssize_t fi_opx_atomic_readwritemsg(struct fid_ep *ep, const struct fi_msg_atomic
 
 	/* Non-inlined functions should just use the runtime HFI1 type check, no optimizations */
 	if (OPX_IS_CTX_SHARING_ENABLED) {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_readwritemsg_generic(
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
@@ -1388,30 +1487,40 @@ ssize_t fi_opx_atomic_readwritemsg(struct fid_ep *ep, const struct fi_msg_atomic
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
 					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR, OPX_CTX_SHARING_ON);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_readwritemsg_generic(
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_atomic_readwritemsg_generic(
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_atomic_readwritemsg_generic(
+					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+			} else {
+				rc = fi_opx_atomic_readwritemsg_generic(
+					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_readwritemsg_generic(
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_atomic_readwritemsg_generic(
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_ON);
 			}
 		}
 	} else {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_readwritemsg_generic(
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
@@ -1421,26 +1530,36 @@ ssize_t fi_opx_atomic_readwritemsg(struct fid_ep *ep, const struct fi_msg_atomic
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
 					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR, OPX_CTX_SHARING_OFF);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_readwritemsg_generic(
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_atomic_readwritemsg_generic(
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_atomic_readwritemsg_generic(
+					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+			} else {
+				rc = fi_opx_atomic_readwritemsg_generic(
+					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_readwritemsg_generic(
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_atomic_readwritemsg_generic(
 					ep, msg, resultv, result_count, flags, FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE,
-					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+					0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_OFF);
 			}
 		}
 	}
@@ -1468,7 +1587,7 @@ ssize_t fi_opx_atomic_compwritemsg(struct fid_ep *ep, const struct fi_msg_atomic
 	assert((FI_AV_TABLE == opx_ep->av_type) || (FI_AV_MAP == opx_ep->av_type));
 	/* Non-inlined functions should just use the runtime HFI1 type check, no optimizations */
 	if (OPX_IS_CTX_SHARING_ENABLED) {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_compwritemsg_generic(
 					ep, msg, comparev, compare_count, resultv, result_count, flags,
@@ -1480,34 +1599,46 @@ ssize_t fi_opx_atomic_compwritemsg(struct fid_ep *ep, const struct fi_msg_atomic
 					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
 					OPX_HFI1_WFR, OPX_CTX_SHARING_ON);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_compwritemsg_generic(
 					ep, msg, comparev, compare_count, resultv, result_count, flags,
 					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull, OPX_RELIABILITY,
-					OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+					OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_atomic_compwritemsg_generic(
 					ep, msg, comparev, compare_count, resultv, result_count, flags,
 					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
-					OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON);
+					OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_atomic_compwritemsg_generic(
+					ep, msg, comparev, compare_count, resultv, result_count, flags,
+					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull, OPX_RELIABILITY,
+					OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+			} else {
+				rc = fi_opx_atomic_compwritemsg_generic(
+					ep, msg, comparev, compare_count, resultv, result_count, flags,
+					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
+					OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_compwritemsg_generic(
 					ep, msg, comparev, compare_count, resultv, result_count, flags,
 					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull, OPX_RELIABILITY,
-					OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+					OPX_HFI1_CYR, OPX_CTX_SHARING_ON);
 			} else {
 				rc = fi_opx_atomic_compwritemsg_generic(
 					ep, msg, comparev, compare_count, resultv, result_count, flags,
 					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
-					OPX_HFI1_JKR, OPX_CTX_SHARING_ON);
+					OPX_HFI1_CYR, OPX_CTX_SHARING_ON);
 			}
 		}
 	} else {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_compwritemsg_generic(
 					ep, msg, comparev, compare_count, resultv, result_count, flags,
@@ -1519,30 +1650,42 @@ ssize_t fi_opx_atomic_compwritemsg(struct fid_ep *ep, const struct fi_msg_atomic
 					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
 					OPX_HFI1_WFR, OPX_CTX_SHARING_OFF);
 			}
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_compwritemsg_generic(
 					ep, msg, comparev, compare_count, resultv, result_count, flags,
 					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull, OPX_RELIABILITY,
-					OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+					OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_atomic_compwritemsg_generic(
 					ep, msg, comparev, compare_count, resultv, result_count, flags,
 					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
-					OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF);
+					OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF);
+			}
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			if (opx_ep->av_type == FI_AV_MAP) {
+				rc = fi_opx_atomic_compwritemsg_generic(
+					ep, msg, comparev, compare_count, resultv, result_count, flags,
+					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull, OPX_RELIABILITY,
+					OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+			} else {
+				rc = fi_opx_atomic_compwritemsg_generic(
+					ep, msg, comparev, compare_count, resultv, result_count, flags,
+					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
+					OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
 			}
 		} else {
-			assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
 			if (opx_ep->av_type == FI_AV_MAP) {
 				rc = fi_opx_atomic_compwritemsg_generic(
 					ep, msg, comparev, compare_count, resultv, result_count, flags,
 					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_MAP, 0x0018000000000000ull, OPX_RELIABILITY,
-					OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+					OPX_HFI1_CYR, OPX_CTX_SHARING_OFF);
 			} else {
 				rc = fi_opx_atomic_compwritemsg_generic(
 					ep, msg, comparev, compare_count, resultv, result_count, flags,
 					FI_OPX_LOCK_NOT_REQUIRED, FI_AV_TABLE, 0x0018000000000000ull, OPX_RELIABILITY,
-					OPX_HFI1_JKR, OPX_CTX_SHARING_OFF);
+					OPX_HFI1_CYR, OPX_CTX_SHARING_OFF);
 			}
 		}
 	}
@@ -1705,16 +1848,20 @@ int fi_opx_finalize_atomic_ops(struct fid_ep *ep)
 
 FI_OPX_ATOMIC_SPECIALIZED_FUNC(OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR,
 			       OPX_CTX_SHARING_ON)
-FI_OPX_ATOMIC_SPECIALIZED_FUNC(OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B,
+FI_OPX_ATOMIC_SPECIALIZED_FUNC(OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B,
 			       OPX_CTX_SHARING_ON)
 FI_OPX_ATOMIC_SPECIALIZED_FUNC(OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+			       OPX_CTX_SHARING_ON)
+FI_OPX_ATOMIC_SPECIALIZED_FUNC(OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
 			       OPX_CTX_SHARING_ON)
 
 FI_OPX_ATOMIC_SPECIALIZED_FUNC(OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR,
 			       OPX_CTX_SHARING_OFF)
-FI_OPX_ATOMIC_SPECIALIZED_FUNC(OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B,
+FI_OPX_ATOMIC_SPECIALIZED_FUNC(OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B,
 			       OPX_CTX_SHARING_OFF)
 FI_OPX_ATOMIC_SPECIALIZED_FUNC(OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+			       OPX_CTX_SHARING_OFF)
+FI_OPX_ATOMIC_SPECIALIZED_FUNC(OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
 			       OPX_CTX_SHARING_OFF)
 
 ssize_t fi_opx_atomic_FABRIC_DIRECT(struct fid_ep *ep, const void *buf, size_t count, void *desc, fi_addr_t dest_addr,
@@ -1723,34 +1870,44 @@ ssize_t fi_opx_atomic_FABRIC_DIRECT(struct fid_ep *ep, const void *buf, size_t c
 {
 	/* Non-inlined functions should just use the runtime HFI1 type check, no optimizations */
 	if (OPX_IS_CTX_SHARING_ENABLED) {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
 								   OPX_RELIABILITY, OPX_HFI1_WFR, OPX_CTX_SHARING_ON)(
 				ep, buf, count, desc, dest_addr, addr, key, datatype, op, context);
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
-				atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B,
+				atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B,
 				OPX_CTX_SHARING_ON)(ep, buf, count, desc, dest_addr, addr, key, datatype, op, context);
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
+								   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON)(
+				ep, buf, count, desc, dest_addr, addr, key, datatype, op, context);
+		} else {
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
+								   OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_ON)(
+				ep, buf, count, desc, dest_addr, addr, key, datatype, op, context);
 		}
-		assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
-		return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
-							   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON)(
-			ep, buf, count, desc, dest_addr, addr, key, datatype, op, context);
 
 	} else {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
 								   OPX_RELIABILITY, OPX_HFI1_WFR, OPX_CTX_SHARING_OFF)(
 				ep, buf, count, desc, dest_addr, addr, key, datatype, op, context);
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
-				atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR_9B,
+				atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_MIXED_9B,
 				OPX_CTX_SHARING_OFF)(ep, buf, count, desc, dest_addr, addr, key, datatype, op, context);
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
+								   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF)(
+				ep, buf, count, desc, dest_addr, addr, key, datatype, op, context);
+		} else {
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
+								   OPX_RELIABILITY, OPX_HFI1_CYR, OPX_CTX_SHARING_OFF)(
+				ep, buf, count, desc, dest_addr, addr, key, datatype, op, context);
 		}
-		assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
-		return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
-							   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF)(
-			ep, buf, count, desc, dest_addr, addr, key, datatype, op, context);
 	}
 
 	abort();
@@ -1761,35 +1918,45 @@ ssize_t fi_opx_inject_atomic_FABRIC_DIRECT(struct fid_ep *ep, const void *buf, s
 {
 	/* Non-inlined functions should just use the runtime HFI1 type check, no optimizations */
 	if (OPX_IS_CTX_SHARING_ENABLED) {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
 				inject_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR,
 				OPX_CTX_SHARING_ON)(ep, buf, count, dest_addr, addr, key, datatype, op);
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(inject_atomic, OPX_LOCK, OPX_AV,
 								   0x0018000000000000ull, OPX_RELIABILITY,
-								   OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON)(
+								   OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON)(
 				ep, buf, count, dest_addr, addr, key, datatype, op);
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
+				inject_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+				OPX_CTX_SHARING_ON)(ep, buf, count, dest_addr, addr, key, datatype, op);
+		} else {
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
+				inject_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
+				OPX_CTX_SHARING_ON)(ep, buf, count, dest_addr, addr, key, datatype, op);
 		}
-		assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
-		return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(inject_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
-							   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON)(
-			ep, buf, count, dest_addr, addr, key, datatype, op);
 	} else {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
 				inject_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR,
 				OPX_CTX_SHARING_OFF)(ep, buf, count, dest_addr, addr, key, datatype, op);
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(inject_atomic, OPX_LOCK, OPX_AV,
 								   0x0018000000000000ull, OPX_RELIABILITY,
-								   OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF)(
+								   OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF)(
 				ep, buf, count, dest_addr, addr, key, datatype, op);
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
+				inject_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+				OPX_CTX_SHARING_OFF)(ep, buf, count, dest_addr, addr, key, datatype, op);
+		} else {
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
+				inject_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
+				OPX_CTX_SHARING_OFF)(ep, buf, count, dest_addr, addr, key, datatype, op);
 		}
-		assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
-		return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(inject_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
-							   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF)(
-			ep, buf, count, dest_addr, addr, key, datatype, op);
 	}
 
 	abort();
@@ -1801,39 +1968,51 @@ ssize_t fi_opx_fetch_atomic_FABRIC_DIRECT(struct fid_ep *ep, const void *buf, si
 {
 	/* Non-inlined functions should just use the runtime HFI1 type check, no optimizations */
 	if (OPX_IS_CTX_SHARING_ENABLED) {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(fetch_atomic, OPX_LOCK, OPX_AV,
 								   0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR,
 								   OPX_CTX_SHARING_ON)(
 				ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op, context);
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(fetch_atomic, OPX_LOCK, OPX_AV,
 								   0x0018000000000000ull, OPX_RELIABILITY,
-								   OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON)(
+								   OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON)(
+				ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op, context);
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(fetch_atomic, OPX_LOCK, OPX_AV,
+								   0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+								   OPX_CTX_SHARING_ON)(
+				ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op, context);
+		} else {
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(fetch_atomic, OPX_LOCK, OPX_AV,
+								   0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
+								   OPX_CTX_SHARING_ON)(
 				ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op, context);
 		}
-
-		assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
-		return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(fetch_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
-							   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON)(
-			ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op, context);
 	} else {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(fetch_atomic, OPX_LOCK, OPX_AV,
 								   0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR,
 								   OPX_CTX_SHARING_OFF)(
 				ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op, context);
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(fetch_atomic, OPX_LOCK, OPX_AV,
 								   0x0018000000000000ull, OPX_RELIABILITY,
-								   OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF)(
+								   OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF)(
+				ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op, context);
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(fetch_atomic, OPX_LOCK, OPX_AV,
+								   0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+								   OPX_CTX_SHARING_OFF)(
+				ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op, context);
+		} else {
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(fetch_atomic, OPX_LOCK, OPX_AV,
+								   0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
+								   OPX_CTX_SHARING_OFF)(
 				ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op, context);
 		}
-
-		assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
-		return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(fetch_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
-							   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF)(
-			ep, buf, count, desc, result, result_desc, dest_addr, addr, key, datatype, op, context);
 	}
 }
 
@@ -1844,42 +2023,52 @@ ssize_t fi_opx_compare_atomic_FABRIC_DIRECT(struct fid_ep *ep, const void *buf, 
 {
 	/* Non-inlined functions should just use the runtime HFI1 type check, no optimizations */
 	if (OPX_IS_CTX_SHARING_ENABLED) {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
 				compare_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR,
 				OPX_CTX_SHARING_ON)(ep, buf, count, desc, compare, compare_desc, result, result_desc,
 						    dest_addr, addr, key, datatype, op, context);
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(compare_atomic, OPX_LOCK, OPX_AV,
 								   0x0018000000000000ull, OPX_RELIABILITY,
-								   OPX_HFI1_JKR_9B, OPX_CTX_SHARING_ON)(
+								   OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_ON)(
 				ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr, addr, key,
 				datatype, op, context);
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
+				compare_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+				OPX_CTX_SHARING_ON)(ep, buf, count, desc, compare, compare_desc, result, result_desc,
+						    dest_addr, addr, key, datatype, op, context);
+		} else {
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
+				compare_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
+				OPX_CTX_SHARING_ON)(ep, buf, count, desc, compare, compare_desc, result, result_desc,
+						    dest_addr, addr, key, datatype, op, context);
 		}
-
-		assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
-		return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(compare_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
-							   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_ON)(
-			ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr, addr, key,
-			datatype, op, context);
 	} else {
-		if (OPX_HFI1_TYPE & OPX_HFI1_WFR) {
+		if (OPX_SW_HFI1_TYPE & OPX_HFI1_WFR) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
 				compare_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_WFR,
 				OPX_CTX_SHARING_OFF)(ep, buf, count, desc, compare, compare_desc, result, result_desc,
 						     dest_addr, addr, key, datatype, op, context);
-		} else if (OPX_HFI1_TYPE & OPX_HFI1_JKR_9B) {
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_MIXED_9B) {
 			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(compare_atomic, OPX_LOCK, OPX_AV,
 								   0x0018000000000000ull, OPX_RELIABILITY,
-								   OPX_HFI1_JKR_9B, OPX_CTX_SHARING_OFF)(
+								   OPX_HFI1_MIXED_9B, OPX_CTX_SHARING_OFF)(
 				ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr, addr, key,
 				datatype, op, context);
+		} else if (OPX_SW_HFI1_TYPE & OPX_HFI1_JKR) {
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
+				compare_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_JKR,
+				OPX_CTX_SHARING_OFF)(ep, buf, count, desc, compare, compare_desc, result, result_desc,
+						     dest_addr, addr, key, datatype, op, context);
+		} else {
+			assert(OPX_SW_HFI1_TYPE & OPX_HFI1_CYR);
+			return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(
+				compare_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull, OPX_RELIABILITY, OPX_HFI1_CYR,
+				OPX_CTX_SHARING_OFF)(ep, buf, count, desc, compare, compare_desc, result, result_desc,
+						     dest_addr, addr, key, datatype, op, context);
 		}
-
-		assert(OPX_HFI1_TYPE == OPX_HFI1_JKR);
-		return FI_OPX_ATOMIC_SPECIALIZED_FUNC_NAME(compare_atomic, OPX_LOCK, OPX_AV, 0x0018000000000000ull,
-							   OPX_RELIABILITY, OPX_HFI1_JKR, OPX_CTX_SHARING_OFF)(
-			ep, buf, count, desc, compare, compare_desc, result, result_desc, dest_addr, addr, key,
-			datatype, op, context);
 	}
 }

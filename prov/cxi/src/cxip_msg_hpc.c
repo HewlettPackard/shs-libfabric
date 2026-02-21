@@ -447,7 +447,7 @@ static int issue_rdzv_get(struct cxip_req *req)
 		(uint64_t)cmd.local_addr, cmd.request_len,
 		(uint64_t)cmd.remote_offset);
 
-	ret = cxip_rxc_emit_dma(rxc, req->recv.vni,
+	ret = cxip_rxc_emit_dma(rxc, rxc->tx_rget_cmdq, req->recv.vni,
 				cxip_ofi_to_cxi_tc(cxip_env.rget_tc),
 				tc_type, &cmd, 0);
 	if (ret)
@@ -514,7 +514,7 @@ static int cxip_notify_match(struct cxip_req *req, const union c_event *event)
 
 	req->cb = cxip_notify_match_cb;
 
-	ret = cxip_rxc_emit_idc_msg(rxc, event->tgt_long.vni,
+	ret = cxip_rxc_emit_idc_msg(rxc, rxc->tx_cmdq, event->tgt_long.vni,
 				    cxip_ofi_to_cxi_tc(cxip_env.rget_tc),
 				    CXI_TC_TYPE_DEFAULT, &c_state, &idc_msg,
 				    NULL, 0, 0);
@@ -840,7 +840,7 @@ static int cxip_rxc_check_ule_hybrid_preempt(struct cxip_rxc_hpc *rxc)
 	int ret;
 	int count;
 
-	if (cxip_env.rx_match_mode == CXIP_PTLTE_HYBRID_MODE &&
+	if (rxc->base.domain->rx_match_mode == CXIP_PTLTE_HYBRID_MODE &&
 	    cxip_env.hybrid_unexpected_msg_preemptive == 1) {
 		count = ofi_atomic_get32(&rxc->orx_hw_ule_cnt);
 
@@ -1180,7 +1180,7 @@ static int cxip_rdzv_done_notify(struct cxip_req *req)
 	RXC_DBG(rxc, "RDZV done notify send RDZV ID: %d\n",
 		req->recv.rdzv_id);
 
-	ret = cxip_rxc_emit_dma(rxc, req->recv.vni,
+	ret = cxip_rxc_emit_dma(rxc, rxc->tx_cmdq, req->recv.vni,
 				cxip_ofi_to_cxi_tc(cxip_env.rget_tc),
 				CXI_TC_TYPE_DEFAULT, &cmd, 0);
 	if (ret)
@@ -1929,7 +1929,7 @@ static void cxip_fc_progress_ctrl(struct cxip_rxc_hpc *rxc)
 	rxc->drop_count = rxc->base.ep_obj->asic_ver < CASSINI_2_0 ? -1 : 0;
 
 	while ((ret = cxip_recv_resume(rxc)) == -FI_EAGAIN)
-		cxip_ep_tx_ctrl_progress_locked(rxc->base.ep_obj);
+		cxip_ep_tx_ctrl_progress_locked(rxc->base.ep_obj, true);
 
 	assert(ret == FI_SUCCESS);
 }
@@ -1944,7 +1944,7 @@ static void cxip_post_ux_onload_sw(struct cxip_rxc_hpc *rxc)
 {
 	int ret;
 
-	assert(cxip_env.rx_match_mode == CXIP_PTLTE_HYBRID_MODE);
+	assert(rxc->base.domain->rx_match_mode == CXIP_PTLTE_HYBRID_MODE);
 	assert(rxc->prev_state == RXC_ENABLED);
 	assert(rxc->new_state == RXC_ENABLED_SOFTWARE);
 
@@ -2422,7 +2422,7 @@ void cxip_recv_pte_cb(struct cxip_pte *pte, const union c_event *event)
 			/* If running in hybrid mode, resume operation as a
 			 * software managed EP to reduce LE resource load.
 			 */
-			if (cxip_env.rx_match_mode == CXIP_PTLTE_HYBRID_MODE)
+			if (rxc->base.domain->rx_match_mode == CXIP_PTLTE_HYBRID_MODE)
 				rxc->new_state = RXC_ENABLED_SOFTWARE;
 
 			rxc->num_fc_append_fail++;
@@ -2463,7 +2463,7 @@ void cxip_recv_pte_cb(struct cxip_pte *pte, const union c_event *event)
 			 * Must replenish buffers, but does not require that
 			 * LE resources are recovered.
 			 */
-			RXC_WARN(rxc, FC_REQ_FULL_MSG, cxip_env.req_buf_size);
+			RXC_WARN(rxc, FC_REQ_FULL_MSG, rxc->base.domain->req_buf_size);
 			rxc->base.state = RXC_ONLOAD_FLOW_CONTROL_REENABLE;
 			rxc->num_fc_req_full++;
 			break;
@@ -2528,7 +2528,7 @@ void cxip_recv_pte_cb(struct cxip_pte *pte, const union c_event *event)
 			 * been disabled; it is safe to ignore this change.
 			 */
 			assert(rxc->base.state == RXC_DISABLED);
-			if (!cxip_env.msg_offload) {
+			if (!rxc->base.domain->msg_offload) {
 				RXC_WARN(rxc, "Software managed EP enabled\n");
 				rxc->base.state = RXC_ENABLED_SOFTWARE;
 			}
@@ -3142,7 +3142,7 @@ int cxip_build_ux_entry_info(struct cxip_ep *ep,
 
 	RXC_DBG(rxc, "Search for ULE dump initiated, req %p\n", req);
 	do {
-		cxip_evtq_progress(&rxc->base.rx_evtq);
+		cxip_evtq_progress(&rxc->base.rx_evtq, true);
 		sched_yield();
 	} while (!ux_dump->done);
 
@@ -3196,7 +3196,8 @@ static int cxip_recv_sw_matched(struct cxip_req *req,
 				break;
 
 			ofi_atomic_dec32(&rxc->orx_tx_reqs);
-			cxip_evtq_progress(&rxc->base.ep_obj->txc->tx_evtq);
+			cxip_evtq_progress(&rxc->base.ep_obj->txc->tx_evtq,
+					   true);
 		} while (true);
 
 		do {
@@ -3205,7 +3206,8 @@ static int cxip_recv_sw_matched(struct cxip_req *req,
 			if (ret == FI_SUCCESS)
 				break;
 
-			cxip_evtq_progress(&rxc->base.ep_obj->txc->tx_evtq);
+			cxip_evtq_progress(&rxc->base.ep_obj->txc->tx_evtq,
+					   true);
 		} while (true);
 
 		/* If multi-recv, a child request was created from
@@ -3352,7 +3354,8 @@ cxip_recv_req_init(struct cxip_rxc *rxc, void *buf, size_t len, fi_addr_t addr,
 
 	/* HW to SW PtlTE transition, ensure progress is made */
 	if (rxc->state != RXC_ENABLED && rxc->state != RXC_ENABLED_SOFTWARE) {
-		cxip_cq_progress(rxc->recv_cq);
+		/* EP lock is held */
+		rxc->ops.progress(rxc, true);
 		ret = -FI_EAGAIN;
 		goto err;
 	}
@@ -3376,9 +3379,7 @@ cxip_recv_req_init(struct cxip_rxc *rxc, void *buf, size_t len, fi_addr_t addr,
 		goto err;
 	}
 
-	ofi_genlock_lock(&rxc->ep_obj->lock);
 	ret = cxip_recv_req_alloc(rxc, buf, len, NULL, &req, cxip_recv_cb);
-	ofi_genlock_unlock(&rxc->ep_obj->lock);
 	if (ret)
 		return ret;
 
@@ -3394,6 +3395,9 @@ cxip_recv_req_init(struct cxip_rxc *rxc, void *buf, size_t len, fi_addr_t addr,
 		req->flags |= FI_MSG;
 
 	req->recv.cntr = comp_cntr ? comp_cntr : rxc->recv_cntr;
+	if (req->recv.cntr)
+		cxip_cntr_progress_inc(req->recv.cntr);
+
 	req->recv.match_id = match_id;
 	req->recv.tag = tag;
 	req->recv.ignore = ignore;
@@ -3421,18 +3425,19 @@ int cxip_unexp_start(struct fi_peer_rx_entry *rx_entry)
 	ux_mb.raw = ux->put_ev.tgt_long.match_bits;
 	rxc = ux->rxc;
 
+	ofi_genlock_lock(&rxc->ep_obj->lock);
 	ret = cxip_recv_req_init(rxc, rx_entry->iov[0].iov_base,
 				rx_entry->iov[0].iov_len, rx_entry->addr,
 				rx_entry->tag, 0, rx_entry->flags,
 				ux_mb.tagged, rx_entry->context, NULL, &req);
 	if (ret)
-		return ret;
+		goto out;
 
 	req->rx_entry = rx_entry;
 
 	ret = cxip_recv_sw_matched(req, ux);
 	if (ret == -FI_EAGAIN)
-		return ret;
+		goto out;
 
 	/* FI_EINPROGRESS is return for a multi-recv match. */
 	assert(ret == FI_SUCCESS || ret == -FI_EINPROGRESS);
@@ -3445,6 +3450,8 @@ int cxip_unexp_start(struct fi_peer_rx_entry *rx_entry)
 	RXC_DBG(rxc,
 		"Software match, req: %p ux_send: %p\n", req, ux);
 
+out:
+	ofi_genlock_unlock(&rxc->ep_obj->lock);
 	return ret;
 }
 
@@ -3467,6 +3474,7 @@ static int cxip_process_srx_ux_matcher(struct cxip_rxc *rxc,
 	vni = ux->put_ev.tgt_long.vni;
 
 	match.addr = cxip_recv_req_src_addr(rxc, ux_init, vni, true);
+	match.msg_size = ux->put_ev.tgt_long.rlength;
 
 	ux_mb.raw = ux->put_ev.tgt_long.match_bits;
 
@@ -3483,6 +3491,10 @@ static int cxip_process_srx_ux_matcher(struct cxip_rxc *rxc,
 	if (ret == -FI_ENOENT) {
 		/* this is used when the owner calls start_msg */
 		rx_entry->peer_context = ux;
+		if (ux_mb.cq_data) {
+			rx_entry->flags |= FI_REMOTE_CQ_DATA;
+			rx_entry->cq_data = ux->put_ev.tgt_long.header_data;
+		}
 		return -FI_ENOMSG;
 	} else if (ret) {
 		return ret;
@@ -3684,9 +3696,9 @@ err_dequeue_req:
 	return -FI_EAGAIN;
 }
 
-static void cxip_rxc_hpc_progress(struct cxip_rxc *rxc)
+static void cxip_rxc_hpc_progress(struct cxip_rxc *rxc, bool internal)
 {
-	cxip_evtq_progress(&rxc->rx_evtq);
+	cxip_evtq_progress(&rxc->rx_evtq, internal);
 }
 
 static void cxip_rxc_hpc_recv_req_tgt_event(struct cxip_req *req,
@@ -3853,24 +3865,19 @@ static int cxip_rxc_hpc_msg_init(struct cxip_rxc *rxc_base)
 	};
 	struct cxi_cq_alloc_opts cq_opts = {};
 	enum c_ptlte_state state;
+	bool alt_read = cxip_env.rdzv_proto == CXIP_RDZV_PROTO_ALT_READ &&
+			!cxip_env.disable_alt_read_cmdq;
+	bool tc_unspec = cxip_env.rget_tc == FI_TC_UNSPEC;
 	int ret;
 
 	assert(rxc->base.protocol == FI_PROTO_CXI);
 	dlist_init(&rxc->replay_queue);
 
-	/* For FI_TC_UNSPEC, reuse the TX context command queue if possible. If
-	 * a specific traffic class is requested, allocate a new command queue.
-	 * This is done to prevent performance issues with reusing the TX
-	 * context command queue and changing the communication profile.
+	/* Create a unique rendezvous command queue if a specific traffic
+	 * class is specified gets or the alternate read rendezvous where
+	 * restricted transfers will be used is active.
 	 */
-	if (cxip_env.rget_tc == FI_TC_UNSPEC) {
-		ret = cxip_ep_cmdq(rxc->base.ep_obj, true, FI_TC_UNSPEC,
-				   rxc->base.rx_evtq.eq, &rxc->tx_cmdq);
-		if (ret != FI_SUCCESS) {
-			CXIP_WARN("Unable to allocate TX CMDQ, ret: %d\n", ret);
-			return -FI_EDOMAIN;
-		}
-	} else {
+	if (!tc_unspec || alt_read) {
 		cq_opts.count = rxc->base.ep_obj->txq_size * 4;
 		cq_opts.flags = CXI_CQ_IS_TX;
 		cq_opts.policy = cxip_env.cq_policy;
@@ -3879,11 +3886,43 @@ static int cxip_rxc_hpc_msg_init(struct cxip_rxc *rxc_base)
 				      rxc->base.rx_evtq.eq, &cq_opts,
 				      rxc->base.ep_obj->auth_key.vni,
 				      cxip_ofi_to_cxi_tc(cxip_env.rget_tc),
-				      CXI_TC_TYPE_DEFAULT, &rxc->tx_cmdq);
+				      alt_read ? CXI_TC_TYPE_RESTRICTED :
+				      CXI_TC_TYPE_DEFAULT, &rxc->tx_rget_cmdq);
 		if (ret != FI_SUCCESS) {
-			CXIP_WARN("Unable to allocate CMDQ, ret: %d\n", ret);
+			CXIP_WARN("Allocate rget CMDQ failed, ret: %d %s %s\n",
+				  ret,
+				  !tc_unspec ? "unset FI_CXI_RGET_TC\n" : "",
+				  alt_read ?
+				  "set FI_CXI_DISABLE_ALT_READ_CMDQ\n" : "");
 			return -FI_ENOSPC;
 		}
+
+		/* A single distinct command queue is sufficient for the
+		 * default rendezvous protocol with a TC specified.
+		 */
+		if (!alt_read)
+			rxc->tx_cmdq = rxc->tx_rget_cmdq;
+	}
+
+	/* If a specific rendezvous TC is not requested it is possible to
+	 * share an existing TX command queue. The alternate read protocol
+	 * prefers to use the shared TX queue for notify operations to
+	 * avoid communication profile changes.
+	 */
+	if (tc_unspec || alt_read) {
+		ret = cxip_ep_cmdq(rxc->base.ep_obj, true, FI_TC_UNSPEC,
+				   rxc->base.rx_evtq.eq, &rxc->tx_cmdq);
+		if (ret != FI_SUCCESS) {
+			CXIP_WARN("Unable to allocate TX CMDQ, ret: %d\n", ret);
+			ret = -FI_EDOMAIN;
+			goto put_tx_rget_cmdq;
+		}
+
+		/* One command queue is sufficient for the default rendezvous
+		 * protocol.
+		 */
+		if (!alt_read)
+			rxc->tx_rget_cmdq = rxc->tx_cmdq;
 	}
 
 	/* If applications AVs are symmetric, use logical FI addresses for
@@ -3917,7 +3956,7 @@ static int cxip_rxc_hpc_msg_init(struct cxip_rxc *rxc_base)
 	/* If starting in or able to transition to software managed
 	 * PtlTE, append request list entries first.
 	 */
-	if (cxip_software_pte_allowed()) {
+	if (cxip_software_pte_allowed(rxc->base.domain->rx_match_mode)) {
 		ret = cxip_req_bufpool_init(rxc);
 		if (ret != FI_SUCCESS)
 			goto free_slots;
@@ -3943,7 +3982,7 @@ static int cxip_rxc_hpc_msg_init(struct cxip_rxc *rxc_base)
 	/* Wait for PTE state change */
 	do {
 		sched_yield();
-		cxip_evtq_progress(&rxc->base.rx_evtq);
+		cxip_evtq_progress(&rxc->base.rx_evtq, true);
 	} while (rxc->base.rx_pte->state != state);
 
 	CXIP_DBG("RXC HPC messaging enabled: %p, pid_bits: %d\n",
@@ -3955,7 +3994,7 @@ free_oflow_buf:
 	if (rxc->base.msg_offload)
 		cxip_oflow_bufpool_fini(rxc);
 free_req_buf:
-	if (cxip_software_pte_allowed())
+	if (cxip_software_pte_allowed(rxc->base.domain->rx_match_mode))
 		cxip_req_bufpool_fini(rxc);
 free_slots:
 	cxip_evtq_adjust_reserved_fc_event_slots(&rxc->base.rx_evtq,
@@ -3964,10 +4003,12 @@ free_pte:
 	cxip_pte_free(rxc->base.rx_pte);
 
 put_tx_cmdq:
-	if (cxip_env.rget_tc == FI_TC_UNSPEC)
+	if (tc_unspec || alt_read)
 		cxip_ep_cmdq_put(rxc->base.ep_obj, true);
-	else
-		cxip_cmdq_free(rxc->tx_cmdq);
+
+put_tx_rget_cmdq:
+	if (!tc_unspec || alt_read)
+		cxip_cmdq_free(rxc->tx_rget_cmdq);
 
 	return ret;
 }
@@ -3976,13 +4017,16 @@ static int cxip_rxc_hpc_msg_fini(struct cxip_rxc *rxc_base)
 {
 	struct cxip_rxc_hpc *rxc = container_of(rxc_base, struct cxip_rxc_hpc,
 						base);
+	bool alt_read = cxip_env.rdzv_proto == CXIP_RDZV_PROTO_ALT_READ &&
+			!cxip_env.disable_alt_read_cmdq;
 
 	assert(rxc->base.protocol == FI_PROTO_CXI);
 
-	if (cxip_env.rget_tc == FI_TC_UNSPEC)
+	if (cxip_env.rget_tc == FI_TC_UNSPEC || alt_read)
 		cxip_ep_cmdq_put(rxc->base.ep_obj, true);
-	else
-		cxip_cmdq_free(rxc->tx_cmdq);
+
+	if (cxip_env.rget_tc != FI_TC_UNSPEC || alt_read)
+		cxip_cmdq_free(rxc->tx_rget_cmdq);
 
 	cxip_evtq_adjust_reserved_fc_event_slots(&rxc->base.rx_evtq,
 						 -1 * RXC_RESERVED_FC_SLOTS);
@@ -4057,9 +4101,9 @@ static void cxip_rxc_hpc_cleanup(struct cxip_rxc *rxc_base)
 			  rxc->num_sc_nic_hw2sw_unexp,
 			  rxc->num_sc_nic_hw2sw_append_fail);
 
-	if (cxip_software_pte_allowed())
+	if (cxip_software_pte_allowed(rxc->base.domain->rx_match_mode))
 		cxip_req_bufpool_fini(rxc);
-	if (cxip_env.msg_offload)
+	if (rxc->base.domain->msg_offload)
 		cxip_oflow_bufpool_fini(rxc);
 }
 
@@ -4072,7 +4116,7 @@ static int cxip_rxc_check_recv_count_hybrid_preempt(struct cxip_rxc *rxc)
 	if (rxc->protocol != FI_PROTO_CXI)
 		return FI_SUCCESS;
 
-	if (cxip_env.rx_match_mode == CXIP_PTLTE_HYBRID_MODE &&
+	if (rxc->domain->rx_match_mode == CXIP_PTLTE_HYBRID_MODE &&
 	    cxip_env.hybrid_posted_recv_preemptive == 1) {
 		count = cxip_rxc_orx_reqs_get(rxc);
 
@@ -4135,7 +4179,7 @@ ssize_t _cxip_recv_req(struct cxip_req *req, bool restart_seq)
 	 * still matching in hardware, and FI_CXI_HYBRID_RECV_PREEMPTIVE
 	 * explicitly set by the application.
 	 */
-	if (cxip_env.rx_match_mode != CXIP_PTLTE_HYBRID_MODE ||
+	if (rxc->domain->rx_match_mode != CXIP_PTLTE_HYBRID_MODE ||
 	    ++rxc->recv_appends & CXIP_HYBRID_RECV_CHECK_INTERVAL)
 		le_flags = C_LE_EVENT_LINK_DISABLE;
 
@@ -4196,12 +4240,12 @@ cxip_recv_common(struct cxip_rxc *rxc, void *buf, size_t len, void *desc,
 
 	assert(rxc_hpc->base.protocol == FI_PROTO_CXI);
 
+	ofi_genlock_lock(&rxc->ep_obj->lock);
 	ret = cxip_recv_req_init(rxc, buf, len, src_addr, tag, ignore, flags,
 				 tagged, context, comp_cntr, &req);
 	if (ret)
 		goto err;
 
-	ofi_genlock_lock(&rxc->ep_obj->lock);
 	if (!(req->recv.flags & (FI_PEEK | FI_CLAIM))) {
 		ret = cxip_recv_req_queue(req, false);
 		/* Match made in software? */
@@ -4261,8 +4305,8 @@ cxip_recv_common(struct cxip_rxc *rxc, void *buf, size_t len, void *desc,
 
 err_free_request:
 	cxip_recv_req_free(req);
-	ofi_genlock_unlock(&rxc->ep_obj->lock);
 err:
+	ofi_genlock_unlock(&rxc->ep_obj->lock);
 	return ret;
 }
 
@@ -4395,6 +4439,15 @@ int cxip_rdzv_pte_src_cb(struct cxip_req *req, const union c_event *event)
 
 	case C_EVENT_GET:
 		mb.raw = event->tgt_long.match_bits;
+		if (mb.coll_get) {
+			if (event_rc != C_RC_OK)
+				CXIP_DBG("%s: Collectives rdma get had a failure\n", __func__);
+			else
+				CXIP_DBG("%s: Collectives rdma get was ok\n", __func__);
+
+			return FI_SUCCESS;
+		}
+
 		rdzv_id = (mb.rdzv_id_hi << CXIP_RDZV_ID_CMD_WIDTH) |
 			  mb.rdzv_id_lo;
 		get_req = cxip_rdzv_id_lookup(txc, rdzv_id);
@@ -5121,7 +5174,7 @@ static int cxip_send_req_queue(struct cxip_txc_hpc *txc, struct cxip_req *req)
 			/* Peer is disabled. Progress control EQs so future
 			 * cxip_send_req_queue() may succeed.
 			 */
-			cxip_ep_ctrl_progress_locked(txc->base.ep_obj);
+			cxip_ep_ctrl_progress_locked(txc->base.ep_obj, true);
 
 			return -FI_EAGAIN;
 		}
@@ -5162,9 +5215,10 @@ static int cxip_send_req_dequeue(struct cxip_txc_hpc *txc, struct cxip_req *req)
 	return FI_SUCCESS;
 }
 
-static void cxip_txc_hpc_progress(struct cxip_txc *txc)
+static void cxip_txc_hpc_progress(struct cxip_txc *txc, bool internal)
 {
-	cxip_evtq_progress(&txc->tx_evtq);
+	cxip_evtq_progress(&txc->tx_evtq, internal);
+	cxip_coll_progress_cq_poll(txc->ep_obj);
 }
 
 static int cxip_txc_hpc_cancel_msg_send(struct cxip_req *req)

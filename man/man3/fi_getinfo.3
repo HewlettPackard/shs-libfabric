@@ -14,7 +14,7 @@
 . ftr VB CB
 . ftr VBI CBI
 .\}
-.TH "fi_getinfo" "3" "2025\-04\-30" "Libfabric Programmer\[cq]s Manual" "#VERSION#"
+.TH "fi_getinfo" "3" "2025\-10\-31" "Libfabric Programmer\[cq]s Manual" "#VERSION#"
 .hy
 .SH NAME
 .PP
@@ -297,10 +297,14 @@ See \f[V]fi_nic\f[R](3) for details.
 .PP
 Interface capabilities are obtained by OR-ing the following flags
 together.
-If capabilities in the hint parameter are set to 0, the underlying
-provider will return the set of capabilities which are supported.
-Otherwise, providers will return data matching the specified set of
-capabilities.
+If a NULL hints structure is provided, the underlying provider will
+return the set of capabilities which are supported.
+If a hints structure is provided but the capabilities in the hints
+structure are set to 0, the underlying provider will only return the set
+of capabilities that the provider can support with the mode bits set by
+the application in the hints structure.
+Otherwise, if capabilities are specified with non-zero values, providers
+will return data matching the specified set of capabilities.
 Providers may indicate support for additional capabilities beyond those
 requested when the use of expanded capabilities will not adversely
 affect performance or expose the application to communication beyond
@@ -744,6 +748,13 @@ Address is of type sockaddr_in (IPv4).
 .TP
 \f[I]FI_SOCKADDR_IN6\f[R]
 Address is of type sockaddr_in6 (IPv6).
+.TP
+\f[I]FI_SOCKADDR_IP\f[R]
+Address is of type sockaddr_in (IPv4) or sockaddr_in6 (IPv6).
+The specific socket address format will be determined at run time by
+interfaces examining the sa_family field.
+This format is different from FI_SOCKADDR in that the address can only
+be IPv4 or IPv6, not any other socket address such as sockaddr_ib.
 .SH FLAGS
 .PP
 The operation of the fi_getinfo call may be controlled through the use

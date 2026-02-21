@@ -22,10 +22,15 @@ AC_DEFUN([FI_CXI_CONFIGURE],[
 
 	cxi_happy=1
 
+	AS_IF([test -d $srcdir/prov/cxi/test],
+			[AC_ARG_WITH([criterion], [AS_HELP_STRING([--with-criterion],
+			[Location for criterion unit testing framework])])],
+			[criterion_tests_present=false])
+
 	# Support non-standard install path for cassini headers. This is needed
 	# by libcxi.
 	AC_ARG_WITH([cassini-headers],
-		[AS_HELP_STRING([--with-cassin-headers=DIR], [Install directory for Cassini headers])],
+		[AS_HELP_STRING([--with-cassini-headers=DIR], [Install directory for Cassini headers])],
 		[CPPFLAGS="-I$with_cassini_headers/include $CPPFLAGS"])
 
 	# Support non-standard install path for cxi kernel UAPI headers. This is
@@ -117,6 +122,32 @@ AC_DEFUN([FI_CXI_CONFIGURE],[
 				[],
 				[cxi_happy=0])
 
+			#Set CPPFLAGS to allow correct include path to be used by AC_CHECK_DECL()
+			cxi_configure_save_CPPFLAGS=$CPPFLAGS
+			CPPFLAGS="-I$cxi_PREFIX/include $cxi_configure_save_CPPFLAGS"
+
+			AC_CHECK_DECL([cxil_modify_cp],
+				[AC_DEFINE([CXI_HAVE_MODIFY_CP],[1],
+					[Whether libcxi.h has cxil_modify_cp() support])],
+				[],
+				[#include "libcxi/libcxi.h"]
+			)
+
+			AC_CHECK_DECL([cxil_svc_get_vni_range],
+				[AC_DEFINE([CXI_HAVE_SVC_GET_VNI_RANGE],[1],
+				    [Whether libcxi.h has cxil_svc_get_vni_range() support])],
+				[],
+				[#include "libcxi/libcxi.h"]
+			)
+
+			AC_CHECK_DECL([cxil_alloc_trig_cp],
+				[AC_DEFINE([CXI_HAVE_ALLOC_TRIG_CP],[1],
+				    [Whether libcxi.h has cxil_alloc_trig_cp() support])],
+				[],
+				[#include "libcxi/libcxi.h"]
+			)
+
+			CPPFLAGS=$cxi_configure_save_CPPFLAGS
 			cxi_CPPFLAGS="$cxi_CPPFLAGS $libcurl_CPPFLAGS"
 			cxi_LDFLAGS="$cxi_LDFLAGS $libcurl_LDFLAGS"
 			# check to see if we are dynamically linking the curl symbols

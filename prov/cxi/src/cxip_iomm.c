@@ -318,6 +318,10 @@ int cxip_iomm_init(struct cxip_domain *dom)
 	enum fi_hmem_iface iface;
 	int ret;
 	bool scalable;
+	char *def_oride = NULL;
+	char *def_name = NULL;
+	enum fi_mm_state def_state;
+	bool bdef_state = false;
 
 	/* Check if ATS is supported */
 	if (cxip_env.ats && cxip_ats_check(dom))
@@ -347,6 +351,21 @@ int cxip_iomm_init(struct cxip_domain *dom)
 	}
 
 	if (!scalable || dom->hmem) {
+		/* Override MR cache default settings unless explicitly set in
+		 * the environment.
+		 */
+		if (!getenv("FI_MR_CACHE_MAX_COUNT")) {
+			cache_params.max_cnt = CXIP_DEFAULT_MR_CACHE_MAX_CNT;
+			CXIP_INFO("MR cache max count overridden to %ld\n",
+				  cache_params.max_cnt);
+		}
+
+		if (!getenv("FI_MR_CACHE_MAX_SIZE")) {
+			cache_params.max_size = CXIP_DEFAULT_MR_CACHE_MAX_SIZE;
+			CXIP_INFO("MR cache max size overridden to %ld\n",
+				  cache_params.max_size);
+		}
+
 		dom->iomm.entry_data_size = sizeof(struct cxip_md);
 		dom->iomm.add_region = cxip_do_map;
 		dom->iomm.delete_region = cxip_do_unmap;
@@ -354,8 +373,32 @@ int cxip_iomm_init(struct cxip_domain *dom)
 					&dom->iomm);
 		if (ret) {
 			CXIP_INFO("MR cache init failed: %s. MR caching disabled.\n",
-				  fi_strerror(-ret));
+				fi_strerror(-ret));
+			/* check for user override of default monitor
+			 * for system mem
+			 */
+			if(default_monitor) {
+				def_oride = getenv("FI_MR_CACHE_MONITOR");
+				def_state = default_monitor->state;
+				def_name = default_monitor->name;
+				bdef_state = def_state != FI_MM_STATE_RUNNING;
+				if(def_oride && bdef_state) {
+					CXIP_INFO("default monitor start failed\n");
+					CXIP_INFO("monitor state %d\n",
+						def_state);
+					CXIP_INFO("monitor name %s\n",
+						def_name);
+					CXIP_INFO("FI_MR_CACHE_MONITOR = %s\n",
+						def_oride);
+					CXIP_INFO("reset it to a different\n");
+					CXIP_INFO("valid monitor option\n");
+					return ret;
+				}
+			}
 		} else {
+			CXIP_INFO("MR cache using max_size %ld and max_cnt %ld\n",
+				  cache_params.max_size,cache_params.max_cnt);
+
 			for (iface = 0; iface < OFI_HMEM_MAX; iface++) {
 				if (dom->iomm.monitors[iface])
 					CXIP_INFO("MR cache enabled for %s memory\n",
@@ -398,6 +441,17 @@ static int cxip_map_cache(struct cxip_domain *dom, struct ofi_mr_info *info,
 	_md = (struct cxip_md *)entry->data;
 	if ((_md->map_flags & access) == access) {
 		*md = _md;
+
+		/* For FI_HMEM_CUDA ensure cuda properly syncs accesses
+		 * between the host and RDMA.
+		 */
+		if (_md->info.iface == FI_HMEM_CUDA &&
+		    !cxip_env.disable_cuda_sync_memops) {
+			ret = cuda_set_sync_memops((void *) info->iov.iov_base);
+			if (ret)
+				CXIP_WARN("CUDA sync_memops %p returned %d\n",
+					  (void *) info->iov.iov_base, ret);
+		}
 		return FI_SUCCESS;
 	}
 
@@ -458,6 +512,17 @@ static int cxip_map_nocache(struct cxip_domain *dom, struct fi_mr_attr *attr,
 	if (ret) {
 		CXIP_WARN("cxil_map failed: %d:%s\n", ret, fi_strerror(-ret));
 		goto err_free_dmabuf;
+	}
+
+	/* For FI_HMEM_CUDA ensure cuda properly syncs accesses between the
+	 * host and RDMA.
+	 */
+	if (uncached_md->info.iface == FI_HMEM_CUDA &&
+	    !cxip_env.disable_cuda_sync_memops) {
+		ret = cuda_set_sync_memops((void *) uncached_md->md->va);
+		if (ret)
+			CXIP_WARN("CUDA sync_memops %p returned %d\n",
+				  (void *) uncached_md->md->va, ret);
 	}
 
 	/* zeHostMalloc() returns FI_HMEM_ZE but this cannot currently be

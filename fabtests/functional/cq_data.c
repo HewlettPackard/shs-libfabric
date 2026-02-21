@@ -90,28 +90,31 @@ static int run_test()
 			return ret;
 		}
 
-		if (comp.flags & FI_REMOTE_CQ_DATA) {
+		/* Here we have a successful cq read */
+		ret = FI_SUCCESS;
+		if (comp.flags & FI_REMOTE_CQ_DATA &&
+		    ((opts.cqdata_op == FT_CQDATA_SENDDATA &&
+		    (comp.flags & ~FI_REMOTE_CQ_DATA) == (FI_MSG | FI_RECV)) ||
+		    ((opts.cqdata_op == FT_CQDATA_WRITEDATA) &&
+		    (comp.flags & ~FI_REMOTE_CQ_DATA) == (FI_RMA | FI_REMOTE_WRITE)))) {
 			if ((comp.data & mask) == (remote_cq_data & mask)) {
 				fprintf(stdout, "remote_cq_data: success\n");
-				ret = 0;
 			} else {
 				fprintf(stdout, "error, Expected data:0x%" PRIx64
 					", Received data:0x%" PRIx64 "\n",
 					remote_cq_data, comp.data);
-				ret = -FI_EIO;
+				return -FI_EIO;
 			}
 
-			if (comp.len == size) {
-				fprintf(stdout, "fi_cq_data_entry.len verify: success\n");
-				ret = 0;
-			} else {
+			if (comp.len != size) {
 				fprintf(stdout, "error, Expected len:%zu, Received len:%zu\n",
 					size, comp.len);
-				ret = -FI_EIO;
+				return -FI_EIO;
 			}
+			fprintf(stdout, "fi_cq_data_entry verification: success\n");
 		} else {
-			fprintf(stdout, "error, CQ data flag not set\n");
-			ret = -FI_EBADFLAGS;
+			fprintf(stdout, "error, incorrect CQ flags\n");
+			return -FI_EBADFLAGS;
 		}
 	}
 

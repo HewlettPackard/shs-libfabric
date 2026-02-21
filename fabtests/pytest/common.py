@@ -121,10 +121,32 @@ def wait_until_neuron_device_available(ip, device_id):
     raise RuntimeError("Error: neuron device {} is not available after {} tries".format(device_id, maxtry))
 
 
+@functools.lru_cache(10)
+@retry(retry_on_exception=is_ssh_connection_error, stop_max_attempt_number=3, wait_fixed=5000)
+def num_rocr_devices(ip):
+    proc = run("ssh {} rocm-smi --alldevices".format(ip), shell=True,
+               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+               timeout=60, encoding="utf-8")
+
+    if has_ssh_connection_err_msg(proc.stderr):
+        raise SshConnectionError()
+
+    # Count lines that start with a digit (device number)
+    result = 0
+    lines = proc.stdout.split("\n")
+    for line in lines:
+        line = line.strip()
+        if line and line[0].isdigit():
+            result += 1
+
+    return result
+
+
 def num_hmem_devices(ip, hmem_type):
     function_table = {
         "cuda" : num_cuda_devices,
-        "neuron" : num_neuron_devices
+        "neuron" : num_neuron_devices,
+        "rocr": num_rocr_devices,
     }
 
     if hmem_type not in function_table:
@@ -141,11 +163,15 @@ def has_neuron(ip):
     return num_neuron_devices(ip) > 0
 
 
+def has_rocr(ip):
+    return num_rocr_devices(ip) > 0
+
+
 @retry(retry_on_exception=is_ssh_connection_error, stop_max_attempt_number=3, wait_fixed=5000)
 def has_hmem_support(cmdline_args, ip):
     binpath = cmdline_args.binpath or ""
     cmd = "timeout " + str(cmdline_args.timeout) \
-          + " " + os.path.join(binpath, "check_hmem") \
+          + " " + os.path.join(binpath, "fi_check_hmem") \
           + " " + "-p " + cmdline_args.provider
     if cmdline_args.environments:
         cmd = cmdline_args.environments + " " + cmd
@@ -343,21 +369,25 @@ class ClientServerTest:
                  timeout=None,
                  warmup_iteration_type=None,
                  completion_type="queue",
-                 fabric=None):
+                 fabric=None,
+                 additional_env='',
+                 might_fail=False):
 
         self._cmdline_args = cmdline_args
         self._timeout = timeout or cmdline_args.timeout
-        self._server_base_command, server_additonal_environment = self.prepare_base_command("server", executable, iteration_type,
-                                                              completion_semantic, prefix_type,
-                                                              datacheck_type, message_size,
-                                                              memory_type, warmup_iteration_type,
-                                                              completion_type, fabric)
-        self._client_base_command, client_additonal_environment = self.prepare_base_command("client", executable, iteration_type,
-                                                              completion_semantic, prefix_type,
-                                                              datacheck_type, message_size,
-                                                              memory_type, warmup_iteration_type,
-                                                              completion_type, fabric)
+        self._server_parameters = {}
+        self._client_parameters = {}
+        args = {k: v for k, v in locals().items() if k not in ['self', 'timeout', 'cmdline_args']}
+        for name, value in args.items():
+            if isinstance(value, dict) and {"server", "client"}.issubset(value):
+                self._server_parameters[name] = value["server"]
+                self._client_parameters[name] = value["client"]
+            else:
+                self._server_parameters[name] = value
+                self._client_parameters[name] = value
 
+        self._server_base_command, server_additonal_environment = self.prepare_base_command("server", **self._server_parameters)
+        self._client_base_command, client_additonal_environment = self.prepare_base_command("client", **self._client_parameters)
 
         self._server_command = self._cmdline_args.populate_command(self._server_base_command, "server", self._timeout, server_additonal_environment)
         self._client_command = self._cmdline_args.populate_command(self._client_base_command, "client", self._timeout, client_additonal_environment)
@@ -371,9 +401,11 @@ class ClientServerTest:
                              memory_type="host_to_host",
                              warmup_iteration_type=None,
                              completion_type="queue",
-                             fabric=None):
+                             fabric=None,
+                             additional_env='',
+                             might_fail=False):
         if executable == "fi_ubertest":
-            return "fi_ubertest", None
+            return "fi_ubertest", additional_env
 
         '''
             all execuables in fabtests (except fi_ubertest) accept a common set of arguments:
@@ -440,9 +472,9 @@ class ClientServerTest:
             client_memory_type, self._cmdline_args.client_id)
 
         if host_memory_type == "host":
-            return command, None    # no addtional environment variable
+            return command, additional_env    # default addtional environment variable
 
-        assert host_memory_type == "cuda" or host_memory_type == "neuron"
+        assert host_memory_type in ["cuda", "neuron", "rocr"]
 
         if not has_hmem_support(self._cmdline_args, host_ip):
             pytest.skip("no hmem support")
@@ -456,33 +488,33 @@ class ClientServerTest:
         if self._cmdline_args.do_dmabuf_reg_for_hmem:
             command += " -R"
 
-        additional_environment = None
-
         if "PYTEST_XDIST_WORKER" in os.environ:
             worker_id = int(os.environ["PYTEST_XDIST_WORKER"].replace("gw", ""))
             hmem_device_id = worker_id % num_hmem
         else:
             hmem_device_id = 0
 
-        if host_memory_type == "cuda":
+        if host_memory_type in ["cuda", "rocr"]:
             command += " -i {}".format(hmem_device_id)
         else:
             assert host_memory_type == "neuron"
             num_cores = num_neuron_cores_on_device(host_ip, hmem_device_id)
             if command_type == "server":
-                additional_environment = "NEURON_RT_VISIBLE_CORES={}".format(
-                    hmem_device_id * num_cores)
+                additional_env = f"{additional_env} NEURON_RT_VISIBLE_CORES={hmem_device_id * num_cores}"
             else:
-                additional_environment = "NEURON_RT_VISIBLE_CORES={}".format(
-                    hmem_device_id * num_cores + 1)
+                additional_env = f"{additional_env} NEURON_RT_VISIBLE_CORES={hmem_device_id * num_cores + 1}"
             wait_until_neuron_device_available(host_ip, hmem_device_id)
 
         if self._cmdline_args.provider == "efa":
             import efa.efa_common
-            efa_device = efa.efa_common.get_efa_device_name_for_cuda_device(host_ip, hmem_device_id, num_hmem)
+            if host_memory_type == "cuda":
+                efa_device = efa.efa_common.get_efa_device_name_for_cuda_device(host_ip, hmem_device_id, num_hmem)
+            else:
+                # TODO: Implement topology aware EFA device selection for other accelerators
+                efa_device = efa.efa_common.get_efa_device_name_for_hmem_device(host_ip, hmem_device_id, num_hmem)
             command += " -d {}-rdm".format(efa_device)
 
-        return command, additional_environment
+        return command, additional_env
 
     def _run_client_command(self, server_process, client_command, output_filename=None,
                             run_client_asynchronously=False):
@@ -583,7 +615,13 @@ class ClientServerTest:
         if server_timed_out:
             raise RuntimeError("Server timed out")
 
-        check_returncode_list([server_process.returncode, client_returncode],
+        list_to_check_return_code = []
+        if not self._server_parameters['might_fail']:
+            list_to_check_return_code.append(server_process.returncode)
+        if not self._client_parameters['might_fail']:
+            list_to_check_return_code.append(client_returncode)
+
+        check_returncode_list(list_to_check_return_code,
                               self._cmdline_args.strict_fabtests_mode)
 
 

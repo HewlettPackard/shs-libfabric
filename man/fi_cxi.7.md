@@ -74,15 +74,26 @@ progress modes.
 
 ## Multi-threading
 
-The CXI provider supports FI_THREAD_SAFE and FI_THREAD_DOMAIN threading models.
+The CXI provider supports FI_THREAD_SAFE, FI_THREAD_COMPLETION, and
+FI_THREAD_DOMAIN threading models.
 
 ## Wait Objects
 
 The CXI provider supports FI_WAIT_FD and FI_WAIT_POLLFD CQ wait object types.
-FI_WAIT_UNSPEC will default to FI_WAIT_FD. However FI_WAIT_NONE should achieve
-the lowest latency and reduce interrupt overhead. NOTE: A process may return
-from a epoll_wait/poll when provider progress is required and a CQ event may
-not be available.
+Using FI_WAIT_UNSPEC will default to FI_WAIT_FD. When a wait object is not
+required FI_WAIT_NONE should be specified and will achieve the lowest latency
+and reduce interrupt overhead.
+
+It is intended the application marshal multi-thread access to waiting and CQ
+progress. There is a natural race window that can occur between the application
+fi_trywait() call and subsequent epoll_wait() call and another thread progressing
+events and creating a CQ entry. The provider implementation has chosen normal
+case performance over completely closing the race with internal progress, which
+could be done with updating another FD on every CQ write. Therefore, it is
+suggested the epoll_wait() timeout be reasonably small.
+
+NOTE: A process may return from a epoll_wait() when provider progress is
+required and a CQ event may not be available.
 
 ## Additional Features
 
@@ -435,11 +446,10 @@ information.
 The CXI provider supports DMABUF for device memory registration.
 DMABUF is supported in ROCm 5.6+ and Cuda 11.7+ with nvidia open source driver
 525+.
-Both *FI_HMEM_ROCR_USE_DMABUF* and *FI_HMEM_CUDA_USE_DMABUF are disabled by
-default in libfabric core but the CXI provider enables
-*FI_HMEM_ROCR_USE_DMABUF* by default if not specifically set.
-There may be situations with CUDA that may double the BAR consumption.
-Until this is fixed in the CUDA stack, CUDA DMABUF will be disabled by default.
+Both *FI_HMEM_ROCR_USE_DMABUF* and *FI_HMEM_CUDA_USE_DMABUF* are disabled by
+default in libfabric core but the CXI provider enables both
+*FI_HMEM_ROCR_USE_DMABUF* and *FI_HMEM_CUDA_USE_DMABUF* by default if not
+specifically set.
 
 ## Translation Cache
 
@@ -733,8 +743,8 @@ The **fi_join_collective**() implementation is provider-managed. However, the
 specified as FI_ADDR_NOTAVAIL. The *set* parameter must contain fi_addr_t
 values that resolve to meaningful CXI addresses in the endpoint *fi_av*
 structure. **fi_join_collective**() must be called for every address in the
-*set* list, and must be progressed until the join operation is complete. There
-is no inherent limit on join concurrency.
+*set* list, and must be progressed until the join operation is complete. Joins
+are non-concurrent and return FI_EAGAIN until any active join completes.
 
 The join will create a multicast tree in the fabric to manage the collective
 operations. This operation requires access to a secure Fabric Manager REST API
@@ -990,13 +1000,13 @@ The CXI provider checks for the following environment variables:
     physical memory.  Ignored when ODP is disabled.
 
 *FI_CXI_RDZV_THRESHOLD*
-:   Message size threshold for rendezvous protocol.
+:   Message size threshold for rendezvous protocol. The default is 16384.
 
 *FI_CXI_RDZV_GET_MIN*
 :   Minimum rendezvous Get payload size. A Send with length less than or equal
     to *FI_CXI_RDZV_THRESHOLD* plus *FI_CXI_RDZV_GET_MIN* will be performed
-    using the eager protocol. Larger Sends will be performed using the
-    rendezvous protocol with *FI_CXI_RDZV_THRESHOLD* bytes of payload sent
+    using the eager protocol. Larger sends will be performed using the
+    rendezvous protocol with *FI_CXI_EAGER_SIZE* bytes of payload sent
     eagerly and the remainder of the payload read from the source using a Get.
     *FI_CXI_RDZV_THRESHOLD* plus *FI_CXI_RDZV_GET_MIN* must be less than or
     equal to *FI_CXI_OFLOW_BUF_SIZE*.
@@ -1014,11 +1024,36 @@ The CXI provider checks for the following environment variables:
     operation performance. Note that all rendezvous protocol use RDMA to transfer
     eager and non-eager rendezvous data.
 
+*FI_CXI_DISABLE_ALT_READ_CMDQ*
+:   This variable is only valid if the alt_read rendezvous protocol has been
+    enabled with FI_CXI_RDZV_PROTO=alt_read. If set, it will disable the alt_read
+    dedicated rendezvous get command queue, conserving command queue resources
+    with a cost in performance.
+
+*FI_CXI_CNTR_TRIG_CMDQ*
+:   Enables dedicated triggered command queue for bound counters when using
+    FI_THREAD_SAFE or FI_THREAD_COMPLETION. This can improve the performance
+    multithreaded counter operations at the cost of command queue resources.
+    This option is disabled by default.
+
 *FI_CXI_DISABLE_NON_INJECT_MSG_IDC*
 :   Experimental option to disable favoring IDC for transmit of small messages
     when FI_INJECT is not specified. This can be useful with GPU source buffers
     to avoid the host copy in cases a performant copy can not be used. The default
     is to use IDC for all messages less than IDC size.
+
+*FI_CXI_DISABLE_NON_INJECT_RMA_IDC*
+:   Experimental option to disable favoring IDC for transmit of small RMA
+    when FI_INJECT is not specified. This can be useful with GPU source buffers
+    to avoid the host copy in cases a performant copy can not be used. The default
+    is to use IDC for non-triggered RMA writes that are less than IDC size and
+    target an optimized MR.
+
+*FI_CXI_DISABLE_NON_INJECT_AMO_IDC*
+:   Experimental option to disable favoring IDC for transmit of atomics
+    when FI_INJECT is not specified. This can be useful with GPU source buffers
+    to avoid the host copy in cases a performant copy can not be used. The default
+    is to use IDC for non-triggered AMOs that target an optimized MR.
 
 *FI_CXI_DISABLE_HOST_REGISTER*
 :   Disable registration of host buffers (overflow and request) with GPU. There
@@ -1029,7 +1064,7 @@ The CXI provider checks for the following environment variables:
 *FI_CXI_OFLOW_BUF_SIZE*
 :   Size of overflow buffers. Increasing the overflow buffer size allows for
     more unexpected message eager data to be held in single overflow buffer.
-    The default size is 2MB.
+    The default size is 12MB.
 
 *FI_CXI_OFLOW_BUF_MIN_POSTED/FI_CXI_OFLOW_BUF_COUNT*
 :   The minimum number of overflow buffers that should be posted. The default
@@ -1154,11 +1189,11 @@ The CXI provider checks for the following environment variables:
 *FI_CXI_REQ_BUF_SIZE*
 :   Size of request buffers. Increasing the request buffer size allows for more
     unmatched messages to be sent into a single request buffer. The default
-    size is 2MB.
+    size is 12MB.
 
 *FI_CXI_REQ_BUF_MIN_POSTED*
 :   The minimum number of request buffers that should be posted. The default
-    minimum posted count is 4. The number of buffers will grow unbounded to
+    minimum posted count is 6. The number of buffers will grow unbounded to
     support outstanding unexpected messages. Care should be taken to size
     appropriately based on job scale and the size of eager data to reduce
     the need for flow control.
@@ -1180,6 +1215,9 @@ The CXI provider checks for the following environment variables:
 *FI_CXI_FC_RETRY_USEC_DELAY*
 :   Number of micro-seconds to sleep before retrying a dropped side-band, flow
     control message. Setting to zero will disable any sleep.
+
+*FI_CXI_CNTR_SPIN_BEFORE_YIELD*
+:   Number of times to spin before yielding on counter operations.
 
 *FI_UNIVERSE_SIZE*
 :   Defines the maximum number of processes that will be used by distribute
@@ -1207,16 +1245,17 @@ The CXI provider checks for the following environment variables:
 
 *FI_CXI_DEFAULT_TX_SIZE*
 :   Set the default tx_attr.size field to be used by the provider if the size
-    is not specified in the user provided fi_info hints.
+    is not specified in the user provided fi_info hints. The default is 1024.
 
 *FI_CXI_DEFAULT_RX_SIZE*
 :   Set the default rx_attr.size field to be used by the provider if the size
-    is not specified in the user provided fi_info hints.
+    is not specified in the user provided fi_info hints. The default is 1024.
 
 *FI_CXI_SW_RX_TX_INIT_MAX*
-:   Debug control to override the number of TX operations that can be
-    outstanding that are initiated by software RX processing. It has no impact
-    on hardware initiated RX rendezvous gets.
+:   Override the number of TX operations that can be outstanding that are initiated
+    by software RX processing. It may be useful to increase this value from the default
+    of 1024 if running in software EP match mode at scale or utilizing the alternate
+    read rendezvous protocol. It has no impact on hardware initiated RX rendezvous gets.
 
 *FI_CXI_DEVICE_NAME*
 :   Restrict CXI provider to specific CXI devices. Format is a comma separated
@@ -1238,16 +1277,6 @@ The CXI provider checks for the following environment variables:
     completion queue is saturated. A saturated completion queue results in the
     provider returning -FI_EAGAIN for data transfer and other related libfabric
     operations.
-
-*FI_CXI_COMPAT*
-:   Temporary compatibility to allow use of pre-upstream values for FI_ADDR_CXI and
-    FI_PROTO_CXI. Compatibility can be disabled to verify operation with upstream
-    constant values and to enable access to conflicting provider values. The default
-    setting of 1 specifies both old and new constants are supported. A setting of 0
-    disables support for old constants and can be used to test that an application is
-    compatible with the upstream values. A setting of 2 is a safety fallback that if
-    used the provider will only export fi_info with old constants and will be incompatible
-    with libfabric clients that been recompiled.
 
 *FI_CXI_COLL_FABRIC_MGR_URL*
 :   **accelerated collectives:** Specify the HTTPS address of the fabric manager REST API
@@ -1285,6 +1314,26 @@ The CXI provider checks for the following environment variables:
 :   Enable enforcement of triggered operation limit. Doing this can prevent
     fi_control(FI_QUEUE_WORK) deadlocking at the cost of performance.
 
+*FI_CXI_ENABLE_WRITEDATA*
+:   Controls provider support for the fi_writedata() and fi_inject_writedata() RMA
+    operations. When enabled and the domain attribute cq_data_size is non-zero,
+    the CXI provider implements handling to generate solicited RMA completions that
+    include immediate data; completions will include FI_REMOTE_CQ_DATA and will
+    report source information when FI_SOURCE is enabled (FI_SOURCE_ERR behavior is
+    followed on resolution failures).
+
+    Note that the CXI_RX_CQ_DATA capability is not required and writedata RMA
+    operations do not consume posted receive buffers on the target. The feature
+    is gated by domain/endpoint capabilities (for example, a non-zero
+    domain_attr->cq_data_size in the libfabric API) and endpoint support. Internally,
+    the combination of domain and endpoint cq_data_size sets rma_cq_data_size. Only
+    provider MR keys are supported.
+
+    This option is disabled by default; enable it only when applications require
+    immediate-data delivery on RMA completions or for controlled testing and
+    debugging. Application support for FI_MR_PROV_KEY mr_mode is required to use
+    this feature.
+
 *FI_CXI_MR_CACHE_EVENTS_DISABLE_POLL_NSECS*
 :   Max amount of time to poll when disabling an MR configured with MR match events.
 
@@ -1296,8 +1345,17 @@ The CXI provider checks for the following environment variables:
 :   Force the CXI provider to use the HMEM device register copy routines. If not
     supported, RDMA operations or memory registration will fail.
 
+*FI_CXI_DISABLE_CUDA_SYNC_MEMOPS*
+:   By default the CXI provider sets the CU_POINTER_ATTRIBUTE_SYNC_MEMOPS on
+    registered memory to ensure synchronous copies and RDMA do not overlap.
+    Setting this value can be used to disable this behavior if for instance
+    the application is managing syncing of buffers.
+
 Note: Use the fi_info utility to query provider environment variables:
 <code>fi_info -p cxi -e</code>
+
+If the environment does not explicitly set FI_MR_CACHE_MAX_COUNT or FI_MR_CACHE_MAX_SIZE,
+the cxi provider will increase the defaults to 4096 and -1 (no limit) respectively.
 
 # CXI EXTENSIONS
 
@@ -1345,6 +1403,30 @@ the remote MR cache for provider keys for the domain. By default the cache
 is enabled and can be used for provider keys that do not require events.
 The command will fail with -FI_EINVAL if FI_MR_PROV_KEY MR mode is not in use.
 It can only be changed prior to any MR being created.
+
+Command *FI_OPT_CXI_GET_RX_MATCH_MODE_OVERRIDE* where the argument is a pointer
+to a char buffer. The buffer must be large enough to hold one of the mode
+values "hardware", "software", or "hybrid" that are returned. The command will
+fail with -FI_EINVAL for a NULL buffer or unknown mode value.
+
+Command *FI_OPT_CXI_SET_RX_MATCH_MODE_OVERRIDE* where the argument is a pointer
+to a char buffer that is initialized to one of these mode values "hardware",
+"software", or "hybrid". This call overrides the default match mode setting at
+the domain level. By default the domain match mode is determined by the
+environment setting of FI_CXI_RX_MATCH_MODE. This option should be set prior to
+the creation of any endpoint for the domain. The command will fail with
+-FI_EINVAL for a NULL buffer or unknown mode value.
+
+Command *FI_OPT_CXI_GET_REQ_BUF_SIZE_OVERRIDE* where the argument is a pointer
+to size_t unsigned long. It will return the current domain level req_buf_size
+setting.
+
+Command *FI_OPT_CXI_SET_REQ_BUF_SIZE_OVERRIDE* where the argument is a pointer
+to size_t unsigned long. This call overrides the default req_buf_size setting at
+the domain level. By default the domain req_buf_size is determined by the
+environment setting of FI_CXI_REQ_BUF_SIZE. This option should be set prior to
+the creation of any endpoint for the domain. The command will fail with
+-FI_EINVAL for an illegal value of 0.
 
 ## CXI Domain Extensions
 

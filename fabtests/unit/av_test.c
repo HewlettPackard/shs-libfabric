@@ -36,6 +36,7 @@
 #include <getopt.h>
 #include <string.h>
 #include <netdb.h>
+#include <inttypes.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 
@@ -270,7 +271,8 @@ av_null_fi_addr()
 	if (av_type != FI_AV_TABLE) {
 		ret = 0;
 		testret = SKIPPED;
-		sprintf(err_buf, "test not valid for AV type FI_AV_MAP");
+		sprintf(err_buf, "test not valid for AV type %s",
+			fi_tostr(&av_type, FI_TYPE_AV_TYPE));
 		goto out1;
 	}
 
@@ -449,7 +451,8 @@ av_goodbad_vector_sync_err()
 	if (av_type != FI_AV_TABLE) {
 		ret = 0;
 		testret = SKIPPED;
-		sprintf(err_buf, "test not valid for AV type FI_AV_MAP");
+		sprintf(err_buf, "test not valid for AV type %s",
+			fi_tostr(&av_type, FI_TYPE_AV_TYPE));
 		goto out;
 	}
 
@@ -614,11 +617,397 @@ fail:
 	return TEST_RET_VAL(ret, testret);
 }
 
+static int
+av_lookup_good(void)
+{
+	int testret, ret, i, j, found, offset;
+	struct fid_av *av = NULL;
+	struct fi_av_attr attr = {0};
+	uint8_t addrbuf[4096];
+	uint8_t lookup_buf[4096];
+	size_t buflen, lookup_len;
+	fi_addr_t *fi_addr = NULL;
+
+	testret = FAIL;
+	fi_addr = calloc(num_good_addr, sizeof(*fi_addr));
+	if (!fi_addr) {
+		sprintf(err_buf, "calloc fi_addr failed");
+		ret = -FI_ENOMEM;
+		goto fail;
+	}
+
+	attr.type = av_type;
+	attr.count = num_good_addr;
+	ret = fi_av_open(domain, &attr, &av, NULL);
+	if (ret != 0) {
+		sprintf(err_buf, "fi_av_open(%s) = %d, %s",
+			fi_tostr(&av_type, FI_TYPE_AV_TYPE), ret,
+			fi_strerror(-ret));
+		goto fail;
+	}
+
+	for (i = 0; i < num_good_addr; i++)
+		fi_addr[i] = FI_ADDR_NOTAVAIL;
+
+	buflen = sizeof(addrbuf);
+	ret = av_create_address_list(good_address, 0, num_good_addr, addrbuf, 0,
+				     buflen);
+	if (ret < 0)
+		goto fail;
+
+	ret = fi_av_insert(av, addrbuf, num_good_addr, fi_addr, 0, NULL);
+	if (ret != num_good_addr) {
+		sprintf(err_buf, "fi_av_insert ret=%d, expected %d", ret,
+			num_good_addr);
+		goto fail;
+	}
+
+	for (i = 0; i < num_good_addr; i++) {
+		if (fi_addr[i] == FI_ADDR_NOTAVAIL) {
+			sprintf(err_buf, "fi_addr[%d]=%" PRIu64 ", expected %d", i,
+				fi_addr[i], i);
+			goto fail;
+		}
+	}
+
+	found = offset = 0;
+	for (i = 0; i < attr.count; i++) {
+		memset(lookup_buf, 0, sizeof(lookup_buf));
+		lookup_len = sizeof(lookup_buf);
+		ret = fi_av_lookup(av, fi_addr[i], &lookup_buf, &lookup_len);
+		if (ret) {
+			sprintf(err_buf, "fi_av_lookup ret=%d, %s", ret,
+				fi_strerror(-ret));
+			goto fail;
+		}
+		found++;
+		for (j = 0; j < lookup_len; j++) {
+			if (addrbuf[j + offset] != lookup_buf[j]) {
+				sprintf(err_buf,
+					"fi_av_lookup returned incorrect "
+					"address data at position %d for "
+					"fi_addr[%d] = %ld", j, i,
+					(long) fi_addr[i]);
+				goto fail;
+			}
+		}
+		offset += lookup_len;
+	}
+	if (found != num_good_addr) {
+		sprintf(err_buf, "fi_av_lookup found incorrect number of"
+			"addresses. Expected %d, found %d", num_good_addr,
+			found);
+		goto fail;
+	}
+
+	testret = PASS;
+	ret = FI_SUCCESS;
+fail:
+	FT_CLOSE_FID(av);
+	free(fi_addr);
+	return TEST_RET_VAL(ret, testret);
+}
+
+static int
+av_lookup_bad(void)
+{
+	int testret, ret, i;
+	struct fid_av *av = NULL;
+	struct fi_av_attr attr = {0};
+	uint8_t addrbuf[4096];
+	uint8_t lookup_buf[4096];
+	size_t buflen, lookup_len;
+	fi_addr_t *fi_addr = NULL;
+
+	testret = FAIL;
+	fi_addr = calloc(num_good_addr, sizeof(*fi_addr));
+	if (!fi_addr) {
+		sprintf(err_buf, "calloc fi_addr failed");
+		ret = -FI_ENOMEM;
+		goto fail;
+	}
+
+	attr.type = av_type;
+	attr.count = num_good_addr + 1;
+	ret = fi_av_open(domain, &attr, &av, NULL);
+	if (ret) {
+		sprintf(err_buf, "fi_av_open(%s) = %d, %s",
+			fi_tostr(&av_type, FI_TYPE_AV_TYPE), ret,
+			fi_strerror(-ret));
+		goto fail;
+	}
+
+	for (i = 0; i < num_good_addr; i++)
+		fi_addr[i] = FI_ADDR_NOTAVAIL;
+
+	buflen = sizeof(addrbuf);
+	ret = av_create_address_list(good_address, 0, num_good_addr, addrbuf, 0,
+				     buflen);
+	if (ret < 0)
+		goto fail;
+
+	ret = fi_av_insert(av, addrbuf, num_good_addr, fi_addr, 0, NULL);
+	if (ret != num_good_addr) {
+		sprintf(err_buf, "fi_av_insert ret=%d, expected %d", ret,
+			num_good_addr);
+		goto fail;
+	}
+
+	for (i = 0; i < num_good_addr; i++) {
+		if (fi_addr[i] == FI_ADDR_NOTAVAIL) {
+			sprintf(err_buf, "fi_addr[%d]=%" PRIu64 ", expected %d", i,
+				fi_addr[i], i);
+			goto fail;
+		}
+	}
+
+	/* case 1: lookup addr of non-inserted location in av open range */
+	memset(lookup_buf, 0, sizeof(lookup_buf));
+	lookup_len = sizeof(lookup_buf);
+	ret = fi_av_lookup(av, (fi_addr_t) num_good_addr, &lookup_buf,
+			   &lookup_len);
+	if (ret != -FI_EINVAL) {
+		sprintf(err_buf, "fi_av_lookup of non-inserted location "
+			"ret=%d, expected %d", ret, -FI_EINVAL);
+		goto fail;
+	}
+
+	/* case 2: lookup addr outside of av open range */
+	memset(lookup_buf, 0, sizeof(lookup_buf));
+	lookup_len = sizeof(lookup_buf);
+	ret = fi_av_lookup(av, (fi_addr_t) (num_good_addr + 32), &lookup_buf,
+			   &lookup_len);
+	if (ret != -FI_EINVAL) {
+		sprintf(err_buf, "fi_av_lookup addr outside of range ret=%d, "
+			"expected %d", ret, -FI_EINVAL);
+		goto fail;
+	}
+
+	/* case 3: lookup UINT_MAX*/
+	memset(lookup_buf, 0, sizeof(lookup_buf));
+	lookup_len = sizeof(lookup_buf);
+	ret = fi_av_lookup(av, (fi_addr_t) UINT64_MAX, &lookup_buf,
+			   &lookup_len);
+	if (ret != -FI_EINVAL) {
+		sprintf(err_buf, "fi_av_lookup of UINT64_MAX ret=%d, "
+			"expected %d", ret, -FI_EINVAL);
+		goto fail;
+	}
+
+	/* case 4: remove an addr and then lookup its location */
+	memset(lookup_buf, 0, sizeof(lookup_buf));
+	lookup_len = sizeof(lookup_buf);
+	ret = fi_av_remove(av, &fi_addr[0], 1, 0);
+	if (ret != FI_SUCCESS) {
+		sprintf(err_buf, "fi_av_remove ret=%d, %s", ret,
+			fi_strerror(-ret));
+		goto fail;
+	}
+	ret = fi_av_lookup(av, fi_addr[0], &lookup_buf, &lookup_len);
+	if (ret != -FI_EINVAL) {
+		sprintf(err_buf, "fi_av_lookup of removed addr ret=%d, "
+			"expected %d", ret, -FI_EINVAL);
+		goto fail;
+	}
+
+	testret = PASS;
+	ret = FI_SUCCESS;
+fail:
+	FT_CLOSE_FID(av);
+	free(fi_addr);
+	return TEST_RET_VAL(ret, testret);
+}
+
+static int
+av_remove_good(void)
+{
+	int testret, ret, i;
+	struct fid_av *av = NULL;
+	struct fi_av_attr attr = {0};
+	uint8_t addrbuf[4096];
+	size_t buflen;
+	fi_addr_t *fi_addr = NULL;
+
+	testret = FAIL;
+
+	fi_addr = calloc(num_good_addr, sizeof(*fi_addr));
+	if (!fi_addr) {
+		sprintf(err_buf, "calloc fi_addr failed");
+		ret = -FI_ENOMEM;
+		goto fail;
+	}
+
+	attr.type = av_type;
+	attr.count = num_good_addr;
+
+	ret = fi_av_open(domain, &attr, &av, NULL);
+	if (ret) {
+		sprintf(err_buf, "fi_av_open(%s) = %d, %s",
+			fi_tostr(&av_type, FI_TYPE_AV_TYPE), ret,
+			fi_strerror(-ret));
+		goto fail;
+	}
+
+	for (i = 0; i < num_good_addr; i++)
+		fi_addr[i] = FI_ADDR_NOTAVAIL;
+
+	buflen = sizeof(addrbuf);
+	ret = av_create_address_list(good_address, 0, num_good_addr, addrbuf, 0,
+				     buflen);
+	if (ret < 0)
+		goto fail;
+
+	ret = fi_av_insert(av, addrbuf, num_good_addr, fi_addr, 0, NULL);
+	if (ret != num_good_addr) {
+		sprintf(err_buf, "fi_av_insert ret=%d, expected %d", ret,
+			num_good_addr);
+		goto fail;
+	}
+
+	for (i = 0; i < num_good_addr; i++) {
+		if (fi_addr[i] == FI_ADDR_NOTAVAIL) {
+			sprintf(err_buf, "fi_addr[%d] expected %d, actual %" PRIu64,
+				i, i, fi_addr[i]);
+			goto fail;
+		}
+	}
+
+	for (i = 0; i < num_good_addr; i++) {
+		ret = fi_av_remove(av, &fi_addr[i], 1, 0);
+		if (ret) {
+			sprintf(err_buf, "fi_av_remove ret=%d, %s", ret,
+				fi_strerror(-ret));
+			goto fail;
+		}
+	}
+
+	testret = PASS;
+	ret = FI_SUCCESS;
+fail:
+	FT_CLOSE_FID(av);
+	free(fi_addr);
+	return TEST_RET_VAL(ret, testret);
+}
+
+static int av_remove_bad(void)
+{
+	int testret, ret, i;
+	struct fid_av *av = NULL;
+	struct fi_av_attr attr = {0};
+	uint8_t addrbuf[4096];
+	size_t buflen;
+	fi_addr_t *fi_addr = NULL;
+	fi_addr_t remove_addr;
+
+	testret = FAIL;
+	fi_addr = calloc(num_good_addr, sizeof(*fi_addr));
+	if (!fi_addr) {
+		sprintf(err_buf, "calloc fi_addr failed");
+		ret = -FI_ENOMEM;
+		goto fail;
+	}
+
+	attr.type = av_type;
+	attr.count = num_good_addr + 1;
+
+	ret = fi_av_open(domain, &attr, &av, NULL);
+	if (ret) {
+		sprintf(err_buf, "fi_av_open(%s) = %d, %s",
+			fi_tostr(&av_type, FI_TYPE_AV_TYPE), ret,
+			fi_strerror(-ret));
+		goto fail;
+	}
+
+	for (i = 0; i < num_good_addr; i++)
+		fi_addr[i] = FI_ADDR_NOTAVAIL;
+
+	buflen = sizeof(addrbuf);
+	ret = av_create_address_list(good_address, 0, num_good_addr, addrbuf, 0,
+				     buflen);
+	if (ret < 0)
+		goto fail;
+
+	ret = fi_av_insert(av, addrbuf, num_good_addr, fi_addr, 0, NULL);
+	if (ret != num_good_addr) {
+		sprintf(err_buf, "fi_av_insert ret=%d, exepected %d", ret,
+			num_good_addr);
+		goto fail;
+	}
+
+	for (i = 0; i < num_good_addr; i++) {
+		if (fi_addr[i] == FI_ADDR_NOTAVAIL) {
+			sprintf(err_buf, "fi_addr[%d] expected %d, actual %" PRIu64,
+				i, i, fi_addr[i]);
+			goto fail;
+		}
+	}
+
+	/* Case 1: Remove num_good_addr + 1 */
+	remove_addr = (fi_addr_t) (num_good_addr + 1);
+	ret = fi_av_remove(av, &remove_addr, 1, 0);
+	if (ret != -FI_EINVAL) {
+		sprintf(err_buf, "fi_av_remove num_good_addr + 1 ret=%d, "
+			"expected %d", ret, -FI_EINVAL);
+		goto fail;
+	}
+
+	/* Case 2: Remove UINT64_MAX */
+	remove_addr = (fi_addr_t) UINT64_MAX;
+	ret = fi_av_remove(av, &remove_addr, 1, 0);
+	if (ret != -FI_EINVAL) {
+		sprintf(err_buf, "fi_av_remove UINT_MAX ret=%d, expected %d",
+			ret, -FI_EINVAL);
+		goto fail;
+	}
+
+	/* Case 3: Remove num_good_addr + 32 */
+	remove_addr = (fi_addr_t) (num_good_addr + 32);
+	ret = fi_av_remove(av, &remove_addr, 1, 0);
+	if (ret != -FI_EINVAL) {
+		sprintf(err_buf, "fi_av_remove num_good_addr + 32 ret=%d, "
+			"expected %d", ret, -FI_EINVAL);
+		goto fail;
+	}
+
+	/* Case 4: Remove fi_addr 0 twice */
+	ret = fi_av_remove(av, &fi_addr[0], 1, 0);
+	if (ret) {
+		sprintf(err_buf, "fi_av_remove ret=%d, %s", ret,
+			fi_strerror(-ret));
+		goto fail;
+	}
+
+	ret = fi_av_remove(av, &fi_addr[0], 1, 0);
+	if (ret != -FI_EINVAL) {
+		sprintf(err_buf, "fi_av_remove of already removed fi_addr[0] "
+			"ret=%d, expected %d", ret, -FI_EINVAL);
+		goto fail;
+	}
+
+	/* Case 5: Remove 0 through num_good_addr where 0 was already removed */
+	ret = fi_av_remove(av, fi_addr, num_good_addr, 0);
+	if (ret != -FI_EINVAL) {
+		sprintf(err_buf, "fi_av_remove of all addresses with "
+			"fi_addr[0] already removed ret=%d, expected %d",
+			ret, -FI_EINVAL);
+		goto fail;
+	}
+
+	testret = PASS;
+	ret = FI_SUCCESS;
+fail:
+	FT_CLOSE_FID(av);
+	free(fi_addr);
+	return TEST_RET_VAL(ret, testret);
+}
+
 struct test_entry test_array_good[] = {
 	TEST_ENTRY(av_open_close, "Test open and close AVs of varying sizes"),
 	TEST_ENTRY(av_good, "Test AV insert with good address"),
 	TEST_ENTRY(av_null_fi_addr, "Test AV insert without specifying fi_addr"),
 	TEST_ENTRY(av_insert_stages, "Test AV insert at various stages"),
+	TEST_ENTRY(av_lookup_good, "Test AV lookup with good address"),
+	TEST_ENTRY(av_remove_good, "Test AV remove with good address"),
 	{ NULL, "" }
 };
 
@@ -628,6 +1017,10 @@ struct test_entry test_array_bad[] = {
 		   "Test AV insert of 1 good and 1 bad address"),
 	TEST_ENTRY(av_goodbad_vector_sync_err,
 		   "Test AV insert of 1 good, 1 bad address using FI_SYNC_ERR"),
+	TEST_ENTRY(av_lookup_bad,
+		   "Test lookup of address not in AV after inserting good "
+		   "addresses"),
+	TEST_ENTRY(av_remove_bad, "Test AV remove with bad address"),
 	{ NULL, "" }
 };
 
@@ -734,19 +1127,10 @@ int main(int argc, char **argv)
 	printf("Testing AVs on fabric %s\n", fi->fabric_attr->name);
 	failed = 0;
 
-	if (fi->domain_attr->av_type == FI_AV_UNSPEC ||
-	    fi->domain_attr->av_type == FI_AV_MAP) {
-		av_type = FI_AV_MAP;
-		printf("\nTesting with type = FI_AV_MAP\n");
-		failed += run_test_set();
-	}
-
-	if (fi->domain_attr->av_type == FI_AV_UNSPEC ||
-	    fi->domain_attr->av_type == FI_AV_TABLE) {
-		av_type = FI_AV_TABLE;
-		printf("\nTesting with type = FI_AV_TABLE\n");
-		failed += run_test_set();
-	}
+	av_type = FI_AV_TABLE;
+	printf("\nTesting with type = %s\n",
+	       fi_tostr(&av_type, FI_TYPE_AV_TYPE));
+	failed += run_test_set();
 
 	if (failed > 0) {
 		printf("\nSummary: %d tests failed\n", failed);
