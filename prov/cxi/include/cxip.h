@@ -1747,6 +1747,7 @@ struct cxip_ep_coll_obj {
 	uint8_t *root_rdma_get_data_p;
 	/* root rdma get memory descriptor, for entire root src buffer */
 	struct cxip_md *root_rdma_get_md;
+	struct ofi_genlock prod_trace_lock;
 };
 
 /* Receive context state machine.
